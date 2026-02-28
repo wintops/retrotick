@@ -445,7 +445,9 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
 }
 
 export function loadIconResource(emu: Emulator, resourceId: number): number {
-  if (!emu.peInfo?.resources || !emu.arrayBuffer) return 0;
+  const ab = emu.arrayBuffer ?? emu._arrayBuffer;
+  if (!emu.peInfo?.resources || !ab) return 0;
+  const isNE = emu.peInfo.isNE;
   const RT_GROUP_ICON = 14, RT_ICON = 3;
   const groupType = emu.peInfo.resources.find(r => r.typeId === RT_GROUP_ICON);
   const iconType = emu.peInfo.resources.find(r => r.typeId === RT_ICON);
@@ -458,8 +460,8 @@ export function loadIconResource(emu: Emulator, resourceId: number): number {
   let iconW = 32, iconH = 32;
   try {
     const lang = ge.languages[0];
-    const fileOff = rvaToFileOffset(lang.dataRva, emu.peInfo.sections);
-    const dv = new DataView(emu.arrayBuffer, fileOff, lang.dataSize);
+    const fileOff = isNE ? lang.dataRva : rvaToFileOffset(lang.dataRva, emu.peInfo.sections);
+    const dv = new DataView(ab, fileOff, lang.dataSize);
     const idCount = dv.getUint16(4, true);
     const iconEntries: { nID: number; grpOff: number; dataSize: number }[] = [];
     for (let i = 0; i < idCount; i++) {
@@ -480,7 +482,7 @@ export function loadIconResource(emu: Emulator, resourceId: number): number {
     const iconData = iconType.entries.find(e => e.id === chosen.nID);
     if (iconData) {
       const iconLang = iconData.languages[0];
-      const iconOff = rvaToFileOffset(iconLang.dataRva, emu.peInfo.sections);
+      const iconOff = isNE ? iconLang.dataRva : rvaToFileOffset(iconLang.dataRva, emu.peInfo.sections);
       const headerSize = 6 + 16; // single-entry ico
       const icoSize = headerSize + iconLang.dataSize;
       const ico = new Uint8Array(icoSize);
@@ -490,7 +492,7 @@ export function loadIconResource(emu: Emulator, resourceId: number): number {
       icoDv.setUint16(4, 1, true); // count = 1
       for (let j = 0; j < 12; j++) ico[6 + j] = dv.getUint8(chosen.grpOff + j);
       icoDv.setUint32(18, headerSize, true); // data offset
-      ico.set(new Uint8Array(emu.arrayBuffer, iconOff, iconLang.dataSize), headerSize);
+      ico.set(new Uint8Array(ab, iconOff, iconLang.dataSize), headerSize);
       let binary = '';
       for (let i = 0; i < ico.length; i++) binary += String.fromCharCode(ico[i]);
       dataUrl = 'data:image/x-icon;base64,' + btoa(binary);

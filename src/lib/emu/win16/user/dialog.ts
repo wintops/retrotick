@@ -296,6 +296,13 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
 
   // Create child controls
   for (const ctrl of dlg.controls) {
+    // For SS_ICON controls, load the icon resource
+    let hImage: number | undefined;
+    const SS_ICON = 0x03;
+    if (ctrl.className === 'STATIC' && (ctrl.style & 0x1F) === SS_ICON && ctrl.text.startsWith('#')) {
+      const iconId = parseInt(ctrl.text.slice(1), 10);
+      if (iconId) hImage = emu.loadIconResource(iconId);
+    }
     const childHwnd = emu.handles.alloc('window', {
       classInfo: { className: ctrl.className, wndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: ctrl.text,
@@ -312,6 +319,7 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       visible: true,
       extraBytes: new Uint8Array(0),
       children: new Map(),
+      hImage,
     } as WindowInfo);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd) {
