@@ -297,6 +297,7 @@ export class Emulator {
   // NE (16-bit) mode
   isNE = false;
   ne?: LoadedNE;
+  _arrayBuffer?: ArrayBuffer;
 
   // DOS (MZ) mode
   isDOS = false;
@@ -807,6 +808,7 @@ export class Emulator {
 
   // Delegated to emu-load.ts
   load(arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
+    this._arrayBuffer = arrayBuffer;
     emuLoad(this, arrayBuffer, peInfo, canvas);
   }
 

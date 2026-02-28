@@ -63,8 +63,10 @@ export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
   if (!emu.canvas) return;
   emu.canvas.width = cw;
   emu.canvas.height = ch;
-  emu.canvas.style.width = `${cw}px`;
-  emu.canvas.style.height = `${ch}px`;
+  if (emu.canvas.style) {
+    emu.canvas.style.width = `${cw}px`;
+    emu.canvas.style.height = `${ch}px`;
+  }
   emu.canvasCtx = emu.canvas.getContext('2d')!;
   emu.canvasCtx.imageSmoothingEnabled = false;
   // Update existing cached DC to use the new context (don't free — programs may cache the handle)
