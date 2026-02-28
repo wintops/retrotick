@@ -148,7 +148,10 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
 
   const dc: DCInfo = {
     canvas, ctx, hwnd,
-    selectedBitmap: 0, selectedPen: 0, selectedBrush: 0, selectedFont: 0, selectedPalette: 0,
+    selectedBitmap: 0,
+    selectedPen: emu.isNE ? 0x8007 : 0x80000007,    // BLACK_PEN
+    selectedBrush: emu.isNE ? 0x8000 : 0x80000000,  // WHITE_BRUSH
+    selectedFont: 0, selectedPalette: 0,
     textColor: 0, bkColor: 0xFFFFFF, bkMode: OPAQUE,
     penPosX: 0, penPosY: 0, rop2: 13,
   };
