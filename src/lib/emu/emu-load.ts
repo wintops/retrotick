@@ -258,6 +258,12 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.cpu.push16(HALT_ADDR - (emu.ne.selectorToBase.get(HALT_SELECTOR) ?? 0));
 
     rebuildThunkPages(emu);
+
+    // Create a dummy thread for NE apps so thread-delegated getters/setters work
+    const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
+    emu.threads.push(mainThread);
+    emu.currentThread = mainThread;
+
     console.log(`[EMU] NE loaded: entry=0x${emu.ne.entryPoint.toString(16)} CS=${emu.ne.codeSegSelector} SS=${emu.ne.stackSegSelector} DS=${emu.ne.dataSegSelector}`);
     return;
   }

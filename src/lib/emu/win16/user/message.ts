@@ -23,7 +23,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return 0;
     }
     if (msg === WM_CLOSE) {
-      emu.postMessage(hWnd, WM_DESTROY, 0, 0);
+      // DefWindowProc calls DestroyWindow for WM_CLOSE
+      const wnd = emu.handles.get<WindowInfo>(hWnd);
+      if (wnd && wnd.wndProc) {
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_DESTROY, 0, 0);
+        const WM_NCDESTROY = 0x0082;
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_NCDESTROY, 0, 0);
+      }
+      if (wnd && wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd?.childList) {
+          const idx = parentWnd.childList.indexOf(hWnd);
+          if (idx >= 0) parentWnd.childList.splice(idx, 1);
+        }
+      }
+      if (hWnd === emu.mainWindow) {
+        emu.mainWindow = 0;
+      }
+      emu.handles.free(hWnd);
       return 0;
     }
     // WM_ERASEBKGND (0x14): fill window background with class brush

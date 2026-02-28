@@ -1,5 +1,6 @@
 import type { Emulator, Win16Module } from '../../emulator';
 import type { Win16UserHelpers } from './index';
+import { emuCompleteThunk16 } from '../../emu-exec';
 
 // Win16 USER module — Miscellaneous APIs
 
@@ -12,7 +13,16 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     const text = lpText ? emu.memory.readCString(lpText) : '';
     const caption = lpCaption ? emu.memory.readCString(lpCaption) : '';
     console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
-    return 1; // IDOK
+    const stackBytes = emu._currentThunkStackBytes;
+    emu.waitingForMessage = true;
+    emu.showMessageBox(caption, text, uType, result => {
+      emu.waitingForMessage = false;
+      emuCompleteThunk16(emu, result, stackBytes);
+      if (emu.running && !emu.halted) {
+        requestAnimationFrame(emu.tick);
+      }
+    });
+    return undefined;
   });
 
   // ───────────────────────────────────────────────────────────────────────────

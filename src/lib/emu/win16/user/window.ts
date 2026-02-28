@@ -144,7 +144,35 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 53: DestroyWindow(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_53', 2, () => 1);
+  user.register('ord_53', 2, () => {
+    const hWnd = emu.readPascalArgs16([2])[0];
+    const WM_DESTROY = 0x0002;
+    const WM_NCDESTROY = 0x0082;
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (wnd && wnd.wndProc) {
+      emu.callWndProc16(wnd.wndProc, hWnd, WM_DESTROY, 0, 0);
+      emu.callWndProc16(wnd.wndProc, hWnd, WM_NCDESTROY, 0, 0);
+    }
+    // Remove from parent's child list
+    if (wnd && wnd.parent) {
+      const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+      if (parentWnd) {
+        if (parentWnd.childList) {
+          const idx = parentWnd.childList.indexOf(hWnd);
+          if (idx >= 0) parentWnd.childList.splice(idx, 1);
+        }
+        if (parentWnd.children && wnd.controlId !== undefined) {
+          parentWnd.children.delete(wnd.controlId);
+        }
+      }
+    }
+    if (hWnd === emu.mainWindow) {
+      console.log(`[WND] mainWindow 0x${hWnd.toString(16)} destroyed, clearing`);
+      emu.mainWindow = 0;
+    }
+    emu.handles.free(hWnd);
+    return 1;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 56: MoveWindow(hWnd, x, y, w, h, bRepaint) — 12 bytes
