@@ -1,4 +1,4 @@
-export { registerWin16Kernel } from './kernel';
+export { registerWin16Kernel } from './kernel/index';
 export { registerWin16User } from './user/index';
 export { registerWin16Gdi } from './gdi';
 export { registerWin16Shell } from './shell';
