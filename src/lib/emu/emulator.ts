@@ -313,7 +313,9 @@ export class Emulator {
   isDOS = false;
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
   _dosWaitingForKey: false | 'read' | 'peek' = false;
+  _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
+  _dosHwKeyReadThisTick = false;
   _dosDTA = 0;
   _dosPSP = 0;
   _dosLoadSegment = 0;
@@ -321,6 +323,7 @@ export class Emulator {
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosExeData: Uint8Array | null = null; // raw executable bytes for self-open
   _dosIntVectors = new Map<number, number>();
+  _dosBiosDefaultVectors = new Map<number, number>();
   _dosLoLAddr = 0;
   _dosImageSize = 0;
   _dosMcbFirstSeg = 0;
@@ -1155,8 +1158,26 @@ export class Emulator {
   portIn(port: number): number {
     if (isVGAPort(port)) return this.vga.portRead(port);
     if (port === 0x60) {
-      // Reading port 0x60 clears the "output buffer full" bit in port 0x64
-      this._ioPorts.set(0x64, (this._ioPorts.get(0x64) ?? 0) & ~0x01);
+      const status = this._ioPorts.get(0x64) ?? 0;
+      if ((status & 0x01) !== 0) {
+        // Real 8042 behavior: first read consumes output buffer.
+        const value = this._ioPorts.get(0x60) ?? 0xFF;
+        this._ioPorts.set(0x64, status & ~0x01);
+        // Compatibility replay for chained BIOS INT 09h handler.
+        this._kbdReplayValue = value;
+        this._kbdReplayPending = true;
+        this._kbdDataReadsLeft = 1;
+        if (this.isDOS) this._dosHwKeyReadThisTick = true;
+        return value;
+      }
+      // Allow one extra read while IRQ1 handler is in-flight for chained
+      // handlers that both read port 0x60 (hook + BIOS).
+      if (this._kbdReplayPending && this._int09ReturnCS >= 0 && this._kbdDataReadsLeft > 0) {
+        this._kbdDataReadsLeft--;
+        if (this.isDOS) this._dosHwKeyReadThisTick = true;
+        return this._kbdReplayValue;
+      }
+      return 0xFF;
     }
     return this._ioPorts.get(port) ?? 0xFF;
   }
@@ -1170,22 +1191,37 @@ export class Emulator {
     }
   }
 
+  // Extended scancodes that need 0xE0 prefix (arrows, Home/End/PgUp/PgDn, Ins/Del)
+  static readonly E0_SCANCODES = new Set([
+    0x47, 0x48, 0x49, // Home, Up, PgUp
+    0x4B, 0x4D,       // Left, Right
+    0x4F, 0x50, 0x51, // End, Down, PgDn
+    0x52, 0x53,       // Ins, Del
+  ]);
+
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
   injectHwKey(scancode: number, browserChar?: number): void {
     // Queue all scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
     this._pendingHwKeys.push(scancode);
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
-    // If the emulator is paused waiting for a key (INT 16h wait), wake it up
-    if (this.waitingForMessage && this.running && !this.halted) {
+    // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
+    if ((this.waitingForMessage || this._dosHalted) && this.running && !this.halted) {
       this.waitingForMessage = false;
+      this._dosHalted = false;
       requestAnimationFrame(this.tick);
     }
   }
   _pendingHwKeys: number[] = [];
   _pendingHwKeyChars = new Map<number, number>();
   _currentHwKeyChar: number | undefined;
+  _kbdE0Prefix = false;
   _hwKeyDelay = 0;
+  _kbdDataReadsLeft = 0;
+  _kbdReplayPending = false;
+  _kbdReplayValue = 0xFF;
+  _int09ReturnCS = -1; // CS of return address for active INT 09h; -1 = not active
+  _int09ReturnIP = 0;
 
   /** Deliver a DOS key for INT 16h blocking wait */
   /** Write a key into the BDA keyboard buffer (for programs that read it directly) */
@@ -1217,6 +1253,17 @@ export class Emulator {
         this.cpu.setReg16(0, (key.scan << 8) | key.ascii);
       }
       this.waitingForMessage = false;
+      while (this._dosPendingSoftwareIret > 0) {
+        const ip = this.cpu.pop16();
+        const cs = this.cpu.pop16();
+        const savedFlags = this.cpu.pop16();
+        const curFlags = this.cpu.getFlags() & 0xFFFF;
+        const flags = (curFlags & ~0x0300) | (savedFlags & 0x0300);
+        this.cpu.cs = cs;
+        this.cpu.eip = this.cpu.segBase(cs) + ip;
+        this.cpu.setFlags((this.cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+        this._dosPendingSoftwareIret--;
+      }
       if (this.running && !this.halted) {
         requestAnimationFrame(this.tick);
       }

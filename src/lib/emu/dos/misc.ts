@@ -9,10 +9,18 @@ export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   switch (ah) {
     case 0xC0: { // Get system configuration table
-      // Return ES:BX pointing to a minimal config table
-      // For now, just fail gracefully
-      cpu.setFlag(CF, true);
-      cpu.setReg8(EAX + 4, 0x86); // AH = unsupported function
+      // Return ES:BX to an AT-compatible BIOS configuration table.
+      // QBasic probes this to detect enhanced keyboard support.
+      cpu.es = 0xF000;
+      cpu.setReg16(EBX, 0x0600);
+      cpu.setFlag(CF, false);
+      cpu.setReg8(EAX + 4, 0x00);
+      break;
+    }
+    case 0x4F: { // Keyboard intercept (called by BIOS INT 09h on AT-class machines)
+      // Default BIOS behavior with no installed filter: continue (CF=0).
+      // Custom INT 15h handlers are dispatched by vector chaining in handleDosInt.
+      cpu.setFlag(CF, false);
       break;
     }
     case 0xC2: { // PS/2 Pointing device

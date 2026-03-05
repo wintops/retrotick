@@ -149,6 +149,16 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
   // Update BDA
   cpu.mem.writeU8(0x0449, mode);
   cpu.mem.writeU16(0x044A, vgaMode.cols);
+  cpu.mem.writeU16(0x044C, vgaMode.cols * vgaMode.rows * 2); // page size in bytes
+  cpu.mem.writeU16(0x044E, 0); // current page offset
+  cpu.mem.writeU8(0x0450, 0); // cursor col page 0
+  cpu.mem.writeU8(0x0451, 0); // cursor row page 0
+  cpu.mem.writeU8(0x0460, vgaMode.isText ? (vgaMode.charHeight - 1) : 0); // cursor end scanline
+  cpu.mem.writeU8(0x0461, vgaMode.isText ? (vgaMode.charHeight - 2) : 0); // cursor start scanline
+  cpu.mem.writeU8(0x0462, 0); // active display page
+  cpu.mem.writeU16(0x0463, 0x3D4); // CRTC base port (color)
+  cpu.mem.writeU8(0x0484, vgaMode.rows - 1); // rows - 1
+  cpu.mem.writeU16(0x0485, vgaMode.charHeight); // character height
 
   if (vgaMode.isText) {
     if (!noClear) {

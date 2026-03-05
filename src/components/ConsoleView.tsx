@@ -48,6 +48,21 @@ const MODIFIER_CODES = new Set([
   'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight',
 ]);
 
+const EXTENDED_NAV_CODES = new Set([
+  'Home', 'ArrowUp', 'PageUp',
+  'ArrowLeft', 'ArrowRight',
+  'End', 'ArrowDown', 'PageDown',
+  'Insert', 'Delete',
+]);
+
+function getModifierScan(code: string): number | undefined {
+  if (code === 'ShiftLeft') return 0x2A;
+  if (code === 'ShiftRight') return 0x36;
+  if (code === 'ControlLeft' || code === 'ControlRight') return 0x1D;
+  if (code === 'AltLeft' || code === 'AltRight') return 0x38;
+  return undefined;
+}
+
 // Legacy mapKeyToDos for non-INT09h path (direct INT 16h programs)
 function mapKeyToDos(e: KeyboardEvent): { ascii: number; scan: number } | null {
   const scan = CODE_TO_SCANCODE[e.code];
@@ -221,26 +236,21 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     // DOS mode: inject hardware scancodes via INT 09h path.
     // The BIOS INT 09h handler converts scancodes to ASCII and pushes to dosKeyBuffer.
     if (emu.isDOS) {
-      // Skip pure modifier keydown events — they are sent as part of combo keys
-      if (MODIFIER_CODES.has(e.code)) return;
-
-      const scan = CODE_TO_SCANCODE[e.code];
-      if (scan === undefined) return;
-
-      // Send modifier make codes first (BIOS INT 09h tracks BDA shift state)
-      if (e.shiftKey) emu.injectHwKey(0x2A);  // LShift make
-      if (e.ctrlKey) emu.injectHwKey(0x1D);   // Ctrl make
-      if (e.altKey) emu.injectHwKey(0x38);     // Alt make
-
-      // Send the actual key make + break codes, with browser char for layout-aware ASCII
-      const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
-      emu.injectHwKey(scan, browserChar);
-      emu.injectHwKey(scan | 0x80);
-
-      // Send modifier break codes so they don't stay "pressed"
-      if (e.altKey) emu.injectHwKey(0x38 | 0x80);   // Alt break (immediate)
-      if (e.ctrlKey) emu.injectHwKey(0x1D | 0x80);  // Ctrl break
-      if (e.shiftKey) emu.injectHwKey(0x2A | 0x80); // LShift break
+      const modScan = getModifierScan(e.code);
+      if (modScan !== undefined) {
+        // Modifier keydown: make only; break is sent on keyup.
+        // Skip repeat events for modifiers (they don't typematic).
+        if (e.repeat) return;
+        emu.injectHwKey(modScan);
+      } else {
+        const scan = CODE_TO_SCANCODE[e.code];
+        if (scan === undefined) return;
+        // Regular keydown: make only; break is sent on keyup.
+        const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
+        if (EXTENDED_NAV_CODES.has(e.code)) emu.injectHwKey(0xE0);
+        emu.injectHwKey(scan, browserChar);
+      }
+      emu.screenDirty = true;
 
       // For programs using direct INT 16h (no custom handler), wake if waiting
       if (emu._dosWaitingForKey && emu.waitingForMessage) {
@@ -511,6 +521,28 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     }
   }, [emu]);
 
+  const handleKeyUp = useCallback((e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (emu.halted || !emu.isDOS) return;
+
+    const modScan = getModifierScan(e.code);
+    if (modScan !== undefined) {
+      emu.injectHwKey(modScan | 0x80);
+      return;
+    }
+
+    // Ignore keyup for pure meta keys in DOS mode.
+    if (MODIFIER_CODES.has(e.code)) return;
+
+    const scan = CODE_TO_SCANCODE[e.code];
+    if (scan === undefined) return;
+    if (EXTENDED_NAV_CODES.has(e.code)) emu.injectHwKey(0xE0);
+    emu.injectHwKey(scan | 0x80);
+    emu.screenDirty = true;
+  }, [emu]);
+
   const handleClick = useCallback(() => {
     // Don't steal focus if user is selecting text
     const sel = window.getSelection();
@@ -586,6 +618,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
           overflow: 'hidden', border: 'none', padding: 0,
         }}
         onKeyDown={handleKeyDown}
+        onKeyUp={handleKeyUp}
         autoFocus
       />
     </div>

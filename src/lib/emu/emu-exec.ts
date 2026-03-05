@@ -381,6 +381,7 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 }
 
 const BATCH_SIZE = 500000;
+const DOS_POST_KEY_STEPS = 0x80;
 
 export function emuTick(emu: Emulator): void {
   if (!emu.running || emu.halted) return;
@@ -390,7 +391,11 @@ export function emuTick(emu: Emulator): void {
   let stepCount = 0;
   const DOS_TICK_MS = 8; // shorter ticks in DOS mode for responsive keyboard
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
+  let dosYieldAfterKeyAt = -1;
+  let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
+  let prevBdaKeyHead = emu.isDOS ? emu.memory.readU16(0x41A) : 0;
   emu._dosKeyConsumedThisTick = false;
+  emu._dosHwKeyReadThisTick = false;
 
   // Wake from HLT: check if a timer interrupt is due
   if (emu._dosHalted && emu.isDOS) {
@@ -408,28 +413,49 @@ export function emuTick(emu: Emulator): void {
   }
 
   for (let i = 0; i < BATCH_SIZE; i++) {
+    if (emu._int09ReturnCS >= 0) {
+      const ip16 = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+      if (emu.cpu.cs === emu._int09ReturnCS && ip16 === emu._int09ReturnIP) {
+        // INT 09h handler returned (IRET) to interrupted context.
+        emu._kbdReplayPending = false;
+        emu._kbdDataReadsLeft = 0;
+        emu._int09ReturnCS = -1;
+      }
+    }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
+    if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
+      // A DOS key was consumed this tick (INT 16h or direct port 0x60 path):
+      // let guest run a little longer
+      // so it can finish drawing before we yield/sync the frame.
+      dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
+    }
+    if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
     if ((i & 0xFFF) === 0 && i > 0) {
-      if (performance.now() - tickStart > tickMs) break;
+      const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
+      if (!waitingForPostKeyWindow && performance.now() - tickStart > tickMs) break;
       // Yield after screen draws so browser can render intermediate frames
       if (emu.screenDirty) { emu.screenDirty = false; break; }
     }
 
     // DOS timer interrupt (INT 08h, ~18.2 Hz = every ~55ms)
-    if (emu.isDOS && emu._pendingHwInts.length === 0) {
+    if (emu.isDOS) {
       const now = performance.now();
       if (now - emu._dosLastTimerTick >= 55) {
         emu._dosLastTimerTick = now;
-        emu._pendingHwInts.push(0x08);
+        if (!emu._pendingHwInts.includes(0x08)) emu._pendingHwInts.push(0x08);
         emu._dosHalted = false; // wake from HLT
       }
     }
 
     // Deliver queued scancodes one at a time, with a delay between each
     // to avoid overwriting port 0x60 before the previous INT 09h completes
-    if (emu._pendingHwInts.length === 0 && emu._pendingHwKeys.length > 0) {
-      const isBreak = !!(emu._pendingHwKeys[0] & 0x80);
-      const delay = isBreak ? 500 : 0; // Make codes deliver immediately, break codes wait
+    if (
+      emu._pendingHwInts.length === 0 &&
+      emu._pendingHwKeys.length > 0 &&
+      emu._int09ReturnCS < 0
+    ) {
+      const code = emu._pendingHwKeys[0];
+      const delay = 0;
       emu._hwKeyDelay++;
       if (emu._hwKeyDelay >= delay) {
         const code = emu._pendingHwKeys.shift()!;
@@ -437,6 +463,8 @@ export function emuTick(emu: Emulator): void {
         emu._pendingHwKeyChars.delete(code);
         emu._ioPorts.set(0x60, code);
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
+        emu._kbdReplayPending = false;
+        emu._kbdDataReadsLeft = 0;
         // Pre-update BDA shift flags for modifier keys so programs that hook
         // INT 09h without chaining to BIOS still see correct modifier state
         const BDA_SHIFT = 0x417;
@@ -450,14 +478,19 @@ export function emuTick(emu: Emulator): void {
         else if (code === 0x9D) emu.memory.writeU8(BDA_SHIFT, flags & ~0x04); // Ctrl break
         else if (code === 0xB8) emu.memory.writeU8(BDA_SHIFT, flags & ~0x08); // Alt break
         emu._pendingHwInts.push(0x09);
+        if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0) {
+          // Hardware key delivered this tick: give DOS app a short execution window
+          // to finish drawing, then yield/sync so the frame is observable.
+          dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
+        }
         emu._hwKeyDelay = 0;
       }
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    if (emu._pendingHwInts.length > 0 && emu.cpu.cs !== 0xF000) {
+    if (emu._pendingHwInts.length > 0) {
       const intNum = emu._pendingHwInts.shift()!;
-      const biosDefault = (0xF000 << 16) | (intNum * 3);
+      const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       const vec = emu._dosIntVectors.get(intNum);
       if (vec && vec !== biosDefault) {
         // Custom handler installed — dispatch via INT (push flags/CS/IP, jump)
@@ -468,11 +501,21 @@ export function emuTick(emu: Emulator): void {
         emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
         emu.cpu.push16(emu.cpu.cs);
         emu.cpu.push16(returnIP);
+        // Hardware interrupt entry clears IF+TF until IRET restores FLAGS.
+        emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+        if (intNum === 0x09) {
+          emu._int09ReturnCS = emu.cpu.cs;
+          emu._int09ReturnIP = returnIP;
+        }
         emu.cpu.cs = seg;
         emu.cpu.eip = emu.cpu.segBase(seg) + off;
       } else {
         // No custom handler — call built-in BIOS handler directly
         handleDosInt(emu.cpu, intNum, emu);
+        if (intNum === 0x09) {
+          emu._kbdReplayPending = false;
+          emu._kbdDataReadsLeft = 0;
+        }
       }
     }
 
@@ -546,6 +589,21 @@ export function emuTick(emu: Emulator): void {
 
     const prevEip = eip;
     emu.cpu.step();
+    if (emu.isDOS) {
+      const curDosKeyBufferLen = emu.dosKeyBuffer.length;
+      if (dosYieldAfterKeyAt < 0 && curDosKeyBufferLen < prevDosKeyBufferLen) {
+        // Key was consumed this tick (direct INT 16h/INT 21h path): keep running
+        // briefly so app can finish rendering before we sync/yield.
+        dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
+      }
+      prevDosKeyBufferLen = curDosKeyBufferLen;
+      const curBdaKeyHead = emu.memory.readU16(0x41A);
+      if (dosYieldAfterKeyAt < 0 && curBdaKeyHead !== prevBdaKeyHead) {
+        // Some programs consume keys from BDA ring buffer directly.
+        dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
+      }
+      prevBdaKeyHead = curBdaKeyHead;
+    }
     if (emu.cpu.halted) {
       const hBytes: string[] = [];
       for (let j = 0; j < 8; j++) hBytes.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
@@ -650,4 +708,3 @@ export function emuTick(emu: Emulator): void {
     }
   }
 }
-

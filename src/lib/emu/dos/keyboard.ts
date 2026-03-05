@@ -3,6 +3,8 @@ import type { Emulator } from '../emulator';
 
 const EAX = 0;
 const ZF = 0x040;
+const CF = 0x001;
+const BDA = 0x400;
 
 // --- INT 09h: Keyboard Hardware (BIOS default handler) ---
 // Scancode-to-ASCII table for unshifted keys (index = scancode 0x00-0x3F)
@@ -29,12 +31,64 @@ const EXTENDED_SCANCODES = new Set([
   0x57, 0x58,       // F11, F12
 ]);
 
-export function handleInt09(cpu: CPU, emu: Emulator): boolean {
-  const scancode = emu.portIn(0x60);
-  const BDA = 0x400;
+function runInt15KeyboardIntercept(cpu: CPU, emu: Emulator, scancode: number): { scancode: number; discard: boolean } {
+  const intNum = 0x15;
+  const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
+  const vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
+  if (vec === biosDefault) return { scancode, discard: false };
+
+  const returnCS = cpu.cs;
+  const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
+
+  cpu.setReg8(EAX + 4, 0x4F); // AH
+  cpu.setReg8(EAX, scancode & 0xFF); // AL
+  cpu.push16(cpu.getFlags() & 0xFFFF);
+  cpu.push16(returnCS);
+  cpu.push16(returnIP);
+  cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF on interrupt entry
+  cpu.cs = (vec >>> 16) & 0xFFFF;
+  cpu.eip = cpu.segBase(cpu.cs) + (vec & 0xFFFF);
+
+  let returned = false;
+  for (let i = 0; i < 100000; i++) {
+    cpu.step();
+    if (cpu.halted) break;
+    const ip16 = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
+    if (cpu.cs === returnCS && ip16 === returnIP) {
+      returned = true;
+      break;
+    }
+  }
+  if (!returned) {
+    return { scancode, discard: false };
+  }
+  const discard = (cpu.getFlags() & CF) !== 0;
+  return { scancode: cpu.getReg8(EAX), discard };
+}
+
+export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number): boolean {
+  let scancode = scancodeOverride ?? emu.portIn(0x60);
+  // Acknowledge keyboard controller and PIC like real BIOS INT 09h.
+  const p61 = emu.portIn(0x61);
+  emu.portOut(0x61, p61 | 0x80);
+  emu.portOut(0x61, p61);
+  emu.portOut(0x20, 0x20);
+  // AT BIOS path: offer scancode to INT 15h/AH=4F hook before normal processing.
+  // Hook may translate AL or discard event via CF=1.
+  const int15Result = runInt15KeyboardIntercept(cpu, emu, scancode);
+  scancode = int15Result.scancode & 0xFF;
+  if (int15Result.discard) return true;
+
   const shiftFlags = emu.memory.readU8(BDA + 0x17);
 
+  // 0xE0 is the extended key prefix — acknowledge it without storing a key
+  if (scancode === 0xE0) {
+    emu._kbdE0Prefix = true;
+    return true;
+  }
+
   if (scancode & 0x80) {
+    emu._kbdE0Prefix = false;
     // Break code — update shift state for modifier releases
     const baseScan = scancode & 0x7F;
     if (baseScan === 0x2A || baseScan === 0x36) // LShift/RShift release
@@ -62,10 +116,16 @@ export function handleInt09(cpu: CPU, emu: Emulator): boolean {
 
   // Determine ASCII based on scancode and modifiers
   let ascii: number;
+  const hasE0Prefix = emu._kbdE0Prefix;
+  emu._kbdE0Prefix = false;
   const isAlt = !!(shiftFlags & 0x08);
   const isCtrl = !!(shiftFlags & 0x04);
 
-  if (isAlt || EXTENDED_SCANCODES.has(scancode)) {
+  if (hasE0Prefix) {
+    // Enhanced keyboard E0-prefixed make code:
+    // AH=10/11 callers should observe AL=E0, while AH=00/01 will fold to AL=00.
+    ascii = 0xE0;
+  } else if (isAlt || EXTENDED_SCANCODES.has(scancode)) {
     ascii = 0; // Extended key
   } else if (isCtrl && scancode >= 0x1E && scancode <= 0x32) {
     // Ctrl+letter: ASCII 1-26
@@ -78,12 +138,34 @@ export function handleInt09(cpu: CPU, emu: Emulator): boolean {
     ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
   }
 
-  // Push to dosKeyBuffer for BIOS INT 16h consumption.
-  // This must happen HERE (after INT 09h handler set the "key available" signal)
-  // rather than in ConsoleView (which would set data before signal).
   emu.dosKeyBuffer.push({ ascii, scan: scancode });
   emu.writeBdaKey(ascii, scancode);
   return true;
+}
+
+function bdaLayout(emu: Emulator): { start: number; end: number; head: number; tail: number } {
+  const start = emu.memory.readU16(BDA + 0x80) || 0x1E;
+  const end = emu.memory.readU16(BDA + 0x82) || 0x3E;
+  const head = emu.memory.readU16(BDA + 0x1A);
+  const tail = emu.memory.readU16(BDA + 0x1C);
+  return { start, end, head, tail };
+}
+
+function bdaPeekKey(emu: Emulator): { ascii: number; scan: number } | null {
+  const { head, tail } = bdaLayout(emu);
+  if (head === tail) return null;
+  const word = emu.memory.readU16(BDA + head);
+  return { ascii: word & 0xFF, scan: (word >>> 8) & 0xFF };
+}
+
+function bdaPopKey(emu: Emulator): { ascii: number; scan: number } | null {
+  const { start, end, head, tail } = bdaLayout(emu);
+  if (head === tail) return null;
+  const word = emu.memory.readU16(BDA + head);
+  let newHead = head + 2;
+  if (newHead >= end) newHead = start;
+  emu.memory.writeU16(BDA + 0x1A, newHead);
+  return { ascii: word & 0xFF, scan: (word >>> 8) & 0xFF };
 }
 
 // --- INT 16h: Keyboard BIOS ---
@@ -91,17 +173,19 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   switch (ah) {
     case 0x00: case 0x10: {
-      // Read keystroke
-      // In BIOS stub mode, limit to one key per tick so screen updates
-      // between each key (prevents keys being processed all at once).
-      if (emu.dosKeyBuffer.length > 0 && !(fromBiosStub && emu._dosKeyConsumedThisTick)) {
-        const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg16(EAX, (key.scan << 8) | key.ascii);
-        if (fromBiosStub) emu._dosKeyConsumedThisTick = true;
+      // Read keystroke (blocking on real hardware).
+      const key = bdaPopKey(emu);
+      if (key) {
+        if (emu.dosKeyBuffer.length > 0) emu.dosKeyBuffer.shift();
+        const ascii = (ah === 0x00 && key.ascii === 0xE0) ? 0 : key.ascii;
+        cpu.setReg16(EAX, (key.scan << 8) | ascii);
       } else if (fromBiosStub) {
-        // Buffer empty: return AX=0 so QBasic's handler sees "no key"
-        // (QBasic checks OR AX,AX and loops if zero)
-        cpu.setReg16(EAX, 0);
+        // BDA empty from BIOS stub: real BIOS would block (STI; HLT loop).
+        // Rewind EIP to re-execute the INT 16h instruction on next tick,
+        // simulating the blocking loop. Halt until timer or key wakes us.
+        cpu.eip -= 2;
+        emu._dosHalted = true;
+        return true; // handled, but will re-execute
       } else {
         // Direct INT 16h from program — block until key available
         emu._dosWaitingForKey = 'read';
@@ -111,26 +195,31 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
     }
     case 0x01: case 0x11: {
       // Check keystroke (non-blocking peek)
-      if (emu.dosKeyBuffer.length > 0 && !(fromBiosStub && emu._dosKeyConsumedThisTick)) {
-        const key = emu.dosKeyBuffer[0];
-        cpu.setReg16(EAX, (key.scan << 8) | key.ascii);
+      const key = bdaPeekKey(emu);
+      if (key) {
+        const ascii = (ah === 0x01 && key.ascii === 0xE0) ? 0 : key.ascii;
+        cpu.setReg16(EAX, (key.scan << 8) | ascii);
         cpu.setFlag(ZF, false); // key available
       } else {
         cpu.setFlag(ZF, true); // no key
-        // Peek is non-blocking — never suspend here.
-        // Programs that busy-loop on peek will be throttled by the tick time limit.
       }
       break;
     }
     case 0x02: case 0x12: {
-      // Get shift flags
-      cpu.setReg8(EAX, 0); // no shift keys pressed
+      // Get shift flags from BDA (40:17 basic, 40:18 extended).
+      const basic = emu.memory.readU8(BDA + 0x17);
+      const ext = emu.memory.readU8(BDA + 0x18);
+      if (ah === 0x02) {
+        cpu.setReg8(EAX, basic);
+      } else {
+        cpu.setReg16(EAX, (ext << 8) | basic);
+      }
       break;
     }
     default:
-      // Programs may use custom subfunctions (e.g. QBasic AH=0x55) that
-      // only their own INT 16h handler understands. Silently ignore.
       break;
   }
+
+
   return true;
 }

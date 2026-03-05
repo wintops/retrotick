@@ -860,6 +860,10 @@ export function cpuStep(cpu: CPU): void {
       console.warn(`INT 3 at 0x${((cpu.eip - 1) >>> 0).toString(16)}`);
       break;
 
+    // ICEBP / INT1 — debug breakpoint, treat as NOP
+    case 0xF1:
+      break;
+
     // INTO — INT 4 if OF=1
     case 0xCE:
       if (cpu.getFlag(OF)) {

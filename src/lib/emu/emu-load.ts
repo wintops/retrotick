@@ -151,27 +151,33 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
       emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
     }
 
-    // Set up per-interrupt BIOS stubs at F000:i*3, each containing: INT i; IRET
-    // This allows programs that chain to the original vector (via CALL FAR) to
-    // trigger our built-in handler through the INT instruction.
+    // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
+    // This allows programs that chain to the original vector (via PUSHF; CALL FAR)
+    // to trigger our built-in handler through the INT instruction.
+    // RETF 2 (instead of IRET) preserves CPU flags from the handler, matching
+    // real BIOS behavior where flag-returning functions (e.g. INT 16h AH=01/11
+    // setting ZF) use RETF 2 to propagate flag changes back to the caller.
     const IRET_SEG = 0xF000;
     const BIOS_BASE = IRET_SEG * 16; // linear 0xF0000
     for (let i = 0; i < 256; i++) {
-      const off = i * 3;
+      const off = i * 5;
       emu.memory.writeU8(BIOS_BASE + off, 0xCD);     // INT
       emu.memory.writeU8(BIOS_BASE + off + 1, i);    // interrupt number
-      emu.memory.writeU8(BIOS_BASE + off + 2, 0xCF); // IRET
+      emu.memory.writeU8(BIOS_BASE + off + 2, 0xCA); // RETF imm16
+      emu.memory.writeU8(BIOS_BASE + off + 3, 0x02); // 2 (pop FLAGS from PUSHF)
+      emu.memory.writeU8(BIOS_BASE + off + 4, 0x00);
     }
+    // Build BIOS default vectors (synthetic stubs at F000:i*5).
+    const defaultVec = new Map<number, number>();
+    for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
 
-    // Fill IVT (256 entries × 4 bytes at address 0x0000)
+    // Fill IVT and vector maps.
     for (let i = 0; i < 256; i++) {
-      emu.memory.writeU16(i * 4, i * 3);        // offset = i*3
-      emu.memory.writeU16(i * 4 + 2, IRET_SEG); // segment
-    }
-
-    // Also populate _dosIntVectors so AH=35h returns these defaults
-    for (let i = 0; i < 256; i++) {
-      emu._dosIntVectors.set(i, (IRET_SEG << 16) | (i * 3));
+      const vec = defaultVec.get(i)!;
+      emu.memory.writeU16(i * 4, vec & 0xFFFF);
+      emu.memory.writeU16(i * 4 + 2, (vec >>> 16) & 0xFFFF);
+      emu._dosBiosDefaultVectors.set(i, vec);
+      emu._dosIntVectors.set(i, vec);
     }
 
     // BDA (BIOS Data Area) at 0040:0000
@@ -186,6 +192,23 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.memory.writeU16(0x041C, 0x1E); // buffer tail (same = empty)
     emu.memory.writeU16(0x0480, 0x1E); // buffer start offset
     emu.memory.writeU16(0x0482, 0x3E); // buffer end offset
+    // Keyboard status/feature bytes
+    emu.memory.writeU8(0x0417, 0x00);  // shift flags
+    emu.memory.writeU8(0x0418, 0x00);  // extended shift flags
+    emu.memory.writeU8(0x0496, 0x10);  // enhanced keyboard present
+    // INT 15h/AH=C0 BIOS configuration table at F000:0600
+    // (past the 256×5=1280 byte interrupt stubs ending at F000:0500)
+    // Byte 0 = length of following bytes (8 for AT/PS2 style feature table)
+    const biosCfg = 0xF0000 + 0x0600;
+    emu.memory.writeU8(biosCfg + 0, 0x08);
+    emu.memory.writeU8(biosCfg + 1, 0xFC); // model: AT-compatible (placeholder)
+    emu.memory.writeU8(biosCfg + 2, 0x00); // submodel
+    emu.memory.writeU8(biosCfg + 3, 0x00); // BIOS revision
+    emu.memory.writeU8(biosCfg + 4, 0x00); // feature byte 1
+    emu.memory.writeU8(biosCfg + 5, 0x10); // feature byte 2: enhanced keyboard
+    emu.memory.writeU8(biosCfg + 6, 0x00); // feature byte 3
+    emu.memory.writeU8(biosCfg + 7, 0x00); // feature byte 4
+    emu.memory.writeU8(biosCfg + 8, 0x00); // feature byte 5
     // Equipment list (0040:0010) — bit 0=floppy, bits 4-5=video mode (10=80col color)
     emu.memory.writeU16(0x0410, 0x0021);
     // Memory size in KB (0040:0013) — 640KB
