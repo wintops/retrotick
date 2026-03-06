@@ -109,6 +109,24 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       children: new Map(),
     });
 
+    // Register child in parent's childList (mirrors Win32 create-window.ts)
+    if (hWndParent) {
+      const parentWnd = emu.handles.get<WindowInfo>(hWndParent);
+      if (parentWnd) {
+        if (!parentWnd.childList) parentWnd.childList = [];
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) {
+          const WS_CHILD = 0x40000000;
+          if (dwStyle & WS_CHILD) {
+            wnd.controlId = hMenu;
+            if (!parentWnd.children) parentWnd.children = new Map();
+            parentWnd.children.set(hMenu, hwnd);
+          }
+        }
+        parentWnd.childList.push(hwnd);
+      }
+    }
+
     if (!emu.mainWindow && hWndParent === 0) {
       const wnd = emu.handles.get<WindowInfo>(hwnd);
       if (wnd) emu.promoteToMainWindow(hwnd, wnd);
@@ -183,6 +201,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       // the WM_SIZE handler runs (which may contain lengthy animation loops).
       emu.postMessage(hWnd, WM_SIZE, 0, lParam);
     }
+    // Notify control overlays so child controls (EDIT, BUTTON, etc.) get DOM elements
+    if (hWnd === emu.mainWindow) emu.notifyControlOverlays();
     return wasVisible ? 1 : 0;
   });
 
@@ -296,6 +316,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         wnd.needsPaint = true;
         wnd.needsErase = true;
       }
+      emu.notifyControlOverlays();
     }
     return 1;
   });
@@ -463,6 +484,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0,
         ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
     }
+    emu.notifyControlOverlays();
     return 1;
   });
 
@@ -523,6 +545,24 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
+
+    // Register child in parent's childList (mirrors Win32 create-window.ts)
+    if (hWndParent) {
+      const parentWnd = emu.handles.get<WindowInfo>(hWndParent);
+      if (parentWnd) {
+        if (!parentWnd.childList) parentWnd.childList = [];
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) {
+          const WS_CHILD = 0x40000000;
+          if (dwStyle & WS_CHILD) {
+            wnd.controlId = hMenu;
+            if (!parentWnd.children) parentWnd.children = new Map();
+            parentWnd.children.set(hMenu, hwnd);
+          }
+        }
+        parentWnd.childList.push(hwnd);
+      }
+    }
 
     if (!emu.mainWindow && hWndParent === 0) {
       const wnd = emu.handles.get<WindowInfo>(hwnd);

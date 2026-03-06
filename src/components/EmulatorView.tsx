@@ -483,7 +483,6 @@ function renderControlOverlay(
     const multiline = !!(ctrl.style & 0x0004); // ES_MULTILINE
     const password = !!(ctrl.style & 0x0020);   // ES_PASSWORD
     const readonly = !!(ctrl.style & 0x0800);   // ES_READONLY
-    console.log(`[EDIT-RENDER] hwnd=0x${ctrl.childHwnd.toString(16)} class=${ctrl.className} style=0x${ctrl.style.toString(16)} readonly=${readonly} title="${ctrl.title}" hasEmuRef=${!!emuRef.current}`);
     const sunken = !!(ctrl.exStyle & WS_EX_CLIENTEDGE);
     const thinBorder = !sunken && !!(ctrl.style & WS_BORDER);
     const onTextChange = (text: string) => {
@@ -491,7 +490,6 @@ function renderControlOverlay(
       if (!emu) return;
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (wnd) {
-        console.log(`[EDIT] onTextChange hwnd=0x${ctrl.childHwnd.toString(16)} text="${text}"`);
         wnd.title = text;
         // Also update dialog controlValues so GetDlgItemInt/GetDlgItemText see it
         if (emu.dialogState && wnd.controlId !== undefined) {
@@ -504,9 +502,24 @@ function renderControlOverlay(
         emu.postMessage(wnd.parent, WM_COMMAND, wParam, ctrl.childHwnd);
       }
     };
+    const onEditRef = (el: HTMLTextAreaElement | HTMLInputElement | null) => {
+      const emu = emuRef.current;
+      if (!emu) return;
+      const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+      if (wnd) {
+        wnd.domInput = el ?? undefined;
+        if (el) {
+          // Save selection when textarea loses focus (e.g. menu click)
+          el.addEventListener('blur', () => {
+            wnd.editSelStart = el.selectionStart ?? 0;
+            wnd.editSelEnd = el.selectionEnd ?? 0;
+          });
+        }
+      }
+    };
     return (
       <div key={ctrl.childHwnd} style={posStyle}>
-        <Edit fontCSS={ctrlFont(ctrl)} text={ctrl.title} multiline={multiline} password={password} readonly={readonly} sunken={sunken} thinBorder={thinBorder} onTextChange={onTextChange} />
+        <Edit fontCSS={ctrlFont(ctrl)} text={ctrl.title} multiline={multiline} password={password} readonly={readonly} sunken={sunken} thinBorder={thinBorder} onTextChange={onTextChange} onRef={onEditRef} />
       </div>
     );
   }
@@ -1731,10 +1744,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // lParam: repeat count (1) | scanCode << 16 | extended << 24 | previous state << 30
       const scanCode = e.keyCode & 0xFF;
       const lParam = 1 | (scanCode << 16);
-      emu.postMessage(emu.mainWindow, WM_KEYDOWN, vk, lParam);
+      const target = emu.focusedWindow || emu.mainWindow;
+      emu.postMessage(target, WM_KEYDOWN, vk, lParam);
       // Also send WM_CHAR for printable characters
       if (e.key.length === 1 && !e.ctrlKey && !e.altKey) {
-        emu.postMessage(emu.mainWindow, WM_CHAR, e.key.charCodeAt(0), lParam);
+        emu.postMessage(target, WM_CHAR, e.key.charCodeAt(0), lParam);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -1750,7 +1764,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       emu.keyStates.delete(vk);
       const scanCode = e.keyCode & 0xFF;
       const lParam = 1 | (scanCode << 16) | (3 << 30); // transition + previous state
-      emu.postMessage(emu.mainWindow, WM_KEYUP, vk, lParam);
+      emu.postMessage(emu.focusedWindow || emu.mainWindow, WM_KEYUP, vk, lParam);
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);

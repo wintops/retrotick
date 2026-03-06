@@ -231,10 +231,186 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   user.register('ord_111', 10, () => {
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
-    console.log(`[WIN16] SendMessage hwnd=0x${hWnd.toString(16)} msg=0x${message.toString(16)} wParam=${wParam} lParam=0x${lParam.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd?.wndProc) {
       return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+    }
+    // Handle messages for built-in EDIT controls (no wndProc, backed by HTML overlay)
+    const cn = wnd?.classInfo?.className;
+    if (wnd && cn && cn.toUpperCase() === 'EDIT') {
+      // Standard WM_ messages (same values as Win32)
+      const WM_SETTEXT = 0x000C, WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E;
+      const WM_CUT = 0x0300, WM_COPY = 0x0301, WM_PASTE = 0x0302, WM_CLEAR = 0x0303;
+      const WM_SETFONT = 0x0030;
+      // Win16 EM_ messages start at WM_USER (0x0400), NOT at 0x00B0 like Win32!
+      const EM_GETSEL = 0x0400, EM_SETSEL = 0x0401;
+      const EM_GETRECT = 0x0402, EM_SETRECT = 0x0403;
+      const EM_REPLACESEL = 0x0412;
+      const EM_GETMODIFY = 0x0408, EM_SETMODIFY = 0x0409;
+      const EM_GETLINECOUNT = 0x040A, EM_LINEINDEX = 0x040B;
+      const EM_GETHANDLE = 0x040D;
+      const EM_LINELENGTH = 0x0411;
+      const EM_GETLINE = 0x0414, EM_LIMITTEXT = 0x0415;
+      const EM_CANUNDO = 0x0416, EM_UNDO = 0x0417;
+      const EM_LINEFROMCHAR = 0x0419;
+
+      if (message === WM_GETTEXTLENGTH) return wnd.title?.length || 0;
+      if (message === WM_GETTEXT) {
+        const buf = lParam;
+        const maxLen = wParam;
+        const text = wnd.title || '';
+        for (let i = 0; i < maxLen - 1 && i < text.length; i++) {
+          emu.memory.writeU8(buf + i, text.charCodeAt(i) & 0xFF);
+        }
+        emu.memory.writeU8(buf + Math.min(maxLen - 1, text.length), 0);
+        return Math.min(text.length, maxLen - 1);
+      }
+      if (message === WM_SETTEXT) {
+        const text = lParam ? emu.memory.readCString(lParam) : '';
+        wnd.title = text;
+        if (wnd.domInput) wnd.domInput.value = text;
+        emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === WM_SETFONT) return 0; // stub — HTML overlay uses CSS fonts
+      // Helper: get selection (prefer live DOM, fallback to saved)
+      const getSel = (): [number, number] => {
+        const el = wnd.domInput;
+        if (el && document.activeElement === el) {
+          return [el.selectionStart ?? 0, el.selectionEnd ?? 0];
+        }
+        return [wnd.editSelStart ?? 0, wnd.editSelEnd ?? 0];
+      };
+      // Helper: set selection on DOM + save
+      const setSel = (start: number, end: number) => {
+        wnd.editSelStart = start;
+        wnd.editSelEnd = end;
+        if (wnd.domInput) {
+          wnd.domInput.selectionStart = start;
+          wnd.domInput.selectionEnd = end;
+        }
+      };
+
+      if (message === WM_COPY || message === WM_CUT) {
+        const text = wnd.title || '';
+        const [start, end] = getSel();
+        if (start !== end) {
+          const selected = text.slice(start, end);
+          try { navigator.clipboard.writeText(selected); } catch {}
+          if (message === WM_CUT) {
+            wnd.title = text.slice(0, start) + text.slice(end);
+            if (wnd.domInput) wnd.domInput.value = wnd.title;
+            setSel(start, start);
+            emu.notifyControlOverlays();
+          }
+        }
+        return 0;
+      }
+      if (message === WM_PASTE) {
+        navigator.clipboard.readText().then((clipText) => {
+          const text = wnd.title || '';
+          const [start, end] = getSel();
+          wnd.title = text.slice(0, start) + clipText + text.slice(end);
+          if (wnd.domInput) wnd.domInput.value = wnd.title;
+          const newPos = start + clipText.length;
+          setSel(newPos, newPos);
+          emu.notifyControlOverlays();
+        }).catch(() => {});
+        return 0;
+      }
+      if (message === WM_CLEAR) {
+        const [start, end] = getSel();
+        if (start !== end) {
+          const text = wnd.title || '';
+          wnd.title = text.slice(0, start) + text.slice(end);
+          if (wnd.domInput) wnd.domInput.value = wnd.title;
+          setSel(start, start);
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+      // Win16 EM_SETSEL: wParam=0, lParam=MAKELONG(start, end)
+      if (message === EM_SETSEL) {
+        const textLen = (wnd.title || '').length;
+        const rawStart = lParam & 0xFFFF;
+        const rawEnd = (lParam >>> 16) & 0xFFFF;
+        const start = rawStart === 0xFFFF ? textLen : rawStart;
+        const end = rawEnd === 0xFFFF ? textLen : rawEnd;
+        setSel(start, end);
+        if (wnd.domInput) wnd.domInput.focus();
+        return 0;
+      }
+      // Win16 EM_GETSEL: returns MAKELONG(start, end)
+      if (message === EM_GETSEL) {
+        const [start, end] = getSel();
+        return ((end & 0xFFFF) << 16) | (start & 0xFFFF);
+      }
+      if (message === EM_GETHANDLE) return 0; // no buffer handle for HTML overlay
+      if (message === EM_REPLACESEL) {
+        const replText = lParam ? emu.memory.readCString(lParam) : '';
+        const cur = wnd.title || '';
+        const [start, end] = getSel();
+        wnd.title = cur.slice(0, start) + replText + cur.slice(end);
+        if (wnd.domInput) wnd.domInput.value = wnd.title;
+        const newPos = start + replText.length;
+        setSel(newPos, newPos);
+        emu.notifyControlOverlays();
+        return 0;
+      }
+      if (message === EM_GETMODIFY) return wnd.editModified ? 1 : 0;
+      if (message === EM_SETMODIFY) { wnd.editModified = !!wParam; return 0; }
+      if (message === EM_GETLINECOUNT) return (wnd.title || '').split('\n').length;
+      if (message === EM_LINEINDEX) {
+        const line = wParam === 0xFFFF ? -1 : wParam;
+        const lines = (wnd.title || '').split('\n');
+        if (line === -1) {
+          // Current line — use caret position
+          const [pos] = getSel();
+          let idx = 0;
+          for (const l of lines) { if (idx + l.length + 1 > pos) return idx; idx += l.length + 1; }
+          return idx;
+        }
+        let idx = 0;
+        for (let i = 0; i < line && i < lines.length; i++) idx += lines[i].length + 1;
+        return idx;
+      }
+      if (message === EM_LINELENGTH) {
+        const charIdx = wParam;
+        const text = wnd.title || '';
+        let pos = 0;
+        for (const line of text.split('\n')) {
+          if (pos + line.length >= charIdx) return line.length;
+          pos += line.length + 1;
+        }
+        return 0;
+      }
+      if (message === EM_GETLINE) {
+        const lineNum = wParam;
+        const buf = lParam;
+        const lines = (wnd.title || '').split('\n');
+        if (lineNum < lines.length) {
+          const line = lines[lineNum];
+          const maxLen = emu.memory.readU16(buf); // first word = buffer size
+          const len = Math.min(line.length, maxLen);
+          for (let i = 0; i < len; i++) emu.memory.writeU8(buf + i, line.charCodeAt(i) & 0xFF);
+          return len;
+        }
+        return 0;
+      }
+      if (message === EM_LIMITTEXT) { wnd.editLimit = wParam || 0x7FFFFFFE; return 0; }
+      if (message === EM_CANUNDO) return 0;
+      if (message === EM_UNDO) return 0;
+      if (message === EM_LINEFROMCHAR) {
+        const charIdx = wParam === 0xFFFF ? getSel()[0] : wParam;
+        let pos = 0, lineNum = 0;
+        for (const line of (wnd.title || '').split('\n')) {
+          if (pos + line.length >= charIdx) return lineNum;
+          pos += line.length + 1;
+          lineNum++;
+        }
+        return lineNum;
+      }
+      if (message === EM_GETRECT || message === EM_SETRECT) return 0;
     }
     return 0;
   });
@@ -254,6 +430,50 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     const wParam = emu.memory.readU16(lpMsg + 4);
     const lParam = emu.memory.readU32(lpMsg + 6);
 
+    if (message === 0x0111) {
+      // Standard edit menu command IDs (WM_CUT=0x300..WM_CLEAR=0x303) — relay to focused EDIT child
+      if (wParam >= 0x0300 && wParam <= 0x0303 && lParam === 0) {
+        const focusHwnd = emu.focusedWindow;
+        if (focusHwnd) {
+          const fw = emu.handles.get<WindowInfo>(focusHwnd);
+          if (fw && !fw.wndProc && fw.classInfo?.className?.toUpperCase() === 'EDIT' && fw.domInput) {
+            const el = fw.domInput;
+            const start = el.selectionStart ?? fw.editSelStart ?? 0;
+            const end = el.selectionEnd ?? fw.editSelEnd ?? 0;
+            const text = fw.title || '';
+            if (wParam === 0x0301 || wParam === 0x0300) { // WM_COPY / WM_CUT
+              if (start !== end) {
+                try { navigator.clipboard.writeText(text.slice(start, end)); } catch {}
+                if (wParam === 0x0300) { // WM_CUT
+                  fw.title = text.slice(0, start) + text.slice(end);
+                  el.value = fw.title;
+                  el.selectionStart = el.selectionEnd = start;
+                  fw.editSelStart = fw.editSelEnd = start;
+                  emu.notifyControlOverlays();
+                }
+              }
+            } else if (wParam === 0x0302) { // WM_PASTE
+              navigator.clipboard.readText().then((clip) => {
+                fw.title = text.slice(0, start) + clip + text.slice(end);
+                el.value = fw.title;
+                const np = start + clip.length;
+                el.selectionStart = el.selectionEnd = np;
+                fw.editSelStart = fw.editSelEnd = np;
+                emu.notifyControlOverlays();
+              }).catch(() => {});
+            } else if (wParam === 0x0303) { // WM_CLEAR
+              if (start !== end) {
+                fw.title = text.slice(0, start) + text.slice(end);
+                el.value = fw.title;
+                el.selectionStart = el.selectionEnd = start;
+                fw.editSelStart = fw.editSelEnd = start;
+                emu.notifyControlOverlays();
+              }
+            }
+          }
+        }
+      }
+    }
     // WM_TIMER with non-zero lParam: call timer callback directly
     if (message === 0x0113 && lParam !== 0) {
       return emu.callWndProc16(lParam, hWnd, message, wParam, Date.now() & 0xFFFFFFFF);

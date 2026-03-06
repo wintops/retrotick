@@ -239,7 +239,6 @@ export class Win32Dll {
       throw new Error(`Win32Dll.register: duplicate API definition for ${key}`);
     }
     const wrapped = (emu: Emulator) => {
-      console.log(`[API] ${key}`);
       return handler(emu);
     };
     this.emu.apiDefs.set(key, { handler: wrapped, stackBytes: nArgs * 4 });
@@ -255,7 +254,6 @@ export class Win16Module {
       throw new Error(`Win16Module.register: duplicate API definition for ${key}`);
     }
     const wrapped = (emu: Emulator) => {
-      console.log(`[API] ${key}`);
       return handler(emu);
     };
     this.emu.apiDefs.set(key, { handler: wrapped, stackBytes });
@@ -526,6 +524,7 @@ export class Emulator {
   // Window system
   mainWindow = 0;
   capturedWindow = 0;
+  focusedWindow = 0;
   // GL sync-yield guard: avoid double-yield when apps call both glFinish and SwapBuffers per frame.
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;

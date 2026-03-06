@@ -106,6 +106,7 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   user.register('ord_40', 6, () => {
     const [hWnd] = emu.readPascalArgs16([2, 4]);
     emu.endPaint(hWnd || emu.mainWindow, 0);
+    emu.notifyControlOverlays();
     return 0;
   });
 

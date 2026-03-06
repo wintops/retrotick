@@ -87,6 +87,8 @@ export interface WindowInfo {
   ownerThreadId?: number; // thread that created this window
   /** Per-control canvas for custom drawing (overlay companion canvas) */
   domCanvas?: HTMLCanvasElement;
+  /** DOM input/textarea element for EDIT controls (clipboard operations) */
+  domInput?: HTMLTextAreaElement | HTMLInputElement;
   // Scroll bar state (SB_HORZ=0, SB_VERT=1)
   scrollInfo?: { min: number; max: number; pos: number; page: number }[];
 }

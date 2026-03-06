@@ -5,6 +5,9 @@ import type { Emulator } from '../emulator';
 export function registerWin16Shell(emu: Emulator): void {
   const shell = emu.registerModule16('SHELL');
 
+  // Ordinal 9: DragAcceptFiles(hWnd, fAccept) — 4 bytes
+  shell.register('ord_9', 4, () => 0);
+
   // Ordinal 22: ShellAbout(hwnd, szApp, szOtherStuff, hIcon) — 14 bytes
   shell.register('ord_22', 12, () => 1);
 

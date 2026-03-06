@@ -80,7 +80,12 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('ord_19', 0, () => { emu.capturedWindow = 0; return 0; });
 
   // Ordinal 22: SetFocus(hWnd) — 2 bytes
-  user.register('ord_22', 2, () => emu.readArg16(0));
+  user.register('ord_22', 2, () => {
+    const hWnd = emu.readArg16(0);
+    const prev = emu.focusedWindow;
+    emu.focusedWindow = hWnd;
+    return prev;
+  });
 
   // Ordinal 28: ClientToScreen(hWnd, lpPoint_ptr) — 6 bytes
   user.register('ord_28', 6, () => 0);
