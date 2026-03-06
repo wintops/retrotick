@@ -43,7 +43,10 @@ export interface DialogControlInfo {
 }
 
 export type CommonDialogRequest =
-  | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void };
+  | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void }
+  | { type: 'file-open'; onResult: (file: { name: string; data: Uint8Array } | null) => void }
+  | { type: 'file-save'; defaultName: string; content: string; onResult: (name: string | null) => void }
+  | { type: 'find'; editHwnd: number; onClose: () => void };
 
 export interface DialogInfo {
   title: string;
@@ -248,15 +251,15 @@ export class Win32Dll {
 export class Win16Module {
   constructor(private emu: Emulator, private module: string) {}
 
-  register(name: string, stackBytes: number, handler: (emu: Emulator) => number | undefined): void {
-    const key = `${this.module}:${name}`;
-    if (this.emu.apiDefs.has(key)) {
-      throw new Error(`Win16Module.register: duplicate API definition for ${key}`);
+  register(name: string, stackBytes: number, handler: (emu: Emulator) => number | undefined, ordinal?: number): void {
+    const ordKey = ordinal !== undefined ? `${this.module}:ord_${ordinal}` : `${this.module}:${name}`;
+    if (this.emu.apiDefs.has(ordKey)) {
+      throw new Error(`Win16Module.register: duplicate API definition for ${ordKey}`);
     }
     const wrapped = (emu: Emulator) => {
       return handler(emu);
     };
-    this.emu.apiDefs.set(key, { handler: wrapped, stackBytes });
+    this.emu.apiDefs.set(ordKey, { handler: wrapped, stackBytes });
   }
 }
 
@@ -525,6 +528,7 @@ export class Emulator {
   mainWindow = 0;
   capturedWindow = 0;
   focusedWindow = 0;
+  findState?: { term: string; lastIndex: number };
   // GL sync-yield guard: avoid double-yield when apps call both glFinish and SwapBuffers per frame.
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;

@@ -9,21 +9,21 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 150: LoadMenu(hInstance, lpMenuName_ptr) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_150', 6, () => {
+  user.register('DestroyMenu', 6, () => {
     const [hInstance, lpMenuName] = emu.readPascalArgs16([2, 4]);
     console.log(`[WIN16] LoadMenu hInst=0x${hInstance.toString(16)} menuName=0x${lpMenuName.toString(16)}`);
     return 1;
-  });
+  }, 150);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 151: CreateMenu() — 0 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_151', 0, () => emu.handles.alloc('menu', { items: [] }));
+  user.register('CreateMenu', 0, () => emu.handles.alloc('menu', { items: [] }), 151);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 154: CheckMenuItem(hMenu, uIDCheckItem, uCheck) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_154', 6, () => {
+  user.register('GetSystemMenu', 6, () => {
     const [hMenu, uIDCheckItem, uCheck] = emu.readPascalArgs16([2, 2, 2]);
     if (!emu.menuItems) return -1;
     const MF_BYPOSITION = 0x400;
@@ -35,12 +35,12 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
     item.isChecked = !!(uCheck & MF_CHECKED);
     emu.onMenuChanged?.();
     return prev;
-  });
+  }, 154);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 155: EnableMenuItem(hMenu, uIDEnableItem, uEnable) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_155', 6, () => {
+  user.register('GetMenu', 6, () => {
     const [_hMenu, uIDEnableItem, uEnable] = emu.readPascalArgs16([2, 2, 2]);
     if (!emu.menuItems) return -1;
     const MF_BYPOSITION = 0x400;
@@ -52,17 +52,17 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
     item.isGrayed = !!(uEnable & MF_GRAYED);
     emu.onMenuChanged?.();
     return prev;
-  });
+  }, 155);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 157: GetMenu(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_157', 2, () => 0);
+  user.register('GetMenu', 2, () => 0, 157);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 158: SetMenu(hWnd, hMenu) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_158', 4, () => {
+  user.register('DrawMenuBar', 4, () => {
     const [hWnd, hMenu] = emu.readPascalArgs16([2, 2]);
     console.log(`[WIN16] SetMenu hwnd=0x${hWnd.toString(16)} hMenu=0x${hMenu.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
@@ -70,45 +70,45 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
       wnd.hMenu = hMenu;
     }
     return 1;
-  });
+  }, 158);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 159: GetSubMenu(hMenu, nPos) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_159', 4, () => 0);
+  user.register('GetSubMenu', 4, () => 0, 159);
 
   // Ordinal 160: DrawMenuBar(hWnd) — 2 bytes
-  user.register('ord_160', 2, () => 0);
+  user.register('DrawMenuBar', 2, () => 0, 160);
 
   // Ordinal 263: GetMenuItemCount(hMenu) — 2 bytes
-  user.register('ord_263', 2, () => 0);
+  user.register('GetMenuItemCount', 2, () => 0, 263);
 
   // Ordinal 410: InsertMenu — 12 bytes
-  user.register('ord_410', 12, () => 1);
+  user.register('InsertMenu', 12, () => 1, 410);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 411: AppendMenu(hMenu, uFlags, uIDNewItem, lpNewItem) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_411', 10, () => 1);
+  user.register('AppendMenu', 10, () => 1, 411);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 412: RemoveMenu(hMenu, uPosition, uFlags) — 6 bytes (2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_412', 6, () => 1);
+  user.register('RemoveMenu', 6, () => 1, 412);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 413: DeleteMenu(hMenu, uPosition, uFlags) — 6 bytes (2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_413', 6, () => 1);
+  user.register('DeleteMenu', 6, () => 1, 413);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 415: CreatePopupMenu() — 0 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_415', 0, () => emu.handles.alloc('menu', { items: [] }));
+  user.register('CreatePopupMenu', 0, () => emu.handles.alloc('menu', { items: [] }), 415);
 
   // Ordinal 417: GetMenuCheckMarkDimensions() — 0 bytes → 16x16
-  user.register('ord_417', 0, () => ((16 << 16) | 16));
+  user.register('GetMenuCheckMarkDimensions', 0, () => ((16 << 16) | 16), 417);
 
   // Ordinal 418: SetMenuItemBitmaps — 10 bytes
-  user.register('ord_418', 10, () => 1);
+  user.register('SetMenuItemBitmaps', 10, () => 1, 418);
 }

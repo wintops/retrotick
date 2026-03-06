@@ -11,15 +11,15 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 87: DialogBox(hInst, lpTemplate_ptr, hWndParent, dlgProc_segptr) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_87', 12, () => {
+  user.register('DrawIcon', 12, () => {
     const [hInst, lpTemplate, hWndParent, dlgProc] = emu.readPascalArgs16([2, 4, 2, 4]);
     return showWin16Dialog(emu, lpTemplate, hWndParent, dlgProc);
-  });
+  }, 87);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 88: EndDialog(hDlg, nResult_sword) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_88', 4, () => {
+  user.register('DrawText', 4, () => {
     const [_hDlg, nResult] = emu.readPascalArgs16([2, 2]);
     if (emu.dialogState) {
       emu.dialogState.result = nResult;
@@ -29,28 +29,28 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       // will detect ds.ended and call _dialogResolve after restoring CPU state.
     }
     return 0;
-  });
+  }, 88);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 90: IsDialogMessage(hDlg, lpMsg) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_90', 6, () => 0);
+  user.register('IsDialogMessage', 6, () => 0, 90);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 91: GetDlgItem(hDlg, nIDDlgItem) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_91', 4, () => {
+  user.register('GetDlgItem', 4, () => {
     const [hDlg, nIDDlgItem] = emu.readPascalArgs16([2, 2]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     const childHwnd = dlgWnd?.children?.get(nIDDlgItem) ?? 0;
     console.log(`[WIN16] GetDlgItem(0x${hDlg.toString(16)}, ${nIDDlgItem}) → 0x${childHwnd.toString(16)}`);
     return childHwnd;
-  });
+  }, 91);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 92: SetDlgItemText(hDlg, nIDDlgItem, lpString) — 8 bytes (2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_92', 8, () => {
+  user.register('DialogBoxParam', 8, () => {
     const [hDlg, nIDDlgItem, lpString] = emu.readPascalArgs16([2, 2, 4]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     if (dlgWnd) {
@@ -64,26 +64,26 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       }
     }
     return 1;
-  });
+  }, 92);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 94: SetDlgItemInt(hDlg, nID, wValue, bSigned) — 8 bytes (2+2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_94', 8, () => 1);
+  user.register('SetDlgItemInt', 8, () => 1, 94);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 95: GetDlgItemInt(hDlg, nIDDlgItem, lpTranslated, bSigned) — 10 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_95', 10, () => {
+  user.register('GetDlgItemInt', 10, () => {
     const [hDlg, nID, lpTranslated, bSigned] = emu.readPascalArgs16([2, 2, 4, 2]);
     if (lpTranslated) emu.memory.writeU16(lpTranslated, 0); // FALSE = translation failed
     return 0;
-  });
+  }, 95);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 96: CheckRadioButton(hDlg, nFirst, nLast, nCheck) — 8 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_96', 8, () => {
+  user.register('GetDlgItem', 8, () => {
     const hDlg = emu.readArg16(0);
     const nFirst = emu.readArg16(2);
     const nLast = emu.readArg16(4);
@@ -98,12 +98,12 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       }
     }
     return 0;
-  });
+  }, 96);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 97: CheckDlgButton(hDlg, nID, uCheck) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_97', 6, () => {
+  user.register('SetDlgItemText', 6, () => {
     const hDlg = emu.readArg16(0);
     const nID = emu.readArg16(2);
     const uCheck = emu.readArg16(4);
@@ -117,12 +117,12 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       }
     }
     return 0;
-  });
+  }, 97);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 98: IsDlgButtonChecked(hDlg, nID) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_98', 4, () => {
+  user.register('GetDlgItemText', 4, () => {
     const hDlg = emu.readArg16(0);
     const nID = emu.readArg16(2);
     const wnd = emu.handles.get<WindowInfo>(hDlg);
@@ -135,12 +135,12 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       }
     }
     return 0;
-  });
+  }, 98);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 102: AdjustWindowRect(lpRect_ptr, dwStyle_long, bMenu) — 10 bytes (4+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_102', 10, () => {
+  user.register('CheckDlgButton', 10, () => {
     const [lpRect, dwStyle, bMenu] = emu.readPascalArgs16([4, 4, 2]);
     if (lpRect) {
       const { bw, captionH, menuH } = getNonClientMetrics(dwStyle, !!bMenu, true);
@@ -154,17 +154,17 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       emu.memory.writeU16(lpRect + 6, b & 0xFFFF);
     }
     return 1;
-  });
+  }, 102);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 239: DialogBoxParam(hInst, lpTemplate, hWndParent, dlgProc, dwInitParam) — 16 bytes (2+4+2+4+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_239', 16, () => 0);
+  user.register('DialogBoxParam', 16, () => 0, 239);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 454: AdjustWindowRectEx(lpRect_ptr, dwStyle_long, bMenu, dwExStyle_long) — 14 bytes (4+4+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_454', 14, () => {
+  user.register('GetWindowPlacement', 14, () => {
     const [lpRect, dwStyle, bMenu, _dwExStyle] = emu.readPascalArgs16([4, 4, 2, 4]);
     if (lpRect) {
       const { bw, captionH, menuH } = getNonClientMetrics(dwStyle, !!bMenu, true);
@@ -178,7 +178,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
       emu.memory.writeU16(lpRect + 6, b & 0xFFFF);
     }
     return 1;
-  });
+  }, 454);
 }
 
 // Win16 dialog class codes

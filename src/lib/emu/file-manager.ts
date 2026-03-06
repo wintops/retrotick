@@ -372,6 +372,23 @@ export class DefaultFileManager implements FileManager {
       }
     }
 
+    // Synthesize subdirectory entries for known C:\ paths
+    if (dirPart.startsWith('C:\\')) {
+      const dirNorm = dirPart.endsWith('\\') ? dirPart.slice(0, -1) : dirPart;
+      for (const kd of KNOWN_DIRS) {
+        if (kd === dirNorm) continue; // skip self
+        const parent = kd.substring(0, kd.lastIndexOf('\\'));
+        if (parent === dirNorm) {
+          const childName = kd.substring(kd.lastIndexOf('\\') + 1);
+          if (childName && this.matchesPattern(childName, filePat)) {
+            if (!results.some(e => e.name.toUpperCase() === childName.toUpperCase())) {
+              results.push({ name: childName, size: 0, isDir: true });
+            }
+          }
+        }
+      }
+    }
+
     // Always include "." and ".." for wildcard directory listings
     if (filePat === '*.*' || filePat === '*') {
       const hasDot = results.some(e => e.name === '.');

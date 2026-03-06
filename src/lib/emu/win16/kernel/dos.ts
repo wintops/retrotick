@@ -6,32 +6,50 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
   const fs = emu.fs;
 
   // --- Ordinal 3: GetVersion() — 0 bytes ---
-  kernel.register('ord_3', 0, () => 0x0A03);
+  kernel.register('GetVersion', 0, () => 0x0A03, 3);
 
   // --- Ordinal 39: GetTickCount() — 0 bytes ---
-  kernel.register('ord_39', 0, () => Date.now() & 0xFFFFFFFF);
+  kernel.register('GetTickCount', 0, () => Date.now() & 0xFFFFFFFF, 39);
 
   // --- Ordinal 41: EnableDos() — 0 bytes ---
-  kernel.register('ord_41', 0, () => 0);
+  kernel.register('EnableDos', 0, () => 0, 41);
 
   // --- Ordinal 42: DisableDos() — 0 bytes ---
-  kernel.register('ord_42', 0, () => 0);
+  kernel.register('DisableDos', 0, () => 0, 42);
 
   // --- Ordinal 92: GetTempDrive(word) — 2 bytes ---
-  kernel.register('ord_92', 2, () => 0x43); // 'C'
+  kernel.register('GetTempDrive', 2, () => 0x43, 92); // 'C'
 
   // --- Ordinal 102: DOS3Call() — 0 bytes, register-based ---
   // Delegates to the shared INT 21h handler in dos-int.ts
-  kernel.register('ord_102', 0, () => {
+  // Must return current DX:AX so emuCompleteThunk16 preserves the INT 21h results
+  kernel.register('DOS3Call', 0, () => {
+    const ah = (emu.cpu.reg[0] >> 8) & 0xFF;
+    const al = emu.cpu.reg[0] & 0xFF;
+    const bl = emu.cpu.reg[3] & 0xFF;
+    const cl = emu.cpu.reg[1] & 0xFF;
+    const dsBase = emu.cpu.segBase(emu.cpu.ds);
+    const dx = emu.cpu.reg[2] & 0xFFFF;
+    if (ah === 0x44) {
+      console.log(`[DOS3Call] IOCTL AH=44 AL=${al.toString(16)} BL=${bl} CL=${cl.toString(16)} DS:DX=${emu.cpu.ds.toString(16)}:${dx.toString(16)}`);
+    } else if (ah !== 0x30) {
+      console.log(`[DOS3Call] AH=${ah.toString(16)} AL=${al.toString(16)} BL=${bl} DS:DX=${emu.cpu.ds.toString(16)}:${dx.toString(16)}`);
+    }
     handleInt21(emu.cpu, emu);
-    return 0;
-  });
+    const retAx = emu.cpu.reg[0] & 0xFFFF;
+    const retDx = emu.cpu.reg[2] & 0xFFFF;
+    const cf = emu.cpu.getFlag(0x001);
+    if (ah === 0x44) {
+      console.log(`[DOS3Call] → AX=${retAx.toString(16)} DX=${retDx.toString(16)} CF=${cf?1:0}`);
+    }
+    return (retDx << 16) | retAx;
+  }, 102);
 
   // --- Ordinal 105: GetExeVersion() — 0 bytes ---
-  kernel.register('ord_105', 0, () => 0x030A);
+  kernel.register('GetExeVersion', 0, () => 0x030A, 105);
 
   // --- Ordinal 131: GetDOSEnvironment() — 0 bytes ---
-  kernel.register('ord_131', 0, () => {
+  kernel.register('GetDOSEnvironment', 0, () => {
     const envAddr = emu.allocHeap(4);
     emu.memory.writeU8(envAddr, 0);
     emu.memory.writeU8(envAddr + 1, 0);
@@ -39,13 +57,13 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
     emu.cpu.setReg16(2, seg);
     emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | (envAddr & 0xFFFF);
     return (seg << 16) | (envAddr & 0xFFFF);
-  });
+  }, 131);
 
   // --- Ordinal 132: GetWinFlags() — 0 bytes ---
-  kernel.register('ord_132', 0, () => 0x0413);
+  kernel.register('GetWinFlags', 0, () => 0x0413, 132);
 
   // --- Ordinal 134: GetWindowsDirectory(ptr word) — 6 bytes (ptr+word) ---
-  kernel.register('ord_134', 6, () => {
+  kernel.register('GetWindowsDirectory', 6, () => {
     const [lpBuffer, nSize] = emu.readPascalArgs16([4, 2]);
     const dir = 'C:\\WINDOWS';
     const buf = emu.resolveFarPtr(lpBuffer);
@@ -56,10 +74,10 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
       return maxCopy;
     }
     return 0;
-  });
+  }, 134);
 
   // --- Ordinal 135: GetSystemDirectory(ptr word) — 6 bytes (ptr+word) ---
-  kernel.register('ord_135', 6, () => {
+  kernel.register('GetSystemDirectory', 6, () => {
     const [lpBuffer, nSize] = emu.readPascalArgs16([4, 2]);
     const dir = 'C:\\WINDOWS\\SYSTEM';
     const buf = emu.resolveFarPtr(lpBuffer);
@@ -70,11 +88,16 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
       return maxCopy;
     }
     return 0;
-  });
+  }, 135);
 
   // --- Ordinal 136: GetDriveType(nDrive) — 2 bytes (word) ---
-  kernel.register('ord_136', 2, () => 3); // DRIVE_FIXED
+  // Win16 return values: 0=unknown, 1=does not exist, 2=removable, 3=fixed, 4=remote
+  kernel.register('GetDriveType', 2, () => {
+    const nDrive = emu.readPascalArgs16([2])[0]; // 0=A, 1=B, 2=C, ...
+    if (nDrive === 2) return 3; // C: = DRIVE_FIXED
+    return 1; // does not exist
+  }, 136);
 
   // --- Ordinal 167: GetExpWinVer(word) — 2 bytes ---
-  kernel.register('ord_167', 2, () => 0x030A);
+  kernel.register('GetExpWinVer', 2, () => 0x030A, 167);
 }

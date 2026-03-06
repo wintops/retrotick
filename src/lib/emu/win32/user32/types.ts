@@ -84,6 +84,7 @@ export interface WindowInfo {
   editSelEnd?: number;
   editLimit?: number;     // EM_LIMITTEXT limit (0 = default 30000/32KB)
   editModified?: boolean; // EM_SETMODIFY / EM_GETMODIFY
+  editBufferHandle?: number; // EM_GETHANDLE local heap handle
   ownerThreadId?: number; // thread that created this window
   /** Per-control canvas for custom drawing (overlay companion canvas) */
   domCanvas?: HTMLCanvasElement;

@@ -118,6 +118,12 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
     return true;
   }
 
+  if (ah === 0x15) {
+    // MSCDEX (CD-ROM) — not installed; BX=0 means 0 CD drives
+    cpu.setReg16(EBX, 0);
+    return true;
+  }
+
   console.warn(`[INT 2Fh] Unhandled AX=0x${ax.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
   return true;
 }

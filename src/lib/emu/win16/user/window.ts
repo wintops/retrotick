@@ -64,11 +64,42 @@ function sendCreateMessages16(
   emu.callWndProc16(wndProc, hwnd, WM_CREATE, 0, lParam);
 }
 
+// Built-in Win16 class atoms (same as Win32)
+const BUILTIN_ATOMS: Record<number, string> = {
+  0x0080: 'BUTTON',
+  0x0081: 'EDIT',
+  0x0082: 'STATIC',
+  0x0083: 'LISTBOX',
+  0x0084: 'SCROLLBAR',
+  0x0085: 'COMBOBOX',
+  0x0086: 'MDICLIENT',
+};
+
+// Resolve a Win16 class name from a raw far-pointer DWORD.
+// If HIWORD is 0 and LOWORD is small, it's an atom — resolve to a class name.
+function resolveClassName16(emu: Emulator, rawDWord: number, resolvedPtr: number): string {
+  const seg = (rawDWord >>> 16) & 0xFFFF;
+  if (seg !== 0) {
+    // Real far pointer to a string
+    return resolvedPtr ? emu.memory.readCString(resolvedPtr) : '';
+  }
+  const atom = rawDWord & 0xFFFF;
+  if (atom === 0) return '';
+  // Check built-in class atoms
+  const builtin = BUILTIN_ATOMS[atom];
+  if (builtin) return builtin;
+  // Look up registered classes by atom
+  for (const [name, cls] of emu.windowClasses) {
+    if ((cls as any).atom === atom) return name;
+  }
+  return `ATOM_${atom}`;
+}
+
 export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win16UserHelpers): void {
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 41: CreateWindow — 30 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_41', 30, () => {
+  user.register('ShowWindow', 30, () => {
     const lpParam = h.readFarPtr(0);
     const hInstance = emu.readArg16(4);
     const hMenu = emu.readArg16(6);
@@ -80,8 +111,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const dwStyle = emu.readArg16DWord(18);
     const lpWindowName = h.readFarPtr(22);
     const lpClassName = h.readFarPtr(26);
+    const classNameRaw = emu.readArg16DWord(26);
 
-    const className = lpClassName ? emu.memory.readCString(lpClassName) : '';
+    const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
     console.log(`[WIN16] CreateWindow class="${className}" title="${windowName}" ${w}x${height}`);
 
@@ -154,12 +186,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     return hwnd;
-  });
+  }, 41);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 42: ShowWindow(hWnd, nCmdShow) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_42', 4, () => {
+  user.register('CloseWindow', 4, () => {
     const [hWnd, nCmdShow] = emu.readPascalArgs16([2, 2]);
     console.log(`[WIN16] ShowWindow hwnd=0x${hWnd.toString(16)} nCmdShow=${nCmdShow} mainWindow=0x${emu.mainWindow.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
@@ -204,68 +236,68 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     // Notify control overlays so child controls (EDIT, BUTTON, etc.) get DOM elements
     if (hWnd === emu.mainWindow) emu.notifyControlOverlays();
     return wasVisible ? 1 : 0;
-  });
+  }, 42);
 
   // Ordinal 43: CloseWindow(hWnd) — 2 bytes (minimizes the window)
-  user.register('ord_43', 2, () => {
+  user.register('CloseWindow', 2, () => {
     const [hWnd] = emu.readPascalArgs16([2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) wnd.minimized = true;
     return 0;
-  });
+  }, 43);
 
   // Ordinal 44: OpenIcon(hWnd) — 2 bytes
-  user.register('ord_44', 2, () => 1);
+  user.register('OpenIcon', 2, () => 1, 44);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 45: BringWindowToTop(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_45', 2, () => 1);
+  user.register('BringWindowToTop', 2, () => 1, 45);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 46: GetParent(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_46', 2, () => {
+  user.register('IsWindow', 2, () => {
     const hWnd = emu.readArg16(0);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.parent || 0;
-  });
+  }, 46);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 47: IsWindow(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_47', 2, () => {
+  user.register('IsWindow', 2, () => {
     const hWnd = emu.readArg16(0);
     const result = emu.handles.getType(hWnd) === 'window' ? 1 : 0;
     console.log(`[WIN16] IsWindow(0x${hWnd.toString(16)}) → ${result}`);
     return result;
-  });
+  }, 47);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 48: IsChild(hWndParent, hWnd) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_48', 4, () => {
+  user.register('IsWindowVisible', 4, () => {
     const [hWndParent, hWnd] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.parent === hWndParent ? 1 : 0;
-  });
+  }, 48);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 49: IsWindowVisible(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_49', 2, () => {
+  user.register('FindWindow', 2, () => {
     const hWnd = emu.readArg16(0);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.visible ? 1 : 0;
-  });
+  }, 49);
 
   // Ordinal 50: FindWindow(lpClassName:4, lpWindowName:4) — 8 bytes
-  user.register('ord_50', 8, () => 0);
+  user.register('FindWindow', 8, () => 0, 50);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 53: DestroyWindow(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_53', 2, () => {
+  user.register('DestroyWindow', 2, () => {
     const hWnd = emu.readPascalArgs16([2])[0];
     const WM_DESTROY = 0x0002;
     const WM_NCDESTROY = 0x0082;
@@ -293,12 +325,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
     emu.handles.free(hWnd);
     return 1;
-  });
+  }, 53);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 56: MoveWindow(hWnd, x, y, w, h, bRepaint) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_56', 12, () => {
+  user.register('DestroyWindow', 12, () => {
     const [hWnd, x, y, w, height, bRepaint] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
@@ -319,12 +351,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.notifyControlOverlays();
     }
     return 1;
-  });
+  }, 56);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 57: RegisterClass(lpWndClass_ptr) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_57', 4, () => {
+  user.register('RegisterClass', 4, () => {
     const lpWndClass = h.readFarPtr(0);
     if (lpWndClass) {
       const style = emu.memory.readU16(lpWndClass);
@@ -358,12 +390,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       return emu.nextClassAtom++;
     }
     return 0;
-  });
+  }, 57);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 58: GetClassName(hWnd, lpClassName, nMaxCount) — 8 bytes (2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_58', 8, () => {
+  user.register('GetClassName', 8, () => {
     const [hWnd, lpClassName, nMaxCount] = emu.readPascalArgs16([2, 4, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const name = wnd?.classInfo?.className || '';
@@ -374,17 +406,17 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       return maxCopy;
     }
     return 0;
-  });
+  }, 58);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 59: SetActiveWindow(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_59', 2, () => emu.readArg16(0));
+  user.register('SetActiveWindow', 2, () => emu.readArg16(0), 59);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 133: GetWindowWord(hWnd, nIndex) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_133', 4, () => {
+  user.register('GetWindowLong', 4, () => {
     const [hWnd, nIndex] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
@@ -393,12 +425,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     // GWW_HINSTANCE = -6
     if (nIndex === 0xFFFA || nIndex === -6) return 1;
     return 0;
-  });
+  }, 133);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 135: GetWindowLong(hWnd, nIndex) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_135', 4, () => {
+  user.register('OpenClipboard', 4, () => {
     const [hWnd, nIndex] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const signedIndex = (nIndex << 16) >> 16;
@@ -430,12 +462,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
     }
     return 0;
-  });
+  }, 135);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 136: SetWindowLong(hWnd, nIndex, dwNewLong) — 8 bytes (2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_136', 8, () => {
+  user.register('CloseClipboard', 8, () => {
     const [hWnd, nIndex, dwNewLong] = emu.readPascalArgs16([2, 2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const signedIndex = (nIndex << 16) >> 16;
@@ -450,12 +482,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       wnd.extraBytes[nIndex+3] = (dwNewLong >> 24) & 0xFF;
     }
     return old;
-  });
+  }, 136);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 232: SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, uFlags) — 14 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_232', 14, () => {
+  user.register('SetParent', 14, () => {
     const [hWnd, _hInsertAfter, x, y, cx, cy, uFlags] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 0;
@@ -486,30 +518,30 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
     emu.notifyControlOverlays();
     return 1;
-  });
+  }, 232);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 258: MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints) — 10 bytes (2+2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_258', 10, () => 0);
+  user.register('MapWindowPoints', 10, () => 0, 258);
 
   // Ordinal 259-261: DeferWindowPos
-  user.register('ord_259', 2, () => 1);   // BeginDeferWindowPos
-  user.register('ord_260', 16, () => 1);  // DeferWindowPos
-  user.register('ord_261', 2, () => 1);   // EndDeferWindowPos
+  user.register('wsprintf', 2, () => 1, 259);   // BeginDeferWindowPos
+  user.register('wvsprintf', 16, () => 1, 260);  // DeferWindowPos
+  user.register('EndDeferWindowPos', 2, () => 1);   // EndDeferWindowPos
 
   // Ordinal 262: GetWindow(hWnd, uCmd) — 4 bytes
-  user.register('ord_262', 4, () => 0);
+  user.register('GetWindow', 4, () => 0, 262);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 266: SetMessageQueue(cMsg) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_266', 2, () => 1);
+  user.register('SetMessageQueue', 2, () => 1, 266);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 452: CreateWindowEx — 32 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_452', 32, () => {
+  user.register('CreateWindowEx', 32, () => {
     const lpParam = h.readFarPtr(0);
     const hInstance = emu.readArg16(4);
     const hMenu = emu.readArg16(6);
@@ -521,9 +553,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const dwStyle = emu.readArg16DWord(18);
     const lpWindowName = h.readFarPtr(22);
     const lpClassName = h.readFarPtr(26);
+    const classNameRaw = emu.readArg16DWord(26);
     const dwExStyle = emu.readArg16DWord(28);
 
-    const className = lpClassName ? emu.memory.readCString(lpClassName) : '';
+    const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
     console.log(`[WIN16] CreateWindowEx exStyle=0x${dwExStyle.toString(16)} class="${className}" title="${windowName}" ${w}x${height}`);
 
@@ -582,5 +615,5 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     return hwnd;
-  });
+  }, 452);
 }

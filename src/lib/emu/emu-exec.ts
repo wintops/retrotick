@@ -91,6 +91,7 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
     if (thunk) {
       const key = `${thunk.dll}:${thunk.name}`;
+      if (emu.isNE) console.log(`[THUNK16-wndproc] ${key} at 0x${eip.toString(16)} AX=0x${(emu.cpu.reg[0]&0xFFFF).toString(16)}`);
       const handler = emu.apiDefs.get(key)?.handler;
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
@@ -236,6 +237,7 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
     if (thunk) {
       const key = `${thunk.dll}:${thunk.name}`;
+      if (emu.isNE) console.log(`[THUNK16-async] ${key} at 0x${eip.toString(16)} AX=0x${(emu.cpu.reg[0]&0xFFFF).toString(16)}`);
       const handler = emu.apiDefs.get(key)?.handler;
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
@@ -544,6 +546,7 @@ export function emuTick(emu: Emulator): void {
       stepCount += 999; // thunks represent significant work (~1000 real instructions)
       emu._lastThunkTick = emu._tickCount;
       const key = `${thunk.dll}:${thunk.name}`;
+      if (emu.isNE) console.log(`[THUNK16] ${key} at 0x${eip.toString(16)} AX=0x${(emu.cpu.reg[0]&0xFFFF).toString(16)}`);
       const handler = emu.apiDefs.get(key)?.handler;
 
       const origESP = emu.cpu.reg[4] + thunk.stackBytes + 4;

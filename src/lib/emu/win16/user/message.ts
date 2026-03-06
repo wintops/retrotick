@@ -9,7 +9,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 107: DefWindowProc(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_107', 10, () => {
+  user.register('AdjustWindowRect', 10, () => {
     const [hWnd, msg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const WM_CLOSE = 0x0010;
     const WM_SYSCOMMAND = 0x0112;
@@ -96,12 +96,12 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return 1;
     }
     return 0;
-  });
+  }, 107);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 108: GetMessage(lpMsg_segptr, hWnd, wMsgFilterMin, wMsgFilterMax) — 10 bytes (4+2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_108', 10, () => {
+  user.register('MapDialogRect', 10, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax] = emu.readPascalArgs16([4, 2, 2, 2]);
     if (emu.messageQueue.length > 0) {
       const msg = emu.messageQueue.shift()!;
@@ -157,12 +157,12 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       }
     };
     return undefined;
-  });
+  }, 108);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 109: PeekMessage(lpMsg_ptr, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_109', 12, () => {
+  user.register('MessageBeep', 12, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg] = emu.readPascalArgs16([4, 2, 2, 2, 2]);
 
     // Check for synthesized WM_PAINT
@@ -215,22 +215,23 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return undefined;
     }
     return 0;
-  });
+  }, 109);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 110: PostMessage(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_110', 10, () => {
+  user.register('FlashWindow', 10, () => {
     const [hWnd, msg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     emu.postMessage(hWnd, msg, wParam, lParam);
     return 1;
-  });
+  }, 110);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 111: SendMessage(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_111', 10, () => {
+  user.register('SendMessage', 10, () => {
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
+    console.log(`[WIN16] SendMessage hwnd=0x${hWnd.toString(16)} msg=0x${message.toString(16)} wParam=0x${wParam.toString(16)} lParam=0x${lParam.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd?.wndProc) {
       return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
@@ -248,7 +249,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       const EM_REPLACESEL = 0x0412;
       const EM_GETMODIFY = 0x0408, EM_SETMODIFY = 0x0409;
       const EM_GETLINECOUNT = 0x040A, EM_LINEINDEX = 0x040B;
-      const EM_GETHANDLE = 0x040D;
+      const EM_SETHANDLE = 0x040C, EM_GETHANDLE = 0x040D;
       const EM_LINELENGTH = 0x0411;
       const EM_GETLINE = 0x0414, EM_LIMITTEXT = 0x0415;
       const EM_CANUNDO = 0x0416, EM_UNDO = 0x0417;
@@ -345,7 +346,36 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const [start, end] = getSel();
         return ((end & 0xFFFF) << 16) | (start & 0xFFFF);
       }
-      if (message === EM_GETHANDLE) return 0; // no buffer handle for HTML overlay
+      // EM_GETHANDLE: allocate local buffer with current text, return handle
+      if (message === EM_GETHANDLE) {
+        const text = wnd.title || '';
+        const size = text.length + 1;
+        const handle = emu.allocLocal(size);
+        if (handle) {
+          const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
+          const addr = dsBase + handle;
+          for (let i = 0; i < text.length; i++) {
+            emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
+          }
+          emu.memory.writeU8(addr + text.length, 0);
+          wnd.editBufferHandle = handle;
+        }
+        return handle;
+      }
+      // EM_SETHANDLE: read text from local buffer, update edit control
+      if (message === EM_SETHANDLE) {
+        const handle = wParam;
+        if (handle) {
+          const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
+          const addr = dsBase + handle;
+          const text = emu.memory.readCString(addr);
+          wnd.title = text;
+          if (wnd.domInput) wnd.domInput.value = text;
+          wnd.editBufferHandle = handle;
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
       if (message === EM_REPLACESEL) {
         const replText = lParam ? emu.memory.readCString(lParam) : '';
         const cur = wnd.title || '';
@@ -412,18 +442,113 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       }
       if (message === EM_GETRECT || message === EM_SETRECT) return 0;
     }
+
+    // Handle WM_MDICREATE for MDICLIENT windows
+    const WM_MDICREATE = 0x0220;
+    const WM_MDIGETACTIVE = 0x0229;
+    if (wnd && cn && cn.toUpperCase() === 'MDICLIENT') {
+      if (message === WM_MDICREATE) {
+        // lParam is a far pointer to MDICREATESTRUCT (Win16):
+        //   szClass   (4) far ptr to class name
+        //   szTitle   (4) far ptr to title
+        //   hOwner    (2) instance handle
+        //   x         (2)
+        //   y         (2)
+        //   cx        (2)
+        //   cy        (2)
+        //   style     (4) window style
+        //   lParam    (4) app-defined
+        const mdiAddr = emu.resolveFarPtr(lParam);
+        const szClassPtr = emu.memory.readU32(mdiAddr);
+        const szTitlePtr = emu.memory.readU32(mdiAddr + 4);
+        const hOwner = emu.memory.readU16(mdiAddr + 8);
+        const mdiX = emu.memory.readU16(mdiAddr + 10);
+        const mdiY = emu.memory.readU16(mdiAddr + 12);
+        const mdiCX = emu.memory.readU16(mdiAddr + 14);
+        const mdiCY = emu.memory.readU16(mdiAddr + 16);
+        const mdiStyle = emu.memory.readU32(mdiAddr + 18);
+        const mdiLParam = emu.memory.readU32(mdiAddr + 22);
+
+        const classAddr = emu.resolveFarPtr(szClassPtr);
+        const titleAddr = emu.resolveFarPtr(szTitlePtr);
+        const mdiClassName = classAddr ? emu.memory.readCString(classAddr) : '';
+        const mdiTitle = titleAddr ? emu.memory.readCString(titleAddr) : '';
+
+        console.log(`[WIN16] WM_MDICREATE class="${mdiClassName}" title="${mdiTitle}" ${mdiCX}x${mdiCY} style=0x${mdiStyle.toString(16)}`);
+
+        const WS_CHILD = 0x40000000;
+        const WS_VISIBLE = 0x10000000;
+        const WS_CLIPSIBLINGS = 0x04000000;
+        const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+
+        const classInfo = emu.windowClasses.get(mdiClassName.toUpperCase());
+        const childHwnd = emu.handles.alloc('window', {
+          classInfo: classInfo || { className: mdiClassName, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
+          title: mdiTitle,
+          style: childStyle,
+          exStyle: 0,
+          x: mdiX === 0x8000 ? 0 : mdiX,
+          y: mdiY === 0x8000 ? 0 : mdiY,
+          width: mdiCX === 0x8000 ? 320 : mdiCX,
+          height: mdiCY === 0x8000 ? 200 : mdiCY,
+          hMenu: 0,
+          parent: hWnd,
+          wndProc: classInfo?.wndProc || 0,
+          rawWndProc: classInfo?.rawWndProc || 0,
+          visible: true,
+          extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
+          children: new Map(),
+        });
+
+        // Register child in parent's childList
+        if (!wnd.childList) wnd.childList = [];
+        wnd.childList.push(childHwnd);
+
+        // Track active MDI child on the MDIClient
+        (wnd as any).mdiActiveChild = childHwnd;
+
+        // Send WM_CREATE to child if it has a wndProc
+        if (classInfo?.wndProc) {
+          const savedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, 0);
+          emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
+        }
+
+        console.log(`[WIN16] WM_MDICREATE → created hwnd=0x${childHwnd.toString(16)}`);
+        return childHwnd;
+      }
+      if (message === WM_MDIGETACTIVE) {
+        return (wnd as any).mdiActiveChild || 0;
+      }
+      const WM_MDIACTIVATE = 0x0222;
+      const WM_MDIDESTROY = 0x0221;
+      const WM_MDITILE = 0x0226;
+      const WM_MDICASCADE = 0x0227;
+      const WM_MDIICONARRANGE = 0x0228;
+      const WM_MDISETMENU = 0x0230;
+      if (message === WM_MDIACTIVATE) {
+        (wnd as any).mdiActiveChild = wParam;
+        return 0;
+      }
+      if (message === WM_MDIDESTROY || message === WM_MDITILE ||
+          message === WM_MDICASCADE || message === WM_MDIICONARRANGE ||
+          message === WM_MDISETMENU) {
+        return 0;
+      }
+    }
+
     return 0;
-  });
+  }, 111);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 113: TranslateMessage(lpMsg_ptr) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_113', 4, () => 0);
+  user.register('TranslateMessage', 4, () => 0, 113);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 114: DispatchMessage(lpMsg_ptr) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_114', 4, () => {
+  user.register('ReplyMessage', 4, () => {
     const lpMsg = h.readFarPtr(0);
     const hWnd = emu.memory.readU16(lpMsg);
     const message = emu.memory.readU16(lpMsg + 2);
@@ -432,7 +557,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
 
     if (message === 0x0111) {
       // Standard edit menu command IDs (WM_CUT=0x300..WM_CLEAR=0x303) — relay to focused EDIT child
-      if (wParam >= 0x0300 && wParam <= 0x0303 && lParam === 0) {
+      if (wParam >= 0x0300 && wParam <= 0x0304 && lParam === 0) {
         const focusHwnd = emu.focusedWindow;
         if (focusHwnd) {
           const fw = emu.handles.get<WindowInfo>(focusHwnd);
@@ -469,6 +594,14 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
                 fw.editSelStart = fw.editSelEnd = start;
                 emu.notifyControlOverlays();
               }
+            } else if (wParam === 0x0304) { // WM_UNDO
+              el.focus();
+              document.execCommand('undo');
+              // Sync DOM state back to emulator
+              fw.title = el.value;
+              fw.editSelStart = el.selectionStart ?? 0;
+              fw.editSelEnd = el.selectionEnd ?? 0;
+              emu.notifyControlOverlays();
             }
           }
         }
@@ -483,20 +616,20 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
     }
     return 0;
-  });
+  }, 114);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 118: RegisterWindowMessage(lpString_ptr) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_118', 4, () => 0xC000);
+  user.register('RegisterWindowMessage', 4, () => 0xC000, 118);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 119: GetMessagePos() — 0 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_119', 0, () => 0);
+  user.register('GetMessagePos', 0, () => 0, 119);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 120: GetMessageTime() — 0 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_120', 0, () => Date.now() & 0xFFFFFFFF);
+  user.register('GetMessageTime', 0, () => Date.now() & 0xFFFFFFFF, 120);
 }

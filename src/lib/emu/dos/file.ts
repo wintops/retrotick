@@ -284,6 +284,44 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
     // Check if block device is remote: DX bit 12=1 remote, 0=local
     cpu.setReg16(EDX, 0); // local
     cpu.setFlag(CF, false);
+  } else if (subFunc === 0x0D) {
+    // Generic IOCTL (block device): CH=category, CL=function
+    const cl = cpu.reg[ECX] & 0xFF;
+    const drive = cpu.reg[EBX] & 0xFF;
+    if (cl === 0x60 && (drive === 3 || drive === 0)) {
+      // Get Device Parameters for C: — fill BPB-like structure at DS:DX
+      const addr = cpu.segBase(cpu.ds) + (cpu.reg[EDX] & 0xFFFF);
+      cpu.mem.writeU8(addr + 0, 0x00);  // special functions
+      cpu.mem.writeU8(addr + 1, 0x05);  // device type: hard disk
+      cpu.mem.writeU16(addr + 2, 0x0001); // device attributes: non-removable
+      cpu.mem.writeU16(addr + 4, 0x0001); // cylinders (fake)
+      cpu.mem.writeU8(addr + 6, 0x00);  // media type (0=default)
+      // BPB at offset 7: 512 bytes/sector, 8 sectors/cluster, etc.
+      cpu.mem.writeU16(addr + 7, 512);   // bytes per sector
+      cpu.mem.writeU8(addr + 9, 7);      // sectors per cluster - 1 (8 sectors)
+      cpu.mem.writeU16(addr + 10, 1);    // reserved sectors
+      cpu.mem.writeU8(addr + 12, 2);     // number of FATs
+      cpu.mem.writeU16(addr + 13, 512);  // root dir entries
+      cpu.mem.writeU16(addr + 15, 0);    // total sectors (0 = use 32-bit field)
+      cpu.mem.writeU8(addr + 17, 0xF8);  // media descriptor (hard disk)
+      cpu.mem.writeU16(addr + 18, 100);  // sectors per FAT
+      cpu.setFlag(CF, false);
+    } else if (cl === 0x66 && (drive === 3 || drive === 0)) {
+      // Get Media ID for C:
+      const addr = cpu.segBase(cpu.ds) + (cpu.reg[EDX] & 0xFFFF);
+      cpu.mem.writeU16(addr + 0, 0);     // info level
+      cpu.mem.writeU32(addr + 2, 0x12345678); // serial number
+      // Volume label (11 bytes)
+      const label = 'RETROTICK   ';
+      for (let i = 0; i < 11; i++) cpu.mem.writeU8(addr + 6 + i, label.charCodeAt(i));
+      // File system type (8 bytes)
+      const fsType = 'FAT16   ';
+      for (let i = 0; i < 8; i++) cpu.mem.writeU8(addr + 17 + i, fsType.charCodeAt(i));
+      cpu.setFlag(CF, false);
+    } else {
+      cpu.setFlag(CF, true);
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+    }
   } else {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 1); // invalid function

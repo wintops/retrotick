@@ -3,16 +3,16 @@ import type { KernelState } from './index';
 
 export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: KernelState): void {
   // --- Ordinal 27: GetModuleName(word ptr word) — 8 bytes (word+ptr+word) ---
-  kernel.register('ord_27', 8, () => 0);
+  kernel.register('GetModuleName', 8, () => 0, 27);
 
   // --- Ordinal 45: LoadModule(str ptr) — 8 bytes (long+long) ---
-  kernel.register('ord_45', 8, () => 2);
+  kernel.register('LoadModule', 8, () => 2, 45);
 
   // --- Ordinal 46: FreeModule(word) — 2 bytes ---
-  kernel.register('ord_46', 2, () => 1);
+  kernel.register('FreeModule', 2, () => 1, 46);
 
   // --- Ordinal 47: GetModuleHandle(lpModuleName_ptr) — 4 bytes (segstr) ---
-  kernel.register('ord_47', 4, () => {
+  kernel.register('GetModuleHandle', 4, () => {
     const lpName = emu.readArg16DWord(0);
     if (!lpName) return 0;
     const addr = emu.resolveFarPtr(lpName);
@@ -27,13 +27,13 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
     // Return fake handle for KERNEL, USER, GDI etc.
     if (baseName === 'KERNEL' || baseName === 'USER' || baseName === 'GDI') return 1;
     return 0;
-  });
+  }, 47);
 
   // --- Ordinal 48: GetModuleUsage(hModule) — 2 bytes (word) ---
-  kernel.register('ord_48', 2, () => 1);
+  kernel.register('GetModuleUsage', 2, () => 1, 48);
 
   // --- Ordinal 49: GetModuleFileName(hModule, lpFilename, nSize) — 8 bytes (word+ptr+s_word) ---
-  kernel.register('ord_49', 8, () => {
+  kernel.register('GetModuleFileName', 8, () => {
     const [hModule, lpFilename, nSize] = emu.readPascalArgs16([2, 4, 2]);
     const name = emu.exePath;
     const buf = emu.resolveFarPtr(lpFilename);
@@ -46,49 +46,49 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
       return maxCopy;
     }
     return 0;
-  });
+  }, 49);
 
   // --- Ordinal 50: GetProcAddress(hModule, lpProcName_str) — 6 bytes (word+str) ---
-  kernel.register('ord_50', 6, () => 0);
+  kernel.register('GetProcAddress', 6, () => 0, 50);
 
   // --- Ordinal 51: MakeProcInstance(lpProc_segptr, hInstance) — 6 bytes (segptr+word) ---
-  kernel.register('ord_51', 6, () => {
+  kernel.register('MakeProcInstance', 6, () => {
     const [lpProc] = emu.readPascalArgs16([4, 2]);
     return lpProc;
-  });
+  }, 51);
 
   // --- Ordinal 52: FreeProcInstance(lpProc_segptr) — 4 bytes (segptr) ---
-  kernel.register('ord_52', 4, () => 0);
+  kernel.register('FreeProcInstance', 4, () => 0, 52);
 
   // --- Ordinal 53: CallProcInstance — 4 bytes, return arg ---
-  kernel.register('ord_53', 4, () => emu.readArg16DWord(0));
+  kernel.register('CallProcInstance', 4, () => emu.readArg16DWord(0), 53);
 
   // --- Ordinal 54: GetInstanceData(hInstance, pData, nCount) — 6 bytes (word+word+word) ---
-  kernel.register('ord_54', 6, () => 0);
+  kernel.register('GetInstanceData', 6, () => 0, 54);
 
   // --- Ordinal 93: GetCodeHandle(lpProc) — 4 bytes (segptr) ---
-  kernel.register('ord_93', 4, () => {
+  kernel.register('GetCodeHandle', 4, () => {
     const lpProc = emu.readArg16DWord(0);
     return (lpProc >>> 16) & 0xFFFF;
-  });
+  }, 93);
 
   // --- Ordinal 94: DefineHandleTable(wOffset) — 2 bytes (word) ---
-  kernel.register('ord_94', 2, () => 1);
+  kernel.register('DefineHandleTable', 2, () => 1, 94);
 
   // --- Ordinal 95: LoadLibrary(lpLibFileName) — 4 bytes (str) ---
-  kernel.register('ord_95', 4, () => {
+  kernel.register('LoadLibrary', 4, () => {
     const lpLibFileName = emu.readArg16DWord(0);
     const name = lpLibFileName ? emu.memory.readCString(emu.resolveFarPtr(lpLibFileName)) : '';
     console.log(`[KERNEL16] LoadLibrary("${name}") → stub`);
     return 32;
-  });
+  }, 95);
 
   // --- Ordinal 96: FreeLibrary(hLibModule) — 2 bytes (word) ---
-  kernel.register('ord_96', 2, () => 0);
+  kernel.register('FreeLibrary', 2, () => 0, 96);
 
   // --- Ordinal 133: GetExePtr(word) — 2 bytes ---
-  kernel.register('ord_133', 2, () => emu.readArg16(0));
+  kernel.register('GetExePtr', 2, () => emu.readArg16(0), 133);
 
   // --- Ordinal 166: WinExec(lpCmdLine, uCmdShow) — 6 bytes (str+word) ---
-  kernel.register('ord_166', 6, () => 33);
+  kernel.register('WinExec', 6, () => 33, 166);
 }

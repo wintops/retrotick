@@ -22,11 +22,21 @@ const ZF = 0x040;
 export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   const al = cpu.reg[EAX] & 0xFF;
+  if (ah === 0x00 || ah === 0x4C) console.warn(`[INT 21h] AH=0x${ah.toString(16).padStart(2,'0')} AL=0x${al.toString(16).padStart(2,'0')} at EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} DS=0x${cpu.ds.toString(16)} SS:SP=0x${cpu.ss.toString(16)}:0x${(cpu.reg[4]&0xFFFF).toString(16)}`);
   switch (ah) {
-    case 0x00: // Old-style terminate (same as INT 20h)
+    case 0x00: { // Old-style terminate (same as INT 20h)
+      // Dump stack for debugging
+      const sp = cpu.reg[4] & 0xFFFF;
+      const ssBase = cpu.segBase(cpu.ss);
+      const stackWords: string[] = [];
+      for (let i = 0; i < 16; i++) {
+        stackWords.push(cpu.mem.readU16(ssBase + ((sp + i * 2) & 0xFFFF)).toString(16).padStart(4, '0'));
+      }
+      console.warn(`[INT 21h] AH=00 TERMINATE at EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)} stack: ${stackWords.join(' ')}`);
       emu.halted = true;
       cpu.halted = true;
       break;
+    }
 
     case 0x01: { // Read character with echo (blocking)
       if (emu.dosKeyBuffer.length > 0) {

@@ -3,15 +3,15 @@ import type { KernelState } from './index';
 
 export function registerKernelError(kernel: Win16Module, emu: Emulator, state: KernelState): void {
   // --- Ordinal 1: FatalExit(code) — 2 bytes ---
-  kernel.register('ord_1', 2, () => { emu.halted = true; return 0; });
+  kernel.register('FatalExit', 2, () => { emu.halted = true; return 0; }, 1);
 
   // --- Ordinal 2: ExitKernel() — 0 bytes ---
-  kernel.register('ord_2', 0, () => { emu.halted = true; return 0; });
+  kernel.register('ExitKernel', 0, () => { emu.halted = true; return 0; }, 2);
 
   // --- Ordinal 55: Catch(lpCatchBuf) — 4 bytes (ptr) ---
   // Saves register state to CATCHBUF (9 words = 18 bytes):
   // SP, BP, SI, DI, DS, SS, IP_lo, CS, IP_hi (Wine layout)
-  kernel.register('ord_55', 4, () => {
+  kernel.register('Catch', 4, () => {
     const lpCatchBuf = emu.readArg16DWord(0);
     const buf = emu.resolveFarPtr(lpCatchBuf);
     if (buf) {
@@ -29,10 +29,10 @@ export function registerKernelError(kernel: Win16Module, emu: Emulator, state: K
       emu.memory.writeU16(buf + 16, (retAddr >>> 16) & 0xFFFF); // IP high (usually 0 for 16-bit)
     }
     return 0;
-  });
+  }, 55);
 
   // --- Ordinal 56: Throw(lpCatchBuf, nThrowBack) — 6 bytes (ptr+word) ---
-  kernel.register('ord_56', 6, () => {
+  kernel.register('Throw', 6, () => {
     const [lpCatchBuf, nThrowBack] = emu.readPascalArgs16([4, 2]);
     const buf = emu.resolveFarPtr(lpCatchBuf);
     if (buf) {
@@ -47,13 +47,13 @@ export function registerKernelError(kernel: Win16Module, emu: Emulator, state: K
       emu.cpu.eip = ip;
     }
     return nThrowBack || 1;
-  });
+  }, 56);
 
   // --- Ordinal 107: SetErrorMode(uMode) — 2 bytes (word) ---
-  kernel.register('ord_107', 2, () => 0);
+  kernel.register('SetErrorMode', 2, () => 0, 107);
 
   // --- Ordinal 108: SwitchStackTo(segment, size, offset) — 6 bytes ---
-  kernel.register('ord_108', 6, () => {
+  kernel.register('SwitchStackTo', 6, () => {
     const [segment, size, offset] = emu.readPascalArgs16([2, 2, 2]);
     // Save current stack
     state.savedStack = { ss: emu.cpu.ss, sp: emu.cpu.reg[4] & 0xFFFF };
@@ -61,43 +61,43 @@ export function registerKernelError(kernel: Win16Module, emu: Emulator, state: K
     emu.cpu.ss = segment;
     emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (offset & 0xFFFF);
     return 0;
-  });
+  }, 108);
 
   // --- Ordinal 109: SwitchStackBack() — 0 bytes ---
-  kernel.register('ord_109', 0, () => {
+  kernel.register('SwitchStackBack', 0, () => {
     if (state.savedStack) {
       emu.cpu.ss = state.savedStack.ss;
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (state.savedStack.sp & 0xFFFF);
       state.savedStack = null;
     }
     return 0;
-  });
+  }, 109);
 
   // --- Ordinal 137: FatalAppExit(action, lpMsg) — 6 bytes (word+str) ---
-  kernel.register('ord_137', 6, () => {
+  kernel.register('FatalAppExit', 6, () => {
     const msg = emu.memory.readCString(emu.resolveFarPtr(emu.readArg16DWord(2)));
     console.error(`[KERNEL] FatalAppExit: "${msg}"`);
     emu.haltReason = `FatalAppExit: ${msg}`;
     emu.halted = true;
     return 0;
-  });
+  }, 137);
 
   // --- Ordinal 140: SetSigHandler(segptr ptr ptr word word) — 14 bytes ---
-  kernel.register('ord_140', 14, () => 0);
+  kernel.register('SetSigHandler', 14, () => 0, 140);
 
   // --- Ordinal 147: SetLastError(long) — 4 bytes ---
-  kernel.register('ord_147', 4, () => {
+  kernel.register('SetLastError', 4, () => {
     const [err] = emu.readPascalArgs16([4]);
     state.lastError = err;
     return 0;
-  });
+  }, 147);
 
   // --- Ordinal 148: GetLastError() — 0 bytes ---
-  kernel.register('ord_148', 0, () => state.lastError);
+  kernel.register('GetLastError', 0, () => state.lastError, 148);
 
   // --- Ordinal 139: DoSignal — 0 bytes ---
-  kernel.register('ord_139', 0, () => 0);
+  kernel.register('DoSignal', 0, () => 0, 139);
 
   // --- Ordinal 203: DebugBreak — 0 bytes ---
-  kernel.register('ord_203', 0, () => 0);
+  kernel.register('DebugBreak', 0, () => 0, 203);
 }

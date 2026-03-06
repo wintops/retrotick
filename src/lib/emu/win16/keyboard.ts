@@ -7,7 +7,7 @@ export function registerWin16Keyboard(emu: Emulator): void {
   const keyboard = emu.registerModule16('KEYBOARD');
 
   // Ordinal 5: AnsiToOem(lpAnsiStr:4, lpOemStr:4) — 8 bytes
-  keyboard.register('ord_5', 8, () => {
+  keyboard.register('AnsiToOem', 8, () => {
     const [lpAnsi, lpOem] = emu.readPascalArgs16([4, 4]);
     if (lpAnsi && lpOem) {
       let i = 0;
@@ -20,10 +20,10 @@ export function registerWin16Keyboard(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 5);
 
   // Ordinal 6: OemToAnsi(lpOemStr:4, lpAnsiStr:4) — 8 bytes
-  keyboard.register('ord_6', 8, () => {
+  keyboard.register('OemToAnsi', 8, () => {
     const [lpOem, lpAnsi] = emu.readPascalArgs16([4, 4]);
     if (lpOem && lpAnsi) {
       let i = 0;
@@ -36,10 +36,10 @@ export function registerWin16Keyboard(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 6);
 
   // Ordinal 129: VkKeyScan(ch) — 2 bytes
-  keyboard.register('ord_129', 2, () => {
+  keyboard.register('VkKeyScan', 2, () => {
     const ch = emu.readArg16(0) & 0xFF;
     const layout = getKeyboardLayout(loadSettings().keyboardLayout);
     const charStr = String.fromCharCode(ch);
@@ -51,16 +51,16 @@ export function registerWin16Keyboard(emu: Emulator): void {
     if (ch >= 0x61 && ch <= 0x7A) return ch - 0x20; // a-z → A-Z vk
     if (ch >= 0x41 && ch <= 0x5A) return ch | 0x0100; // A-Z → shift+vk
     return ch;
-  });
+  }, 129);
 
   // Ordinal 132: GetKBCodePage() — 0 bytes
-  keyboard.register('ord_132', 0, () => {
+  keyboard.register('GetKBCodePage', 0, () => {
     const preset = getLocalePreset(loadSettings().localeId);
     return preset.oemCodePage;
-  });
+  }, 132);
 
   // Ordinal 134: AnsiToOemBuff(lpAnsiStr, lpOemStr, nLength) — 10 bytes (4+4+2)
-  keyboard.register('ord_134', 10, () => {
+  keyboard.register('AnsiToOemBuff', 10, () => {
     const [lpAnsi, lpOem, nLength] = emu.readPascalArgs16([4, 4, 2]);
     if (lpAnsi && lpOem) {
       for (let i = 0; i < nLength; i++) {
@@ -68,10 +68,10 @@ export function registerWin16Keyboard(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 134);
 
   // Ordinal 135: OemToAnsiBuff(lpOemStr, lpAnsiStr, nLength) — 10 bytes (4+4+2)
-  keyboard.register('ord_135', 10, () => {
+  keyboard.register('OemToAnsiBuff', 10, () => {
     const [lpOem, lpAnsi, nLength] = emu.readPascalArgs16([4, 4, 2]);
     if (lpOem && lpAnsi) {
       for (let i = 0; i < nLength; i++) {
@@ -79,5 +79,5 @@ export function registerWin16Keyboard(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 135);
 }
