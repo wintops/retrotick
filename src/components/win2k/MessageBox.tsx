@@ -3,6 +3,7 @@ import { useLayoutEffect } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Window, WS_CAPTION, WS_SYSMENU } from './Window';
 import { Button } from './Button';
+import { t } from '../../lib/regional-settings';
 
 // --- Constants ---
 export const MB_OK = 0x00;
@@ -65,15 +66,16 @@ export function MsgBoxIcon({ type }: { type: number }) {
 
 // --- Button configs ---
 function getMsgBoxButtons(type: number): { label: string; id: number }[] {
+  const s = t();
   const buttons = type & 0x0F;
   switch (buttons) {
-    case MB_OK: return [{ label: 'OK', id: IDOK }];
-    case MB_OKCANCEL: return [{ label: 'OK', id: IDOK }, { label: 'Cancel', id: IDCANCEL }];
-    case MB_YESNO: return [{ label: 'Yes', id: IDYES }, { label: 'No', id: IDNO }];
-    case MB_YESNOCANCEL: return [{ label: 'Yes', id: IDYES }, { label: 'No', id: IDNO }, { label: 'Cancel', id: IDCANCEL }];
-    case MB_ABORTRETRYIGNORE: return [{ label: 'Abort', id: IDABORT }, { label: 'Retry', id: IDRETRY }, { label: 'Ignore', id: IDIGNORE }];
-    case MB_RETRYCANCEL: return [{ label: 'Retry', id: IDRETRY }, { label: 'Cancel', id: IDCANCEL }];
-    default: return [{ label: 'OK', id: IDOK }];
+    case MB_OK: return [{ label: s.ok, id: IDOK }];
+    case MB_OKCANCEL: return [{ label: s.ok, id: IDOK }, { label: s.cancel, id: IDCANCEL }];
+    case MB_YESNO: return [{ label: s.yes, id: IDYES }, { label: s.no, id: IDNO }];
+    case MB_YESNOCANCEL: return [{ label: s.yes, id: IDYES }, { label: s.no, id: IDNO }, { label: s.cancel, id: IDCANCEL }];
+    case MB_ABORTRETRYIGNORE: return [{ label: s.abort, id: IDABORT }, { label: s.retry, id: IDRETRY }, { label: s.ignore, id: IDIGNORE }];
+    case MB_RETRYCANCEL: return [{ label: s.retry, id: IDRETRY }, { label: s.cancel, id: IDCANCEL }];
+    default: return [{ label: s.ok, id: IDOK }];
   }
 }
 
@@ -90,7 +92,7 @@ export function MessageBox({ caption, text, type, icon, onDismiss, focused = tru
   flashTrigger?: number;
   parentRef?: { current: HTMLDivElement | null };
 }) {
-  const buttons = type != null ? getMsgBoxButtons(type) : [{ label: 'Close', id: IDOK }];
+  const buttons = type != null ? getMsgBoxButtons(type) : [{ label: t().ok, id: IDOK }];
   const defaultId = buttons[0].id;
   const [initialPos, setInitialPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [visible, setVisible] = useState(false);

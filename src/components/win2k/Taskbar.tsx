@@ -165,7 +165,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
                 <img src={app.iconUrl} style={{ width: '16px', height: '16px', flexShrink: 0, imageRendering: 'pixelated' }} />
               )}
               <span lang={app.lang} style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, lineHeight: '16px' }}>
-                {app.title || 'Untitled'}
+                {app.title || t().untitled}
               </span>
             </div>
           );

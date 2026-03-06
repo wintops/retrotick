@@ -18,6 +18,7 @@ import { ExportTableDisplay } from './ExportTableDisplay';
 import { useBlobUrls } from '../hooks/useBlobUrls';
 import type { LoadedData } from './App';
 import type { PEInfo } from '../lib/pe';
+import { t } from '../lib/regional-settings';
 
 const WINDOW_STYLE = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
 const CLIENT_W = 640;
@@ -176,7 +177,7 @@ export function ResourceViewerWindow({
       onPointerDown={onFocus}
     >
       <Window
-        title={`Resource Viewer - ${exeName}`}
+        title={`${t().resourceViewer} - ${exeName}`}
         style={WINDOW_STYLE}
         clientW={clientSize.w}
         clientH={clientSize.h}
@@ -209,7 +210,7 @@ export function ResourceViewerWindow({
               }}
               onClick={() => onRunExe(data.arrayBuffer, data.peInfo)}
             >
-              Run
+              {t().run}
             </button>
           )}
         </div>

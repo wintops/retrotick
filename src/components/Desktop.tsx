@@ -184,10 +184,10 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
 
   async function handleNewFolder() {
     setBgContextMenu(null);
-    let name = 'New Folder';
+    let name = t().newFolder;
     let suffix = 0;
     const existingNames = new Set(files.map(f => displayName(f.name)));
-    while (existingNames.has(name)) { suffix++; name = `New Folder (${suffix})`; }
+    while (existingNames.has(name)) { suffix++; name = `${t().newFolder} (${suffix})`; }
     const fullPath = name + '/';
     await addFolder(fullPath);
     await loadFiles();
@@ -249,8 +249,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
         ))}
         <div style={{ position: 'absolute', bottom: '4px', right: '8px', zIndex: 1, font: '11px Tahoma, sans-serif', textAlign: 'right', lineHeight: '1.6' }}>
           <div style={{ pointerEvents: 'none', color: 'rgba(255,255,255,0.25)' }}>
-            Drop EXE / DLL files to run apps or inspect resources<br />
-            Right-click desktop for actions
+            {t().dropHint}<br />
+            {t().rightClickHint}
           </div>
           <a
             href="https://github.com/lqs/retrotick"
@@ -318,8 +318,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
           items.push(mi(CMD_DELETE, t().delete_));
         } else {
           if (contextMenu.isExe) items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
-          if (contextMenu.isScr && contextMenu.isExe) items.push(mi(CMD_CONFIGURE, 'Configure'));
-          items.push(mi(CMD_VIEW, 'View Resources', { isDefault: !contextMenu.isExe }));
+          if (contextMenu.isScr && contextMenu.isExe) items.push(mi(CMD_CONFIGURE, t().configure));
+          items.push(mi(CMD_VIEW, t().viewResources, { isDefault: !contextMenu.isExe }));
           items.push(mi(CMD_RENAME, t().rename));
           items.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
           items.push(mi(CMD_DELETE, t().delete_));
@@ -347,7 +347,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
       {confirmDelete && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onPointerDown={(e) => { e.preventDefault(); setConfirmFlash(c => c + 1); }} onContextMenu={(e: Event) => e.preventDefault()}>
           <div onPointerDown={(e) => e.stopPropagation()} style={{ font: '11px/1 "Tahoma", "MS Sans Serif", sans-serif', minWidth: '280px', maxWidth: '400px' }}>
-            <Window title={isFolder(confirmDelete) ? 'Confirm Folder Delete' : 'Confirm File Delete'} style={WS_CAPTION | WS_SYSMENU} focused={true} draggable flashTrigger={confirmFlash} onClose={() => setConfirmDelete(null)}>
+            <Window title={isFolder(confirmDelete) ? t().confirmFolderDelete : t().confirmFileDelete} style={WS_CAPTION | WS_SYSMENU} focused={true} draggable flashTrigger={confirmFlash} onClose={() => setConfirmDelete(null)}>
               <div style={{ padding: '12px 12px 8px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                 <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
                   <circle cx="16" cy="16" r="14" fill="#FFFF00" stroke="#000" stroke-width="1"/>
@@ -356,16 +356,16 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
                 </svg>
                 <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {isFolder(confirmDelete)
-                    ? `Are you sure you want to delete '${displayName(confirmDelete)}' and all its contents?`
-                    : `Are you sure you want to delete '${confirmDelete}'?`}
+                    ? t().confirmDeleteFolder.replace('{0}', displayName(confirmDelete))
+                    : t().confirmDeleteFile.replace('{0}', confirmDelete)}
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', padding: '4px 12px 8px' }}>
                 <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => handleDelete(confirmDelete)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif' isDefault>Yes</Button>
+                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif' isDefault>{t().yes}</Button>
                 </div>
                 <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => setConfirmDelete(null)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif'>No</Button>
+                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif'>{t().no}</Button>
                 </div>
               </div>
             </Window>

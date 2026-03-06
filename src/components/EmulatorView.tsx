@@ -26,7 +26,7 @@ import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
 import { loadRegistry, saveRegistry } from '../lib/registry-db';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
-import { loadSettings, getKeyboardLayout } from '../lib/regional-settings';
+import { loadSettings, getKeyboardLayout, t } from '../lib/regional-settings';
 
 interface EmulatorViewProps {
   arrayBuffer: ArrayBuffer;
@@ -1448,7 +1448,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           emu.consoleTitle = finishedTitle;
           setWindowTitle(finishedTitle);
           onTitleChange?.(finishedTitle);
-          setMessageBoxes(prev => [...prev, { id: -1, caption: exeBaseName, text: `Process has exited with code ${emu.exitCode}.`, type: 0 /* MB_OK */, isExit: true }]);
+          setMessageBoxes(prev => [...prev, { id: -1, caption: exeBaseName, text: t().processExited.replace('{0}', String(emu.exitCode)), type: 0 /* MB_OK */, isExit: true }]);
           return;
         }
         onStop();
@@ -1844,8 +1844,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     return (
       <div onPointerDown={onFocus}>
         <MessageBox
-          caption={`${crashExeName} - Application Error`}
-          text={`${crashExeName} has encountered a problem and needs to close.\n\nReason:  ${crashInfo.description}\nAddress: ${crashInfo.eip}\n\nClick OK to terminate the program.`}
+          caption={`${crashExeName} - ${t().applicationError}`}
+          text={`${t().crashMessage.replace('{0}', crashExeName)}\n\nReason:  ${crashInfo.description}\nAddress: ${crashInfo.eip}\n\n${t().clickOkToTerminate}`}
           icon={<MsgBoxIcon type={MB_ICONERROR} />}
           onDismiss={onStop}
         />

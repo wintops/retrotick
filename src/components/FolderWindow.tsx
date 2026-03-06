@@ -187,10 +187,10 @@ export function FolderWindow({
 
   async function handleNewFolder() {
     setBgContextMenu(null);
-    let name = 'New Folder';
+    let name = t().newFolder;
     let suffix = 0;
     const existingNames = new Set(items.map(i => i.displayName));
-    while (existingNames.has(name)) { suffix++; name = `New Folder (${suffix})`; }
+    while (existingNames.has(name)) { suffix++; name = `${t().newFolder} (${suffix})`; }
     const fullPath = prefix + name + '/';
     await addFolder(fullPath);
     await loadItems();
@@ -331,7 +331,7 @@ export function FolderWindow({
             ))}
             {items.length === 0 && (
               <div class="flex items-center justify-center w-full text-gray-400 text-sm" style={{ minHeight: '200px' }}>
-                This folder is empty
+                {t().folderEmpty}
               </div>
             )}
           </div>
@@ -364,7 +364,7 @@ export function FolderWindow({
         const menuItems: MenuItem[] = [
           mi(CMD_OPEN, t().open, { isDefault: true }),
         ];
-        if (!item.isFolder) menuItems.push(mi(CMD_VIEW, 'View Resources'));
+        if (!item.isFolder) menuItems.push(mi(CMD_VIEW, t().viewResources));
         menuItems.push(mi(CMD_RENAME, t().rename));
         menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
         menuItems.push(mi(CMD_DELETE, t().delete_));
@@ -395,7 +395,7 @@ export function FolderWindow({
       {confirmDelete && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onPointerDown={(e) => { e.preventDefault(); setConfirmFlash(c => c + 1); }} onContextMenu={(e: Event) => e.preventDefault()}>
           <div onPointerDown={(e) => e.stopPropagation()} style={{ font: '11px/1 "Tahoma", "MS Sans Serif", sans-serif', minWidth: '280px', maxWidth: '400px' }}>
-            <Window title={isFolder(confirmDelete) ? 'Confirm Folder Delete' : 'Confirm File Delete'} style={WS_CAPTION | WS_SYSMENU} focused={true} draggable flashTrigger={confirmFlash} onClose={() => setConfirmDelete(null)}>
+            <Window title={isFolder(confirmDelete) ? t().confirmFolderDelete : t().confirmFileDelete} style={WS_CAPTION | WS_SYSMENU} focused={true} draggable flashTrigger={confirmFlash} onClose={() => setConfirmDelete(null)}>
               <div style={{ padding: '12px 12px 8px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                 <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
                   <circle cx="16" cy="16" r="14" fill="#FFFF00" stroke="#000" stroke-width="1"/>
@@ -404,16 +404,16 @@ export function FolderWindow({
                 </svg>
                 <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {isFolder(confirmDelete)
-                    ? `Are you sure you want to delete '${displayName(confirmDelete)}' and all its contents?`
-                    : `Are you sure you want to delete '${displayName(confirmDelete)}'?`}
+                    ? t().confirmDeleteFolder.replace('{0}', displayName(confirmDelete))
+                    : t().confirmDeleteFile.replace('{0}', displayName(confirmDelete))}
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', padding: '4px 12px 8px' }}>
                 <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => handleDeleteItem(confirmDelete)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif' isDefault>Yes</Button>
+                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif' isDefault>{t().yes}</Button>
                 </div>
                 <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => setConfirmDelete(null)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif'>No</Button>
+                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif'>{t().no}</Button>
                 </div>
               </div>
             </Window>

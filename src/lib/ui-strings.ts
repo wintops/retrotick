@@ -38,6 +38,33 @@ export interface UiStrings {
   labelLongDate: string;
   labelPreview: string;
   cancel: string;
+  // MessageBox buttons
+  ok: string;
+  yes: string;
+  no: string;
+  abort: string;
+  retry: string;
+  ignore: string;
+  // Crash dialog
+  applicationError: string;
+  crashMessage: string;
+  clickOkToTerminate: string;
+  // Delete confirmation
+  confirmFolderDelete: string;
+  confirmFileDelete: string;
+  confirmDeleteFolder: string;
+  confirmDeleteFile: string;
+  // Misc UI
+  configure: string;
+  viewResources: string;
+  resourceViewer: string;
+  run: string;
+  untitled: string;
+  failed: string;
+  processExited: string;
+  folderEmpty: string;
+  dropHint: string;
+  rightClickHint: string;
 }
 
 const en: UiStrings = {
@@ -77,6 +104,29 @@ const en: UiStrings = {
   labelLongDate: 'Long date format:',
   labelPreview: 'Preview:',
   cancel: 'Cancel',
+  ok: 'OK',
+  yes: 'Yes',
+  no: 'No',
+  abort: 'Abort',
+  retry: 'Retry',
+  ignore: 'Ignore',
+  applicationError: 'Application Error',
+  crashMessage: '{0} has encountered a problem and needs to close.',
+  clickOkToTerminate: 'Click OK to terminate the program.',
+  confirmFolderDelete: 'Confirm Folder Delete',
+  confirmFileDelete: 'Confirm File Delete',
+  confirmDeleteFolder: "Are you sure you want to delete '{0}' and all its contents?",
+  confirmDeleteFile: "Are you sure you want to delete '{0}'?",
+  configure: 'Configure',
+  viewResources: 'View Resources',
+  resourceViewer: 'Resource Viewer',
+  run: 'Run',
+  untitled: 'Untitled',
+  failed: 'failed',
+  processExited: 'Process has exited with code {0}.',
+  folderEmpty: 'This folder is empty',
+  dropHint: 'Drop EXE / DLL files to run apps or inspect resources',
+  rightClickHint: 'Right-click desktop for actions',
 };
 
 const fr: UiStrings = {
@@ -116,6 +166,29 @@ const fr: UiStrings = {
   labelLongDate: 'Format de date long\u00a0:',
   labelPreview: 'Aper\u00e7u\u00a0:',
   cancel: 'Annuler',
+  ok: 'OK',
+  yes: 'Oui',
+  no: 'Non',
+  abort: 'Abandonner',
+  retry: 'R\u00e9essayer',
+  ignore: 'Ignorer',
+  applicationError: 'Erreur d\u2019application',
+  crashMessage: '{0} a rencontr\u00e9 un probl\u00e8me et doit fermer.',
+  clickOkToTerminate: 'Cliquez sur OK pour terminer le programme.',
+  confirmFolderDelete: 'Confirmer la suppression du dossier',
+  confirmFileDelete: 'Confirmer la suppression du fichier',
+  confirmDeleteFolder: '\u00cates-vous s\u00fbr de vouloir supprimer \u00ab\u00a0{0}\u00a0\u00bb et tout son contenu\u00a0?',
+  confirmDeleteFile: '\u00cates-vous s\u00fbr de vouloir supprimer \u00ab\u00a0{0}\u00a0\u00bb\u00a0?',
+  configure: 'Configurer',
+  viewResources: 'Afficher les ressources',
+  resourceViewer: 'Visionneuse de ressources',
+  run: 'Ex\u00e9cuter',
+  untitled: 'Sans titre',
+  failed: '\u00e9chec',
+  processExited: 'Le processus s\u2019est termin\u00e9 avec le code {0}.',
+  folderEmpty: 'Ce dossier est vide',
+  dropHint: 'D\u00e9posez des fichiers EXE / DLL pour lancer des applis ou inspecter les ressources',
+  rightClickHint: 'Clic droit sur le bureau pour les actions',
 };
 
 const de: UiStrings = {
@@ -155,6 +228,29 @@ const de: UiStrings = {
   labelLongDate: 'Langes Datumsformat:',
   labelPreview: 'Vorschau:',
   cancel: 'Abbrechen',
+  ok: 'OK',
+  yes: 'Ja',
+  no: 'Nein',
+  abort: 'Abbrechen',
+  retry: 'Wiederholen',
+  ignore: 'Ignorieren',
+  applicationError: 'Anwendungsfehler',
+  crashMessage: '{0} hat ein Problem festgestellt und muss beendet werden.',
+  clickOkToTerminate: 'Klicken Sie auf OK, um das Programm zu beenden.',
+  confirmFolderDelete: 'Ordner l\u00f6schen best\u00e4tigen',
+  confirmFileDelete: 'Datei l\u00f6schen best\u00e4tigen',
+  confirmDeleteFolder: "M\u00f6chten Sie den Ordner '{0}' und seinen gesamten Inhalt wirklich l\u00f6schen?",
+  confirmDeleteFile: "M\u00f6chten Sie '{0}' wirklich l\u00f6schen?",
+  configure: 'Konfigurieren',
+  viewResources: 'Ressourcen anzeigen',
+  resourceViewer: 'Ressourcen-Viewer',
+  run: 'Ausf\u00fchren',
+  untitled: 'Unbenannt',
+  failed: 'fehlgeschlagen',
+  processExited: 'Der Prozess wurde mit Code {0} beendet.',
+  folderEmpty: 'Dieser Ordner ist leer',
+  dropHint: 'EXE-/DLL-Dateien hierher ziehen, um Apps auszuf\u00fchren oder Ressourcen anzuzeigen',
+  rightClickHint: 'Rechtsklick auf den Desktop f\u00fcr Aktionen',
 };
 
 const es: UiStrings = {
@@ -194,6 +290,29 @@ const es: UiStrings = {
   labelLongDate: 'Formato de fecha larga:',
   labelPreview: 'Vista previa:',
   cancel: 'Cancelar',
+  ok: 'Aceptar',
+  yes: 'S\u00ed',
+  no: 'No',
+  abort: 'Anular',
+  retry: 'Reintentar',
+  ignore: 'Omitir',
+  applicationError: 'Error de aplicaci\u00f3n',
+  crashMessage: '{0} ha detectado un problema y debe cerrarse.',
+  clickOkToTerminate: 'Haga clic en Aceptar para cerrar el programa.',
+  confirmFolderDelete: 'Confirmar eliminaci\u00f3n de carpeta',
+  confirmFileDelete: 'Confirmar eliminaci\u00f3n de archivo',
+  confirmDeleteFolder: "\u00bfEst\u00e1 seguro de que desea eliminar '{0}' y todo su contenido?",
+  confirmDeleteFile: "\u00bfEst\u00e1 seguro de que desea eliminar '{0}'?",
+  configure: 'Configurar',
+  viewResources: 'Ver recursos',
+  resourceViewer: 'Visor de recursos',
+  run: 'Ejecutar',
+  untitled: 'Sin t\u00edtulo',
+  failed: 'error',
+  processExited: 'El proceso finaliz\u00f3 con el c\u00f3digo {0}.',
+  folderEmpty: 'Esta carpeta est\u00e1 vac\u00eda',
+  dropHint: 'Arrastre archivos EXE / DLL para ejecutar aplicaciones o inspeccionar recursos',
+  rightClickHint: 'Clic derecho en el escritorio para acciones',
 };
 
 const ja: UiStrings = {
@@ -233,6 +352,29 @@ const ja: UiStrings = {
   labelLongDate: '\u9577\u3044\u5f62\u5f0f:',
   labelPreview: '\u30d7\u30ec\u30d3\u30e5\u30fc:',
   cancel: '\u30ad\u30e3\u30f3\u30bb\u30eb',
+  ok: 'OK',
+  yes: '\u306f\u3044',
+  no: '\u3044\u3044\u3048',
+  abort: '\u4e2d\u6b62',
+  retry: '\u518d\u8a66\u884c',
+  ignore: '\u7121\u8996',
+  applicationError: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3 \u30a8\u30e9\u30fc',
+  crashMessage: '{0} \u306f\u554f\u984c\u304c\u767a\u751f\u3057\u305f\u305f\u3081\u9589\u3058\u308b\u5fc5\u8981\u304c\u3042\u308a\u307e\u3059\u3002',
+  clickOkToTerminate: 'OK \u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u30d7\u30ed\u30b0\u30e9\u30e0\u3092\u7d42\u4e86\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
+  confirmFolderDelete: '\u30d5\u30a9\u30eb\u30c0\u30fc\u306e\u524a\u9664\u306e\u78ba\u8a8d',
+  confirmFileDelete: '\u30d5\u30a1\u30a4\u30eb\u306e\u524a\u9664\u306e\u78ba\u8a8d',
+  confirmDeleteFolder: "'{0}' \u3068\u305d\u306e\u3059\u3079\u3066\u306e\u5185\u5bb9\u3092\u524a\u9664\u3057\u3066\u3082\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f",
+  confirmDeleteFile: "'{0}' \u3092\u524a\u9664\u3057\u3066\u3082\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f",
+  configure: '\u8a2d\u5b9a',
+  viewResources: '\u30ea\u30bd\u30fc\u30b9\u306e\u8868\u793a',
+  resourceViewer: '\u30ea\u30bd\u30fc\u30b9 \u30d3\u30e5\u30fc\u30a2\u30fc',
+  run: '\u5b9f\u884c',
+  untitled: '\u7121\u984c',
+  failed: '\u5931\u6557',
+  processExited: '\u30d7\u30ed\u30bb\u30b9\u306f\u30b3\u30fc\u30c9 {0} \u3067\u7d42\u4e86\u3057\u307e\u3057\u305f\u3002',
+  folderEmpty: '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u30fc\u306f\u7a7a\u3067\u3059',
+  dropHint: 'EXE / DLL \u30d5\u30a1\u30a4\u30eb\u3092\u30c9\u30ed\u30c3\u30d7\u3057\u3066\u30a2\u30d7\u30ea\u3092\u5b9f\u884c\u307e\u305f\u306f\u30ea\u30bd\u30fc\u30b9\u3092\u8868\u793a',
+  rightClickHint: '\u53f3\u30af\u30ea\u30c3\u30af\u3067\u64cd\u4f5c\u30e1\u30cb\u30e5\u30fc\u3092\u8868\u793a',
 };
 
 const zhCN: UiStrings = {
@@ -272,6 +414,29 @@ const zhCN: UiStrings = {
   labelLongDate: '\u957f\u65e5\u671f\u683c\u5f0f:',
   labelPreview: '\u9884\u89c8:',
   cancel: '\u53d6\u6d88',
+  ok: '\u786e\u5b9a',
+  yes: '\u662f',
+  no: '\u5426',
+  abort: '\u7ec8\u6b62',
+  retry: '\u91cd\u8bd5',
+  ignore: '\u5ffd\u7565',
+  applicationError: '\u5e94\u7528\u7a0b\u5e8f\u9519\u8bef',
+  crashMessage: '{0} \u9047\u5230\u95ee\u9898\u9700\u8981\u5173\u95ed\u3002',
+  clickOkToTerminate: '\u8bf7\u5355\u51fb\u201c\u786e\u5b9a\u201d\u7ec8\u6b62\u8be5\u7a0b\u5e8f\u3002',
+  confirmFolderDelete: '\u786e\u8ba4\u5220\u9664\u6587\u4ef6\u5939',
+  confirmFileDelete: '\u786e\u8ba4\u5220\u9664\u6587\u4ef6',
+  confirmDeleteFolder: "\u786e\u5b9a\u8981\u5220\u9664\u201c{0}\u201d\u53ca\u5176\u6240\u6709\u5185\u5bb9\u5417\uff1f",
+  confirmDeleteFile: "\u786e\u5b9a\u8981\u5220\u9664\u201c{0}\u201d\u5417\uff1f",
+  configure: '\u914d\u7f6e',
+  viewResources: '\u67e5\u770b\u8d44\u6e90',
+  resourceViewer: '\u8d44\u6e90\u67e5\u770b\u5668',
+  run: '\u8fd0\u884c',
+  untitled: '\u65e0\u6807\u9898',
+  failed: '\u5931\u8d25',
+  processExited: '\u8fdb\u7a0b\u5df2\u9000\u51fa\uff0c\u9000\u51fa\u4ee3\u7801\u4e3a {0}\u3002',
+  folderEmpty: '\u6b64\u6587\u4ef6\u5939\u4e3a\u7a7a',
+  dropHint: '\u62d6\u653e EXE / DLL \u6587\u4ef6\u4ee5\u8fd0\u884c\u5e94\u7528\u6216\u67e5\u770b\u8d44\u6e90',
+  rightClickHint: '\u53f3\u952e\u5355\u51fb\u684c\u9762\u4ee5\u6267\u884c\u64cd\u4f5c',
 };
 
 const ptBR: UiStrings = {
@@ -311,6 +476,29 @@ const ptBR: UiStrings = {
   labelLongDate: 'Formato de data longa:',
   labelPreview: 'Visualiza\u00e7\u00e3o:',
   cancel: 'Cancelar',
+  ok: 'OK',
+  yes: 'Sim',
+  no: 'N\u00e3o',
+  abort: 'Anular',
+  retry: 'Repetir',
+  ignore: 'Ignorar',
+  applicationError: 'Erro de aplicativo',
+  crashMessage: '{0} encontrou um problema e precisa ser fechado.',
+  clickOkToTerminate: 'Clique em OK para encerrar o programa.',
+  confirmFolderDelete: 'Confirmar exclus\u00e3o da pasta',
+  confirmFileDelete: 'Confirmar exclus\u00e3o do arquivo',
+  confirmDeleteFolder: "Tem certeza de que deseja excluir '{0}' e todo o seu conte\u00fado?",
+  confirmDeleteFile: "Tem certeza de que deseja excluir '{0}'?",
+  configure: 'Configurar',
+  viewResources: 'Ver recursos',
+  resourceViewer: 'Visualizador de recursos',
+  run: 'Executar',
+  untitled: 'Sem t\u00edtulo',
+  failed: 'falhou',
+  processExited: 'O processo foi encerrado com o c\u00f3digo {0}.',
+  folderEmpty: 'Esta pasta est\u00e1 vazia',
+  dropHint: 'Solte arquivos EXE / DLL para executar aplicativos ou inspecionar recursos',
+  rightClickHint: 'Clique com o bot\u00e3o direito na \u00e1rea de trabalho para a\u00e7\u00f5es',
 };
 
 const it: UiStrings = {
@@ -350,6 +538,29 @@ const it: UiStrings = {
   labelLongDate: 'Formato data estesa:',
   labelPreview: 'Anteprima:',
   cancel: 'Annulla',
+  ok: 'OK',
+  yes: 'S\u00ec',
+  no: 'No',
+  abort: 'Interrompi',
+  retry: 'Riprova',
+  ignore: 'Ignora',
+  applicationError: 'Errore dell\u2019applicazione',
+  crashMessage: '{0} ha riscontrato un problema e deve essere chiuso.',
+  clickOkToTerminate: 'Fare clic su OK per terminare il programma.',
+  confirmFolderDelete: 'Conferma eliminazione cartella',
+  confirmFileDelete: 'Conferma eliminazione file',
+  confirmDeleteFolder: "Eliminare '{0}' e tutto il suo contenuto?",
+  confirmDeleteFile: "Eliminare '{0}'?",
+  configure: 'Configura',
+  viewResources: 'Visualizza risorse',
+  resourceViewer: 'Visualizzatore risorse',
+  run: 'Esegui',
+  untitled: 'Senza titolo',
+  failed: 'non riuscito',
+  processExited: 'Il processo \u00e8 terminato con codice {0}.',
+  folderEmpty: 'Questa cartella \u00e8 vuota',
+  dropHint: 'Trascinare file EXE / DLL per eseguire applicazioni o visualizzare risorse',
+  rightClickHint: 'Clic destro sul desktop per le azioni',
 };
 
 const pl: UiStrings = {
@@ -389,6 +600,29 @@ const pl: UiStrings = {
   labelLongDate: 'D\u0142ugi format daty:',
   labelPreview: 'Podgl\u0105d:',
   cancel: 'Anuluj',
+  ok: 'OK',
+  yes: 'Tak',
+  no: 'Nie',
+  abort: 'Przerwij',
+  retry: 'Pon\u00f3w',
+  ignore: 'Ignoruj',
+  applicationError: 'B\u0142\u0105d aplikacji',
+  crashMessage: '{0} napotka\u0142 problem i musi zosta\u0107 zamkni\u0119ty.',
+  clickOkToTerminate: 'Kliknij OK, aby zako\u0144czy\u0107 program.',
+  confirmFolderDelete: 'Potwierd\u017a usuni\u0119cie folderu',
+  confirmFileDelete: 'Potwierd\u017a usuni\u0119cie pliku',
+  confirmDeleteFolder: "Czy na pewno chcesz usun\u0105\u0107 '{0}' i ca\u0142\u0105 jego zawarto\u015b\u0107?",
+  confirmDeleteFile: "Czy na pewno chcesz usun\u0105\u0107 '{0}'?",
+  configure: 'Konfiguruj',
+  viewResources: 'Poka\u017c zasoby',
+  resourceViewer: 'Przegl\u0105darka zasob\u00f3w',
+  run: 'Uruchom',
+  untitled: 'Bez tytu\u0142u',
+  failed: 'b\u0142\u0105d',
+  processExited: 'Proces zako\u0144czy\u0142 si\u0119 z kodem {0}.',
+  folderEmpty: 'Ten folder jest pusty',
+  dropHint: 'Upu\u015b\u0107 pliki EXE / DLL, aby uruchomi\u0107 aplikacje lub przegl\u0105da\u0107 zasoby',
+  rightClickHint: 'Kliknij prawym przyciskiem na pulpicie, aby wy\u015bwietli\u0107 akcje',
 };
 
 const ko: UiStrings = {
@@ -428,6 +662,29 @@ const ko: UiStrings = {
   labelLongDate: '긴 날짜 형식:',
   labelPreview: '미리 보기:',
   cancel: '취소',
+  ok: '확인',
+  yes: '예',
+  no: '아니오',
+  abort: '중단',
+  retry: '다시 시도',
+  ignore: '무시',
+  applicationError: '응용 프로그램 오류',
+  crashMessage: '{0}에 문제가 발생하여 닫아야 합니다.',
+  clickOkToTerminate: '확인을 클릭하여 프로그램을 종료하십시오.',
+  confirmFolderDelete: '\ud3f4\ub354 \uc0ad\uc81c \ud655\uc778',
+  confirmFileDelete: '\ud30c\uc77c \uc0ad\uc81c \ud655\uc778',
+  confirmDeleteFolder: "'{0}'\uacfc(\uc640) \ubaa8\ub4e0 \ub0b4\uc6a9\uc744 \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?",
+  confirmDeleteFile: "'{0}'\uc744(\ub97c) \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?",
+  configure: '\uad6c\uc131',
+  viewResources: '\ub9ac\uc18c\uc2a4 \ubcf4\uae30',
+  resourceViewer: '\ub9ac\uc18c\uc2a4 \ubdf0\uc5b4',
+  run: '\uc2e4\ud589',
+  untitled: '\uc81c\ubaa9 \uc5c6\uc74c',
+  failed: '\uc2e4\ud328',
+  processExited: '\ud504\ub85c\uc138\uc2a4\uac00 \ucf54\ub4dc {0}(\uc73c)\ub85c \uc885\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4.',
+  folderEmpty: '\uc774 \ud3f4\ub354\ub294 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4',
+  dropHint: 'EXE / DLL \ud30c\uc77c\uc744 \ub4dc\ub86d\ud558\uc5ec \uc571\uc744 \uc2e4\ud589\ud558\uac70\ub098 \ub9ac\uc18c\uc2a4\ub97c \ud655\uc778\ud558\uc138\uc694',
+  rightClickHint: '\ubc14\ud0d5 \ud654\uba74\uc744 \ub9c8\uc6b0\uc2a4 \uc624\ub978\ucabd \ubc84\ud2bc\uc73c\ub85c \ud074\ub9ad\ud558\uc5ec \uc791\uc5c5 \uc218\ud589',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

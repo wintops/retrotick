@@ -119,7 +119,7 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
                       <span>{ex.description}</span>
                       {st === 'loading' && <span style={{ color: '#808080', marginLeft: '3px' }}>...</span>}
                       {st === 'done' && <span style={{ color: '#008000', marginLeft: '3px' }}>{'\u2713'}</span>}
-                      {st === 'error' && <span style={{ color: '#C00000', marginLeft: '3px' }}>failed</span>}
+                      {st === 'error' && <span style={{ color: '#C00000', marginLeft: '3px' }}>{t().failed}</span>}
                     </div>
                   );
                 })}
