@@ -6,7 +6,8 @@
 		"build": "vite build",
 		"check": "npm run build",
 		"preview": "vite preview",
-		"deploy": "vite build && wrangler pages deploy dist"
+		"deploy": "vite build && wrangler pages deploy dist",
+		"purgecache": "bash -c 'set -a && source .env.purgecache && curl -s -X POST \"https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" -H \"Content-Type: application/json\" -d \"{\\\"hosts\\\":[\\\"$PURGE_DOMAIN\\\"]}\"'"
 	},
 	"dependencies": {
 		"clsx": "^2.1.1",
