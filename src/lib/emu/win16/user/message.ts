@@ -731,7 +731,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
           children: new Map(),
         });
-        { const w = emu.handles.get<WindowInfo>(childHwnd); if (w) w.hwnd = childHwnd; }
+        { const w = emu.handles.get<WindowInfo>(childHwnd); if (w) { w.hwnd = childHwnd; w.needsPaint = true; w.needsErase = true; } }
 
         // Register child in parent's childList
         if (!wnd.childList) wnd.childList = [];
@@ -772,6 +772,10 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           emu.callWndProc16(classInfo.wndProc, childHwnd, WM_SIZE, 0, sizeLParam);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
         }
+
+        // Invalidate mainWindow so next WM_PAINT cycle picks up the new MDI child
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd) { mainWnd.needsPaint = true; }
 
         console.log(`[WIN16] WM_MDICREATE → created hwnd=0x${childHwnd.toString(16)}`);
         return childHwnd;

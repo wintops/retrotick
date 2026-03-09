@@ -417,7 +417,7 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
       const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
       const hBitmap = emu.handles.alloc('bitmap', bmp);
       emu.bitmapCache.set(resourceId, hBitmap);
-      console.log(`[NE] Loaded bitmap resource ${resourceId}: ${width}x${height} → handle ${hBitmap}`);
+      // console.log(`[NE] Loaded bitmap resource ${resourceId}: ${width}x${height} → handle ${hBitmap}`);
       return hBitmap;
     } catch (e: unknown) {
       console.warn(`Failed to load NE bitmap resource ${resourceId}: ${e instanceof Error ? e.message : String(e)}`);

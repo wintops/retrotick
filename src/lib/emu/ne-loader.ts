@@ -88,9 +88,9 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
   const entrySS = (sssp >> 16) & 0xFFFF;
   let entrySP = sssp & 0xFFFF;
 
-  console.log(`[NE] NE header at 0x${neOffset.toString(16)}, alignShift=${alignShift}, segments=${segTableCount}, modules=${modRefCount}`);
-  console.log(`[NE] CS:IP = ${entryCS}:0x${entryIP.toString(16)}, SS:SP = ${entrySS}:0x${entrySP.toString(16)}`);
-  console.log(`[NE] autoDataSeg=${autoDataSeg}, heap=${heapSize}, stack=${stackSize}`);
+  // console.log(`[NE] NE header at 0x${neOffset.toString(16)}, alignShift=${alignShift}, segments=${segTableCount}, modules=${modRefCount}`);
+  // console.log(`[NE] CS:IP = ${entryCS}:0x${entryIP.toString(16)}, SS:SP = ${entrySS}:0x${entrySP.toString(16)}`);
+  // console.log(`[NE] autoDataSeg=${autoDataSeg}, heap=${heapSize}, stack=${stackSize}`);
 
   // Parse segment table
   const selectorBase = opts?.selectorBase ?? 1;
@@ -128,7 +128,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
 
     selectorToBase.set(selector, linearBase);
 
-    console.log(`[NE] Seg ${selector}: fileOff=0x${fileOffset.toString(16)} fileSize=0x${fileSize.toString(16)} minAlloc=0x${minAlloc.toString(16)} flags=0x${segFlags.toString(16)} → linear=0x${linearBase.toString(16)}`);
+    // console.log(`[NE] Seg ${selector}: fileOff=0x${fileOffset.toString(16)} fileSize=0x${fileSize.toString(16)} minAlloc=0x${minAlloc.toString(16)} flags=0x${segFlags.toString(16)} → linear=0x${linearBase.toString(16)}`);
   }
 
   // Add thunk segment
@@ -150,7 +150,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
     moduleNames.push(name.toUpperCase());
   }
 
-  console.log(`[NE] Modules: ${moduleNames.join(', ')}`);
+  // console.log(`[NE] Modules: ${moduleNames.join(', ')}`);
 
   // Parse resource table
   const resources: NEResourceEntry[] = [];
@@ -195,7 +195,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
         resources.push(entry);
       }
     }
-    console.log(`[NE] Resources: ${resources.length} entries (types: ${[...new Set(resources.map(r => r.typeID))].join(', ')})`);
+    // console.log(`[NE] Resources: ${resources.length} entries (types: ${[...new Set(resources.map(r => r.typeID))].join(', ')})`);
   }
 
   // Parse entry table to resolve moveable segment references
@@ -340,7 +340,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
     const relocBase = seg.fileOffset + seg.fileSize;
     if (relocBase + 2 > arrayBuffer.byteLength) continue;
     const relocCount = dv.getUint16(relocBase, true);
-    console.log(`[NE] Seg ${seg.index}: ${relocCount} relocations at file offset 0x${relocBase.toString(16)}`);
+    // console.log(`[NE] Seg ${seg.index}: ${relocCount} relocations at file offset 0x${relocBase.toString(16)}`);
 
     for (let r = 0; r < relocCount; r++) {
       const recOff = relocBase + 2 + r * 8;
@@ -442,9 +442,9 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
     stackTop = ssSegInfo.linearBase + entrySP;
   }
 
-  console.log(`[NE] Entry point: linear=0x${entryPoint.toString(16)} (seg ${entryCS}:0x${entryIP.toString(16)})`);
-  console.log(`[NE] Stack top: linear=0x${stackTop.toString(16)} (seg ${entrySS}:SP=0x${entrySP.toString(16)})`);
-  console.log(`[NE] API thunks: ${apiMap.size} entries, thunk range: 0x${THUNK_LINEAR_BASE.toString(16)}-0x${thunkAddr.toString(16)}`);
+  // console.log(`[NE] Entry point: linear=0x${entryPoint.toString(16)} (seg ${entryCS}:0x${entryIP.toString(16)})`);
+  // console.log(`[NE] Stack top: linear=0x${stackTop.toString(16)} (seg ${entrySS}:SP=0x${entrySP.toString(16)})`);
+  // console.log(`[NE] API thunks: ${apiMap.size} entries, thunk range: 0x${THUNK_LINEAR_BASE.toString(16)}-0x${thunkAddr.toString(16)}`);
 
   // Map 1-based NE-header indices to actual selectors
   const codeSegSelector = segments[entryCS - 1]?.selector ?? 0;

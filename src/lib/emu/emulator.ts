@@ -1158,7 +1158,11 @@ export class Emulator {
       const child = this.handles.get<WindowInfo>(childHwnd);
       if (!child || !child.visible || !child.wndProc) continue;
       child.needsPaint = true;
-      this.callWndProc(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      if (this.isNE) {
+        this.callWndProc16(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      } else {
+        this.callWndProc(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      }
       child.needsPaint = false;
     }
   }

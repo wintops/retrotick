@@ -14,7 +14,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     const [hWnd, lpText, lpCaption, uType] = emu.readPascalArgs16([2, 4, 4, 2]);
     const text = lpText ? emu.memory.readCString(lpText) : '';
     const caption = lpCaption ? emu.memory.readCString(lpCaption) : '';
-    console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
+    // console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
     emu.showMessageBox(caption, text, uType, result => {
@@ -45,7 +45,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   user.register('SetTimer', 10, () => {
     const [hWnd, nIDEvent, uElapse, lpTimerFunc] = emu.readPascalArgs16([2, 2, 2, 4]);
-    console.log(`[WIN16] SetTimer hwnd=0x${hWnd.toString(16)} id=${nIDEvent} elapse=${uElapse} timerFunc=0x${lpTimerFunc.toString(16)}`);
+    // console.log(`[WIN16] SetTimer hwnd=0x${hWnd.toString(16)} id=${nIDEvent} elapse=${uElapse} timerFunc=0x${lpTimerFunc.toString(16)}`);
     // Clear existing timer with same ID
     emu.clearWin32Timer(hWnd, nIDEvent);
     const jsTimer = setInterval(() => {
@@ -427,7 +427,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     if (!cls && BUILTIN_CLASSES.includes(upperName)) {
       cls = { className: upperName, wndProc: 0, style: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hbrBackground: 0, hIcon: 0, hCursor: 0 } as any;
     }
-    console.log(`[WIN16] GetClassInfo("${className}") → ${cls ? 'found' : 'not found'}`);
+    // console.log(`[WIN16] GetClassInfo("${className}") → ${cls ? 'found' : 'not found'}`);
     if (cls && lpWndClass) {
       // Write WNDCLASS16 struct: style(2), wndProc(4), cbClsExtra(2), cbWndExtra(2),
       // hInstance(2), hIcon(2), hCursor(2), hbrBackground(2), lpszMenuName(4), lpszClassName(4)
@@ -602,7 +602,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
     // Write result to lpOutput
     emu.memory.writeCString(lpOutput, result);
-    console.log(`[WIN16] wsprintf → "${result}"`);
+    // console.log(`[WIN16] wsprintf → "${result}"`);
     return result.length;
   }, 420);
 
@@ -703,7 +703,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     }
 
     emu.memory.writeCString(lpOutput, result);
-    console.log(`[WIN16] wvsprintf → "${result}"`);
+    // console.log(`[WIN16] wvsprintf → "${result}"`);
     return result.length;
   }, 421);
 
@@ -896,10 +896,10 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('CallWindowProc', 14, () => {
     const [lpPrevWndFunc, hWnd, msg, wParam, lParam] = emu.readPascalArgs16([4, 2, 2, 2, 4]);
     const resolved = emu.resolveFarPtr(lpPrevWndFunc);
-    console.log(`[WIN16] CallWindowProc(0x${lpPrevWndFunc.toString(16)}→0x${resolved.toString(16)}, hwnd=0x${hWnd.toString(16)}, msg=0x${msg.toString(16)}, wP=0x${wParam.toString(16)}, lP=0x${lParam.toString(16)})`);
+    // console.log(`[WIN16] CallWindowProc(0x${lpPrevWndFunc.toString(16)}→0x${resolved.toString(16)}, hwnd=0x${hWnd.toString(16)}, msg=0x${msg.toString(16)}, wP=0x${wParam.toString(16)}, lP=0x${lParam.toString(16)})`);
     if (resolved) {
       const result = emu.callWndProc16(resolved, hWnd, msg, wParam, lParam);
-      console.log(`[WIN16] CallWindowProc result=0x${(result??0).toString(16)}`);
+      // console.log(`[WIN16] CallWindowProc result=0x${(result??0).toString(16)}`);
       return result;
     }
     return 0;
@@ -1053,10 +1053,64 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 438);
 
   // Ordinal 445: DefFrameProc(hWnd, hWndMDIClient, uMsg, wParam, lParam) — 12 bytes (2+2+2+2+4)
-  user.register('DefFrameProc', 12, () => 0, 445);
+  user.register('DefFrameProc', 12, () => {
+    const [hWnd, _hWndMDIClient, uMsg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
+    const WM_PAINT = 0x000F;
+    const WM_ERASEBKGND = 0x0014;
+    const WM_SIZE = 0x0005;
+    const WM_SYSCOMMAND = 0x0112;
+    const WM_CLOSE = 0x0010;
+    const SC_CLOSE = 0xF060;
+    if (uMsg === WM_PAINT) {
+      // Validate the paint region by calling BeginPaint/EndPaint
+      // This triggers renderChildControls for the main window
+      const hdc = emu.beginPaint(hWnd || emu.mainWindow);
+      emu.endPaint(hWnd || emu.mainWindow, hdc);
+      emu.notifyControlOverlays();
+      return 0;
+    }
+    if (uMsg === WM_ERASEBKGND) return 1; // pretend we erased
+    if (uMsg === WM_SYSCOMMAND && (wParam & 0xFFF0) === SC_CLOSE) {
+      // SC_CLOSE → send WM_CLOSE to the window
+      emu.postMessage(hWnd || emu.mainWindow, WM_CLOSE, 0, 0);
+      return 0;
+    }
+    if (uMsg === WM_CLOSE) {
+      // Default: destroy the window and post WM_QUIT
+      emu.postMessage(0, 0x0012, 0, 0); // WM_QUIT
+      return 0;
+    }
+    if (uMsg === WM_SIZE) {
+      // Forward WM_SIZE to MDICLIENT if present
+      if (_hWndMDIClient) {
+        const mdiWnd = emu.handles.get<WindowInfo>(_hWndMDIClient);
+        if (mdiWnd) {
+          mdiWnd.width = lParam & 0xFFFF;
+          mdiWnd.height = (lParam >>> 16) & 0xFFFF;
+          if (mdiWnd.wndProc) {
+            emu.callWndProc16(mdiWnd.wndProc, _hWndMDIClient, WM_SIZE, wParam, lParam);
+          }
+        }
+      }
+      return 0;
+    }
+    return 0;
+  }, 445);
 
   // Ordinal 447: DefMDIChildProc(hWnd, uMsg, wParam, lParam) — 10 bytes (2+2+2+4)
-  user.register('DefMDIChildProc', 10, () => 0, 447);
+  user.register('DefMDIChildProc', 10, () => {
+    const [hWnd, uMsg] = emu.readPascalArgs16([2, 2, 2, 4]);
+    const WM_PAINT = 0x000F;
+    const WM_ERASEBKGND = 0x0014;
+    if (uMsg === WM_PAINT) {
+      // Validate paint region
+      const hdc = emu.beginPaint(hWnd);
+      emu.endPaint(hWnd, hdc);
+      return 0;
+    }
+    if (uMsg === WM_ERASEBKGND) return 1;
+    return 0;
+  }, 447);
 
   // Ordinal 451: TranslateMDISysAccel(hWndClient, lpMsg) — 6 bytes (2+4)
   user.register('TranslateMDISysAccel', 6, () => 0, 451);
@@ -1104,7 +1158,11 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('OldExitWindows', 0, () => 0, 2);
 
   // ExitWindows(dwReturnCode, wReserved) — 6 bytes
-  user.register('ExitWindows', 6, () => 0, 7);
+  user.register('ExitWindows', 6, () => {
+    // In the emulator, ExitWindows terminates the app
+    emu.postMessage(0, 0x0012, 0, 0); // WM_QUIT
+    return 1; // success
+  }, 7);
 
   // SetSystemTimer(hWnd, nIDEvent, uElapse, lpTimerFunc) — 10 bytes
   user.register('SetSystemTimer', 10, () => {
@@ -1210,7 +1268,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
     const pathSpecAddr = emu.resolveFarPtr(lpPathSpec);
     const pathSpec = pathSpecAddr ? emu.memory.readCString(pathSpecAddr) : '*.*';
-    console.log(`[WIN16] DlgDirList hDlg=0x${hDlg.toString(16)} pathSpec="${pathSpec}" listBox=${nIDListBox} static=${nIDStaticPath} type=0x${uFileType.toString(16)}`);
+    // console.log(`[WIN16] DlgDirList hDlg=0x${hDlg.toString(16)} pathSpec="${pathSpec}" listBox=${nIDListBox} static=${nIDStaticPath} type=0x${uFileType.toString(16)}`);
 
     // Find the listbox child
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
@@ -1411,7 +1469,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
     const pathSpecAddr = emu.resolveFarPtr(lpPathSpec);
     const pathSpec = pathSpecAddr ? emu.memory.readCString(pathSpecAddr) : '*.*';
-    console.log(`[WIN16] DlgDirListComboBox hDlg=0x${hDlg.toString(16)} pathSpec="${pathSpec}" comboBox=${nIDComboBox} type=0x${uFileType.toString(16)}`);
+    // console.log(`[WIN16] DlgDirListComboBox hDlg=0x${hDlg.toString(16)} pathSpec="${pathSpec}" comboBox=${nIDComboBox} type=0x${uFileType.toString(16)}`);
 
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     const cbHwnd = dlgWnd?.children?.get(nIDComboBox);

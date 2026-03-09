@@ -119,7 +119,7 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   user.register('GetDC', 2, () => {
     const hWnd = emu.readArg16(0);
     const dc = emu.getWindowDC(hWnd || emu.mainWindow);
-    console.log(`[WIN16] GetDC hwnd=0x${(hWnd || emu.mainWindow).toString(16)} → dc=${dc}`);
+    // console.log(`[WIN16] GetDC hwnd=0x${(hWnd || emu.mainWindow).toString(16)} → dc=${dc}`);
     return dc;
   }, 66);
 

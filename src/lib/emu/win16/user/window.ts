@@ -120,33 +120,32 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (!effectiveMenu && classInfo?.menuName) {
       effectiveMenu = 1;
     }
-    // Windows adjusts style: WS_SYSMENU/WS_MINIMIZEBOX/WS_MAXIMIZEBOX imply WS_CAPTION
-    const WS_CAPTION = 0x00C00000;
-    const WS_SYSMENU = 0x00080000;
-    let adjustedStyle = dwStyle;
-    if ((dwStyle & WS_SYSMENU) && !(dwStyle & WS_CAPTION)) {
-      adjustedStyle |= WS_CAPTION;
-    }
-    // Win16 CW_USEDEFAULT: if x=0x8000, both x and y default; if cx=0x8000, both cx and cy default
-    const CW_USEDEFAULT = 0x8000;
+    // Sign-extend 16-bit values for positions (can be negative)
+    const sx = (x << 16 >> 16);
+    const sy = (y << 16 >> 16);
+    const sw = (w << 16 >> 16);
+    const sh = (height << 16 >> 16);
+    const CW_USEDEFAULT = -0x8000;
+    // MDICLIENT is always visible in practice (container for MDI children)
+    const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
       classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
       style: adjustedStyle,
       exStyle: 0,
-      x: x === CW_USEDEFAULT ? 0 : x,
-      y: x === CW_USEDEFAULT ? 0 : y,
-      width: w === CW_USEDEFAULT ? 320 : w,
-      height: w === CW_USEDEFAULT ? 200 : height,
+      x: sx === CW_USEDEFAULT ? 0 : sx,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
+      width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
       rawWndProc: classInfo?.rawWndProc || 0,
-      visible: !!(dwStyle & 0x10000000),
+      visible: isMDIClient || !!(dwStyle & 0x10000000),
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
-    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) w.hwnd = hwnd; }
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; } } }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {
@@ -392,7 +391,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       const lpszClassName = h.resolveFarPtr(emu.memory.readU32(lpWndClass + 22));
 
       const className = lpszClassName ? emu.memory.readCString(lpszClassName) : 'UNKNOWN';
-      console.log(`[WIN16] RegisterClass "${className}" wndProc=0x${wndProc.toString(16)} raw=0x${rawWndProc.toString(16)}`);
+      // console.log(`[WIN16] RegisterClass "${className}" wndProc=0x${wndProc.toString(16)} raw=0x${rawWndProc.toString(16)}`);
 
       emu.windowClasses.set(className.toUpperCase(), {
         className,
@@ -467,12 +466,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
           for (let i = 0; i < 8; i++) bytes.push(emu.memory.readU8(lin + i).toString(16).padStart(2, '0'));
           const dispatchBytes = [];
           for (let i = 0; i < 32; i++) dispatchBytes.push(emu.memory.readU8(base + i).toString(16).padStart(2, '0'));
-          console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)} seg=0x${seg.toString(16)} base=0x${base.toString(16)} lin=0x${lin.toString(16)} bytes=[${bytes.join(' ')}] dispatch@+2=[${dispatchBytes.join(' ')}]`);
+          // console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)} seg=0x${seg.toString(16)} base=0x${base.toString(16)} lin=0x${lin.toString(16)} bytes=[${bytes.join(' ')}] dispatch@+2=[${dispatchBytes.join(' ')}]`);
         } else {
-          console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)} seg=0x${seg.toString(16)} NO BASE`);
+          // console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)} seg=0x${seg.toString(16)} NO BASE`);
         }
       } else {
-        console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)}`);
+        // console.log(`[WIN16] GetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC) → 0x${raw.toString(16)}`);
       }
       return raw;
     }
@@ -492,7 +491,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const signedIndex = (nIndex << 16) >> 16;
     let old = 0;
-    if (signedIndex === -4 && wnd) { old = wnd.rawWndProc || wnd.wndProc || 0; wnd.rawWndProc = dwNewLong; wnd.wndProc = h.resolveFarPtr(dwNewLong); console.log(`[WIN16] SetWindowLong(0x${hWnd.toString(16)}, GWL_WNDPROC, 0x${dwNewLong.toString(16)}) old=0x${old.toString(16)}`); }
+    if (signedIndex === -4 && wnd) { old = wnd.rawWndProc || wnd.wndProc || 0; wnd.rawWndProc = dwNewLong; wnd.wndProc = h.resolveFarPtr(dwNewLong); }
     else if (signedIndex === -16 && wnd) { old = wnd.style || 0; wnd.style = dwNewLong; }
     else if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 4 <= wnd.extraBytes.length) {
       old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
@@ -630,25 +629,32 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     const classInfo = emu.windowClasses.get(className.toUpperCase());
-    const CW_USEDEFAULT = 0x8000;
+    // Sign-extend 16-bit values for positions (can be negative)
+    const sx = (x << 16 >> 16);  // signed x
+    const sy = (y << 16 >> 16);  // signed y
+    const sw = (w << 16 >> 16);  // signed width
+    const sh = (height << 16 >> 16); // signed height
+    const CW_USEDEFAULT = -0x8000; // 0x8000 sign-extended = -32768
+    // MDICLIENT is always visible in practice (container for MDI children)
+    const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
       classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
       style: adjustedStyleEx,
       exStyle: dwExStyle,
-      x: x === CW_USEDEFAULT ? 0 : x,
-      y: x === CW_USEDEFAULT ? 0 : y,
-      width: w === CW_USEDEFAULT ? 320 : w,
-      height: w === CW_USEDEFAULT ? 200 : height,
+      x: sx === CW_USEDEFAULT ? 0 : sx,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
+      width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
       rawWndProc: classInfo?.rawWndProc || 0,
-      visible: !!(dwStyle & 0x10000000),
+      visible: isMDIClient || !!(dwStyle & 0x10000000),
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
-    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) w.hwnd = hwnd; }
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; } } }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {

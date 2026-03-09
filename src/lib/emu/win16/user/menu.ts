@@ -11,7 +11,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   user.register('LoadMenu', 6, () => {
     const [hInstance, lpMenuName] = emu.readPascalArgs16([2, 4]);
-    console.log(`[WIN16] LoadMenu hInst=0x${hInstance.toString(16)} menuName=0x${lpMenuName.toString(16)}`);
+    // console.log(`[WIN16] LoadMenu hInst=0x${hInstance.toString(16)} menuName=0x${lpMenuName.toString(16)}`);
     return 1;
   }, 150);
 
@@ -64,7 +64,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   user.register('SetMenu', 4, () => {
     const [hWnd, hMenu] = emu.readPascalArgs16([2, 2]);
-    console.log(`[WIN16] SetMenu hwnd=0x${hWnd.toString(16)} hMenu=0x${hMenu.toString(16)}`);
+    // console.log(`[WIN16] SetMenu hwnd=0x${hWnd.toString(16)} hMenu=0x${hMenu.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       wnd.hMenu = hMenu;
