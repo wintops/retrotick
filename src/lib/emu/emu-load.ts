@@ -64,7 +64,9 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   const lastBackslash = emu.exePath.lastIndexOf('\\');
   if (lastBackslash >= 2 && emu.exePath[1] === ':') {
     const drive = emu.exePath[0].toUpperCase();
-    const dir = emu.exePath.substring(0, lastBackslash);
+    let dir = emu.exePath.substring(0, lastBackslash);
+    // Preserve trailing backslash for root directory (e.g. D:\CMD.EXE → D:\, not D:)
+    if (dir.length === 2 && dir[1] === ':') dir += '\\';
     emu.currentDirs.set(drive, dir);
   }
 
