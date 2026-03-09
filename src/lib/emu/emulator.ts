@@ -93,6 +93,10 @@ export interface ControlOverlay {
   bgColor?: string;
   /** True if this is an MDI child window (should render with title bar/frame) */
   isMdiChild?: boolean;
+  /** True if this MDI child is the active (focused) one */
+  isMdiActive?: boolean;
+  /** True if this MDI child is maximized */
+  isMdiMaximized?: boolean;
   /** Children overlays nested inside this MDI child window */
   mdiChildren?: ControlOverlay[];
 }
