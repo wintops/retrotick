@@ -61,6 +61,13 @@ export function promoteToMainWindow(emu: Emulator, hwnd: number, wnd: WindowInfo
 
 export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
   if (!emu.canvas) return;
+  // Preserve existing content across resize (canvas.width= clears it)
+  const oldW = emu.canvas.width;
+  const oldH = emu.canvas.height;
+  let saved: ImageData | null = null;
+  if (oldW > 0 && oldH > 0 && emu.canvasCtx) {
+    try { saved = emu.canvasCtx.getImageData(0, 0, oldW, oldH); } catch {}
+  }
   emu.canvas.width = cw;
   emu.canvas.height = ch;
   if (emu.canvas.style) {
@@ -69,6 +76,10 @@ export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
   }
   emu.canvasCtx = emu.canvas.getContext('2d')!;
   emu.canvasCtx.imageSmoothingEnabled = false;
+  // Restore preserved content (new area stays transparent → DOM background shows through)
+  if (saved) {
+    emu.canvasCtx.putImageData(saved, 0, 0);
+  }
   // Update existing cached DC to use the new context (don't free — programs may cache the handle)
   const oldDC = emu.windowDCs.get(emu.mainWindow);
   if (oldDC) {
@@ -78,7 +89,6 @@ export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
       dc.ctx = emu.canvasCtx;
     }
   }
-  console.log(`[WND] Canvas resized to ${cw}x${ch}`);
 }
 
 // Check if hwnd is a descendant of the main window

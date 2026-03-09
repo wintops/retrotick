@@ -1994,6 +1994,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     emu.postMessage(emu.mainWindow, WM_SIZE, 0, makeLParam(w, h));
     wnd.needsPaint = true;
     wnd.needsErase = true;
+    emu.notifyControlOverlays();
   }, []);
 
   useEffect(() => {
@@ -2400,7 +2401,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           ) : (
             <canvas
               ref={canvasRef}
-              style={{ imageRendering: 'pixelated', cursor: 'var(--win2k-cursor)', display: 'block', position: 'relative', zIndex: 0 }}
+              style={{ imageRendering: 'pixelated', cursor: 'var(--win2k-cursor)', display: 'block', position: 'relative', zIndex: 0, backgroundColor: 'white' }}
               onPointerDown={(e) => {
                 e.preventDefault();
                 mouseIsDown.current = true;

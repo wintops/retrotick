@@ -336,7 +336,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (wnd) {
       wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
       wnd.width = w; wnd.height = height;
-      // console.log(`[WIN16] MoveWindow hwnd=0x${hWnd.toString(16)} class="${wnd.classInfo?.className}" x=${wnd.x} y=${wnd.y} w=${w} h=${height}`);
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
       if (hWnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
@@ -345,8 +344,13 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       const WM_SIZE = 0x0005;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
       if (wnd.wndProc) {
-        // Queue WM_SIZE to avoid recursive stack overflow from nested MoveWindow calls
-        emu.postMessage(hWnd, WM_SIZE, 0, lParam);
+        // Sync WM_SIZE at shallow nesting so children resize immediately;
+        // async at deeper levels to prevent recursive stack overflow
+        if (emu.wndProcDepth < 3) {
+          emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
+        } else {
+          emu.postMessage(hWnd, WM_SIZE, 0, lParam);
+        }
       }
       // MDICLIENT: resize maximized MDI children to fill new area
       if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
@@ -531,10 +535,14 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       if (wnd.wndProc) {
-        // Queue WM_SIZE via postMessage to avoid recursive stack overflow
-        // (each synchronous callWndProc16 nests MoveWindow→SetWindowPos→WM_SIZE)
-        emu.postMessage(hWnd, WM_SIZE, 0,
-          ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
+        // Sync WM_SIZE at shallow nesting so children resize immediately;
+        // async at deeper levels to prevent recursive stack overflow
+        const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+        if (emu.wndProcDepth < 3) {
+          emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lp);
+        } else {
+          emu.postMessage(hWnd, WM_SIZE, 0, lp);
+        }
       }
       // MDICLIENT: resize maximized MDI children to fill new area
       if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
@@ -560,10 +568,42 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   user.register('MapWindowPoints', 10, () => 0, 258);
 
-  // Ordinal 259-BeginDeferWindowPos: DeferWindowPos
-  user.register('BeginDeferWindowPos', 2, () => 1, 259);   // BeginDeferWindowPos
-  user.register('DeferWindowPos', 16, () => 1, 260);  // DeferWindowPos
-  user.register('EndDeferWindowPos', 2, () => 1);   // EndDeferWindowPos
+  // Ordinal 259: BeginDeferWindowPos(nNumWindows) → HDWP
+  user.register('BeginDeferWindowPos', 2, () => {
+    emu.readPascalArgs16([2]); // nNumWindows (ignored, just consume)
+    return emu.handles.alloc('dwp', { entries: [] as { hWnd: number; x: number; y: number; cx: number; cy: number; uFlags: number }[] });
+  }, 259);
+
+  // Ordinal 260: DeferWindowPos(hWinPosInfo, hWnd, hWndInsertAfter, x, y, cx, cy, uFlags) — 16 bytes
+  user.register('DeferWindowPos', 16, () => {
+    const [hWinPosInfo, hWnd, _hInsert, x, y, cx, cy, uFlags] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2]);
+    const dwp = emu.handles.get<{ entries: { hWnd: number; x: number; y: number; cx: number; cy: number; uFlags: number }[] }>(hWinPosInfo);
+    if (dwp && dwp.entries) {
+      dwp.entries.push({ hWnd, x: (x << 16 >> 16), y: (y << 16 >> 16), cx, cy, uFlags });
+    }
+    return hWinPosInfo;
+  }, 260);
+
+  // Ordinal 261: EndDeferWindowPos(hWinPosInfo) — 2 bytes
+  user.register('EndDeferWindowPos', 2, () => {
+    const [hWinPosInfo] = emu.readPascalArgs16([2]);
+    const SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
+    const dwp = emu.handles.get<{ entries: { hWnd: number; x: number; y: number; cx: number; cy: number; uFlags: number }[] }>(hWinPosInfo);
+    if (dwp && dwp.entries) {
+      for (const e of dwp.entries) {
+        const wnd = emu.handles.get<WindowInfo>(e.hWnd);
+        if (!wnd) continue;
+        if (!(e.uFlags & SWP_NOMOVE)) { wnd.x = e.x; wnd.y = e.y; }
+        if (!(e.uFlags & SWP_NOSIZE)) { wnd.width = e.cx; wnd.height = e.cy; }
+        if (e.uFlags & SWP_SHOWWINDOW) wnd.visible = true;
+        if (e.uFlags & SWP_HIDEWINDOW) wnd.visible = false;
+        wnd.needsPaint = true;
+      }
+      emu.handles.free(hWinPosInfo);
+    }
+    emu.notifyControlOverlays();
+    return 1;
+  });
 
   // Ordinal 262: GetWindow(hWnd, uCmd) — 4 bytes
   user.register('GetWindow', 4, () => {
