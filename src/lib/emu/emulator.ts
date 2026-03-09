@@ -43,7 +43,10 @@ export interface DialogControlInfo {
 }
 
 export type CommonDialogRequest =
-  | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void };
+  | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void }
+  | { type: 'file-open'; onResult: (file: { name: string; data: Uint8Array } | null) => void }
+  | { type: 'file-save'; defaultName: string; content: string; onResult: (name: string | null) => void }
+  | { type: 'find'; editHwnd: number; onClose: () => void };
 
 export interface DialogInfo {
   title: string;
@@ -239,7 +242,6 @@ export class Win32Dll {
       throw new Error(`Win32Dll.register: duplicate API definition for ${key}`);
     }
     const wrapped = (emu: Emulator) => {
-      console.log(`[API] ${key}`);
       return handler(emu);
     };
     this.emu.apiDefs.set(key, { handler: wrapped, stackBytes: nArgs * 4 });
@@ -249,16 +251,17 @@ export class Win32Dll {
 export class Win16Module {
   constructor(private emu: Emulator, private module: string) {}
 
-  register(name: string, stackBytes: number, handler: (emu: Emulator) => number | undefined): void {
-    const key = `${this.module}:${name}`;
-    if (this.emu.apiDefs.has(key)) {
-      throw new Error(`Win16Module.register: duplicate API definition for ${key}`);
-    }
+  register(name: string, stackBytes: number, handler: (emu: Emulator) => number | undefined, ordinal?: number): void {
+    const ordKey = ordinal !== undefined ? `${this.module}:ord_${ordinal}` : `${this.module}:${name}`;
+    // If a binary DLL already registered a FAR JMP handler for this ordinal, keep it
+    if (this.emu.apiDefs.has(ordKey)) return;
     const wrapped = (emu: Emulator) => {
-      console.log(`[API] ${key}`);
       return handler(emu);
     };
-    this.emu.apiDefs.set(key, { handler: wrapped, stackBytes });
+    this.emu.apiDefs.set(ordKey, { handler: wrapped, stackBytes });
+    if (ordinal !== undefined) {
+      this.emu.ordinalNames.set(`${this.module}:${ordinal}`, name);
+    }
   }
 }
 
@@ -318,6 +321,8 @@ export class Emulator {
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
   _dosDTA = 0;
+  _dosDtaSeg?: number;
+  _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
@@ -366,7 +371,8 @@ export class Emulator {
 
   // API dispatch
   apiDefs = new Map<string, ApiDef>();
-  thunkToApi = new Map<number, { dll: string; name: string; stackBytes: number }>();
+  ordinalNames = new Map<string, string>(); // "MODULE:ordinal" → human name
+  thunkToApi = new Map<number, { dll: string; name: string; stackBytes: number; displayName?: string }>();
   // Fast page-level filter: set of (addr >>> 12) for all thunk addresses.
   // If the page isn't in this set, we skip the Map lookup entirely.
   thunkPages = new Set<number>();
@@ -535,6 +541,12 @@ export class Emulator {
   // Window system
   mainWindow = 0;
   capturedWindow = 0;
+  focusedWindow = 0;
+  findState?: { term: string; lastIndex: number };
+  // Exposed from wndproc.ts for RegisterWindowMessage dedup
+  registerWindowMessage?: (name: string) => number;
+  // Active FINDREPLACEW struct pointer for FindTextW/ReplaceTextW
+  findReplacePtr = 0;
   // GL sync-yield guard: avoid double-yield when apps call both glFinish and SwapBuffers per frame.
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;

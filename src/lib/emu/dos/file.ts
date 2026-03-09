@@ -36,13 +36,23 @@ function allocDosHandle(emu: Emulator): number {
 export function dosSetDTA(cpu: CPU, emu: Emulator): void {
   const dsBase = cpu.segBase(cpu.ds);
   emu._dosDTA = dsBase + cpu.getReg16(EDX);
+  // Save segment:offset pair for GetDTA (needed in protected mode)
+  emu._dosDtaSeg = cpu.ds;
+  emu._dosDtaOfs = cpu.getReg16(EDX);
 }
 
 /** 0x2F: Get DTA → ES:BX */
 export function dosGetDTA(cpu: CPU, emu: Emulator): void {
-  const dta = emu._dosDTA || 0;
-  cpu.setReg16(EBX, dta & 0xFFFF);
-  cpu.es = (dta >>> 4) & 0xFFFF;
+  if (emu._dosDtaSeg !== undefined) {
+    // Protected mode: return saved selector:offset pair
+    cpu.es = emu._dosDtaSeg;
+    cpu.setReg16(EBX, emu._dosDtaOfs!);
+  } else {
+    // Real mode fallback
+    const dta = emu._dosDTA || 0;
+    cpu.setReg16(EBX, dta & 0xFFFF);
+    cpu.es = (dta >>> 4) & 0xFFFF;
+  }
 }
 
 /** 0x3C: Create file (CX=attributes, DS:DX=filename) */
@@ -299,6 +309,44 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
     // Check if block device is remote: DX bit 12=1 remote, 0=local
     cpu.setReg16(EDX, 0); // local
     cpu.setFlag(CF, false);
+  } else if (subFunc === 0x0D) {
+    // Generic IOCTL (block device): CH=category, CL=function
+    const cl = cpu.reg[ECX] & 0xFF;
+    const drive = cpu.reg[EBX] & 0xFF;
+    if (cl === 0x60 && (drive === 3 || drive === 0)) {
+      // Get Device Parameters for C: — fill BPB-like structure at DS:DX
+      const addr = cpu.segBase(cpu.ds) + (cpu.reg[EDX] & 0xFFFF);
+      cpu.mem.writeU8(addr + 0, 0x00);  // special functions
+      cpu.mem.writeU8(addr + 1, 0x05);  // device type: hard disk
+      cpu.mem.writeU16(addr + 2, 0x0001); // device attributes: non-removable
+      cpu.mem.writeU16(addr + 4, 0x0001); // cylinders (fake)
+      cpu.mem.writeU8(addr + 6, 0x00);  // media type (0=default)
+      // BPB at offset 7: 512 bytes/sector, 8 sectors/cluster, etc.
+      cpu.mem.writeU16(addr + 7, 512);   // bytes per sector
+      cpu.mem.writeU8(addr + 9, 7);      // sectors per cluster - 1 (8 sectors)
+      cpu.mem.writeU16(addr + 10, 1);    // reserved sectors
+      cpu.mem.writeU8(addr + 12, 2);     // number of FATs
+      cpu.mem.writeU16(addr + 13, 512);  // root dir entries
+      cpu.mem.writeU16(addr + 15, 0);    // total sectors (0 = use 32-bit field)
+      cpu.mem.writeU8(addr + 17, 0xF8);  // media descriptor (hard disk)
+      cpu.mem.writeU16(addr + 18, 100);  // sectors per FAT
+      cpu.setFlag(CF, false);
+    } else if (cl === 0x66 && (drive === 3 || drive === 0)) {
+      // Get Media ID for C:
+      const addr = cpu.segBase(cpu.ds) + (cpu.reg[EDX] & 0xFFFF);
+      cpu.mem.writeU16(addr + 0, 0);     // info level
+      cpu.mem.writeU32(addr + 2, 0x12345678); // serial number
+      // Volume label (11 bytes)
+      const label = 'RETROTICK   ';
+      for (let i = 0; i < 11; i++) cpu.mem.writeU8(addr + 6 + i, label.charCodeAt(i));
+      // File system type (8 bytes)
+      const fsType = 'FAT16   ';
+      for (let i = 0; i < 8; i++) cpu.mem.writeU8(addr + 17 + i, fsType.charCodeAt(i));
+      cpu.setFlag(CF, false);
+    } else {
+      cpu.setFlag(CF, true);
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+    }
   } else {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 1); // invalid function
@@ -343,7 +391,17 @@ export function dosForceDupHandle(cpu: CPU, emu: Emulator): void {
 export function dosFindFirst(cpu: CPU, emu: Emulator): void {
   const spec = readDsDxString(cpu);
   const resolvedSpec = dosResolvePath(emu, spec);
-  const entries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);
+  const attrMask = cpu.getReg16(ECX);
+  const allEntries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);
+  // DOS FindFirst attribute filtering:
+  // Normal files (attr 0x00/0x20) always match. Directory (0x10), hidden (0x02),
+  // system (0x04) entries only match if the corresponding bit is set in CX.
+  const FILE_ATTR_DIRECTORY = 0x10;
+  const entries = allEntries.filter(e => {
+    if (e.isDir) return !!(attrMask & FILE_ATTR_DIRECTORY);
+    return true; // normal/archive files always match
+  });
+  console.log(`[DOS] FindFirst: spec="${spec}" resolved="${resolvedSpec}" CX=0x${attrMask.toString(16)} entries=${entries.length}/${allEntries.length} DTA=0x${(emu._dosDTA||0).toString(16)}`, entries.map(e => `${e.name}${e.isDir?'/':''}`));
   if (entries.length > 0) {
     emu._dosFindState = { entries, index: 0, pattern: spec };
     writeDtaEntry(cpu, emu, entries[0]);

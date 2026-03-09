@@ -315,6 +315,10 @@ export function registerText(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
 
+    let text = '';
+    if (strPtr && count > 0) {
+      for (let i = 0; i < count; i++) text += String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
+    }
     if ((options & 0x2) && rectPtr) {
       const left = emu.memory.readI32(rectPtr);
       const top = emu.memory.readI32(rectPtr + 4);
@@ -324,9 +328,7 @@ export function registerText(emu: Emulator): void {
       dc.ctx.fillRect(left, top, right - left, bottom - top);
     }
 
-    if (strPtr && count > 0) {
-      let text = '';
-      for (let i = 0; i < count; i++) text += String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
+    if (text) {
       const fontSize = getFontSize(hdc);
       dc.ctx.font = `${fontSize}px Tahoma, sans-serif`;
       dc.ctx.fillStyle = colorToCSS(dc.textColor);

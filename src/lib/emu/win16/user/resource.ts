@@ -23,19 +23,19 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
     32650: 'progress',      // IDC_APPSTARTING
     32651: 'help',          // IDC_HELP
   };
-  user.register('ord_173', 6, () => {
+  user.register('LoadCursor', 6, () => {
     const [hInstance, lpCursorName] = emu.readPascalArgs16([2, 4]);
     let css = 'default';
     if (hInstance === 0 && lpCursorName < 0x10000) {
       css = idcToCss[lpCursorName] || 'default';
     }
     return emu.handles.alloc('cursor', { css });
-  });
+  }, 173);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 174: LoadIcon(hInstance, lpIconName_ptr) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_174', 6, () => {
+  user.register('LoadIcon', 6, () => {
     const [hInstance, lpIconName] = emu.readPascalArgs16([2, 4]);
     const iconId = lpIconName < 0x10000 ? lpIconName : 0;
     if (iconId) {
@@ -43,12 +43,12 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
       if (hIcon) return hIcon;
     }
     return 1; // fallback handle
-  });
+  }, 174);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 175: LoadBitmap(hInstance, lpBitmapName_ptr) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_175', 6, () => {
+  user.register('LoadBitmap', 6, () => {
     const [hInstance, lpBitmapName] = emu.readPascalArgs16([2, 4]);
     const seg = (lpBitmapName >>> 16) & 0xFFFF;
     const off = lpBitmapName & 0xFFFF;
@@ -63,12 +63,12 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
       console.log(`[WIN16] LoadBitmap hInst=0x${hInstance.toString(16)} name="${name}"`);
       return emu.loadBitmapResourceByName(name) || 1;
     }
-  });
+  }, 175);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 176: LoadString(hInstance, uID, lpBuffer_ptr, nBufferMax) — 10 bytes (2+2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_176', 10, () => {
+  user.register('LoadString', 10, () => {
     const [hInstance, uID, lpBuffer, nBufferMax] = emu.readPascalArgs16([2, 2, 4, 2]);
     const str = emu.loadNEString(uID);
     console.log(`[WIN16] LoadString id=${uID} → "${str}" (maxLen=${nBufferMax})`);
@@ -81,10 +81,10 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
       return maxCopy;
     }
     return 0;
-  });
+  }, 176);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 177: LoadAccelerators(hInstance, lpTableName) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_177', 6, () => 1);
+  user.register('LoadAccelerators', 6, () => 1, 177);
 }

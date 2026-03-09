@@ -24,7 +24,7 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
   }
 
   // --- Ordinal 60: FindResource(hInst, lpName, lpType) — 10 bytes (word+str+str) ---
-  kernel.register('ord_60', 10, () => {
+  kernel.register('FindResource', 10, () => {
     const [hInst, lpName, lpType] = emu.readPascalArgs16([2, 4, 4]);
 
     // Decode type: if high word is 0, low word is integer type ID; otherwise it's a far pointer to string
@@ -55,10 +55,10 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
     resHandleMap.set(handle, entry);
     console.log(`[RES16] FindResource: type=${typeId} id=${resId} name=${resName} → handle=0x${handle.toString(16)} offset=0x${entry.fileOffset.toString(16)} len=${entry.length}`);
     return handle;
-  });
+  }, 60);
 
   // --- Ordinal 61: LoadResource(hInst, hResInfo) — 4 bytes (word+word) ---
-  kernel.register('ord_61', 4, () => {
+  kernel.register('LoadResource', 4, () => {
     const [hInst, hResInfo] = emu.readPascalArgs16([2, 2]);
     const entry = resHandleMap.get(hResInfo);
     if (!entry || !emu._arrayBuffer) {
@@ -80,10 +80,10 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
     loadedResMap.set(hResInfo, { entry, ptr });
     console.log(`[RES16] LoadResource: handle=0x${hResInfo.toString(16)} → ptr=0x${ptr.toString(16)} len=${entry.length}`);
     return hResInfo;
-  });
+  }, 61);
 
   // --- Ordinal 62: LockResource(hResData) — 2 bytes (word) ---
-  kernel.register('ord_62', 2, () => {
+  kernel.register('LockResource', 2, () => {
     const hRes = emu.readArg16(0);
     const loaded = loadedResMap.get(hRes);
     if (!loaded) {
@@ -92,24 +92,24 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
     }
     console.log(`[RES16] LockResource: handle=0x${hRes.toString(16)} → ptr=0x${loaded.ptr.toString(16)}`);
     return loaded.ptr;
-  });
+  }, 62);
 
   // --- Ordinal 63: FreeResource(hResData) — 2 bytes (word) ---
-  kernel.register('ord_63', 2, () => 0);
+  kernel.register('FreeResource', 2, () => 0, 63);
 
   // --- Ordinal 64: AccessResource(word word) — 4 bytes ---
-  kernel.register('ord_64', 4, () => -1);
+  kernel.register('AccessResource', 4, () => -1, 64);
 
   // --- Ordinal 65: SizeofResource(word word) — 4 bytes ---
-  kernel.register('ord_65', 4, () => {
+  kernel.register('SizeofResource', 4, () => {
     const [hInst, hResInfo] = emu.readPascalArgs16([2, 2]);
     const entry = resHandleMap.get(hResInfo);
     return entry ? entry.length : 0;
-  });
+  }, 65);
 
   // --- Ordinal 66: AllocResource(word word long) — 8 bytes (word+word+long) ---
-  kernel.register('ord_66', 8, () => 0);
+  kernel.register('AllocResource', 8, () => 0, 66);
 
   // --- Ordinal 67: SetResourceHandler(word str segptr) — 10 bytes (word+str+segptr) ---
-  kernel.register('ord_67', 10, () => 0);
+  kernel.register('SetResourceHandler', 10, () => 0, 67);
 }

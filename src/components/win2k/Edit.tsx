@@ -11,9 +11,10 @@ interface EditProps {
   thinBorder?: boolean;
   bgColor?: string | null;
   onTextChange?: (text: string) => void;
+  onRef?: (el: HTMLTextAreaElement | HTMLInputElement | null) => void;
 }
 
-export function Edit({ text, fontCSS, fontColor, multiline, password, readonly, sunken, thinBorder, bgColor, onTextChange }: EditProps) {
+export function Edit({ text, fontCSS, fontColor, multiline, password, readonly, sunken, thinBorder, bgColor, onTextChange, onRef }: EditProps) {
   const bg = bgColor || (readonly ? '#D4D0C8' : '#FFF');
   const borderStyle = sunken
     ? { border: '1px solid', borderColor: '#808080 #FFF #FFF #808080', boxShadow: 'inset 1px 1px 0 #404040, inset -1px -1px 0 #D4D0C8' }
@@ -49,6 +50,12 @@ export function Edit({ text, fontCSS, fontColor, multiline, password, readonly, 
       ref.current.focus();
       ref.current.select();
     }
+  }, []);
+
+  // Expose DOM element to parent via onRef callback
+  useEffect(() => {
+    if (onRef) onRef(ref.current);
+    return () => { if (onRef) onRef(null); };
   }, []);
 
   const onInput = editable ? (e: Event) => {

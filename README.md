@@ -25,7 +25,7 @@ Most programs have rendering glitches or missing features. This is a work in pro
 - **x86 CPU emulator** — x87 FPU, lazy flag evaluation, 32-bit protected mode (flat model) and 16-bit real mode with segment:offset addressing, IVT, and PSP
 - **PE/NE/MZ binary loader** — Parses headers, maps sections, resolves imports, extracts resources
 - **Win32 API compatibility layer** — kernel32, user32, gdi32, advapi32, comctl32, comdlg32, shell32, msvcrt, opengl32, glu32, ddraw, ole32, oleaut32, winmm, winspool, ws2_32, version, psapi, shlwapi, iphlpapi, msacm32, and more
-- **Win16 API compatibility layer** — KERNEL, USER, GDI, SHELL, COMMDLG, MMSYSTEM, KEYBOARD, DDEML, WIN87EM
+- **Win16 API compatibility layer** — KERNEL, USER, GDI, SHELL, COMMDLG, COMMCTRL, MMSYSTEM, KEYBOARD, DDEML, LZEXPAND, SOUND, VER, SCONFIG, WIN87EM
 - **DOS interrupt emulation** — INT 21h services for MZ executables
 - **OpenGL 1.x → WebGL2 translation** — Full immediate-mode pipeline mapped to WebGL2, powering 3D screen savers
 - **Window manager** — Multiple windows, z-order, focus, taskbar, message dispatch, common dialogs

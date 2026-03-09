@@ -69,8 +69,11 @@ No test runner or linter scripts are configured.
 - `types.ts` — Win32 constants and type definitions
 
 **Win16 API Stubs** (`src/lib/emu/win16/`): Windows 3.x NE executable support:
-- `kernel.ts`, `gdi.ts`, `shell.ts`, `commdlg.ts`, `mmsystem.ts`, `keyboard.ts`, `ddeml.ts`, `win87em.ts`
+- `kernel/` — atom, dos, error, file, memory, misc, module, profile, registry, resource, string, task
 - `user/` — dialog, menu, message, misc, paint, rect, resource, window
+- `gdi.ts` — graphics device interface
+- `shell.ts`, `commdlg.ts`, `commctrl.ts`, `mmsystem.ts`, `keyboard.ts`, `ddeml.ts`, `win87em.ts`
+- `lzexpand.ts`, `sound.ts`, `ver.ts`, `sconfig.ts` (Workgroup Security)
 
 **UI Components** (`src/components/`): Display components per resource type. `win2k/` contains 24 widgets mimicking Windows 2000 UI (Window, Button, Edit, ListBox, ListView, TreeView, ComboBox, TabControl, MenuBar, Taskbar, MessageBox, etc.). `EmulatorView.tsx` renders emulated programs via Canvas + HTML controls. `App.tsx` manages the desktop, taskbar, and multi-window state.
 

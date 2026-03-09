@@ -189,7 +189,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }
 
   // Ordinal 1: SetBkColor(hdc, color_long) — pascal, 6 bytes (2+4)
-  gdi.register('ord_1', 6, () => {
+  gdi.register('SetBkColor', 6, () => {
     const [hdc, color] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -198,10 +198,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 1);
 
   // Ordinal 2: SetBkMode(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_2', 4, () => {
+  gdi.register('SetBkMode', 4, () => {
     const [hdc, mode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -210,10 +210,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 2);
 
   // Ordinal 3: SetMapMode(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_3', 4, () => {
+  gdi.register('SetMapMode', 4, () => {
     const [hdc, mode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -222,10 +222,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return MM_TEXT;
-  });
+  }, 3);
 
   // Ordinal 4: SetROP2(hdc, fnDrawMode) — pascal -ret16, 4 bytes
-  gdi.register('ord_4', 4, () => {
+  gdi.register('SetROP2', 4, () => {
     const [hdc, mode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -234,13 +234,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 4);
 
   // Ordinal 5: SetRelAbs(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_5', 4, () => 1);
+  gdi.register('SetRelAbs', 4, () => 1, 5);
 
   // Ordinal 6: SetPolyFillMode(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_6', 4, () => {
+  gdi.register('SetPolyFillMode', 4, () => {
     const [hdc, mode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -249,10 +249,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 1;
-  });
+  }, 6);
 
   // Ordinal 7: SetStretchBltMode(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_7', 4, () => {
+  gdi.register('SetStretchBltMode', 4, () => {
     const [hdc, mode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -261,10 +261,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 7);
 
   // Ordinal 8: SetTextCharacterExtra(hdc, nCharExtra) — pascal -ret16, 4 bytes
-  gdi.register('ord_8', 4, () => {
+  gdi.register('SetTextCharacterExtra', 4, () => {
     const [hdc, nCharExtra] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -273,10 +273,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 8);
 
   // Ordinal 9: SetTextColor(hdc, color_long) — pascal, 6 bytes (2+4)
-  gdi.register('ord_9', 6, () => {
+  gdi.register('SetTextColor', 6, () => {
     const [hdc, color] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -285,10 +285,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 9);
 
   // Ordinal 10: SetTextJustification(hdc, nBreakExtra, nBreakCount) — pascal -ret16, 6 bytes
-  gdi.register('ord_10', 6, () => {
+  gdi.register('SetTextJustification', 6, () => {
     const [hdc, nBreakExtra, nBreakCount] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -296,10 +296,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.textJustBreakCount = (nBreakCount << 16) >> 16;
     }
     return 1;
-  });
+  }, 10);
 
   // Ordinal 11: SetWindowOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_11', 6, () => {
+  gdi.register('SetWindowOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -310,10 +310,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 11);
 
   // Ordinal 12: SetWindowExt(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_12', 6, () => {
+  gdi.register('SetWindowExt', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -324,10 +324,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 12);
 
   // Ordinal 13: SetViewportOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_13', 6, () => {
+  gdi.register('SetViewportOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -338,10 +338,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 13);
 
   // Ordinal 14: SetViewportExt(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_14', 6, () => {
+  gdi.register('SetViewportExt', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -352,10 +352,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 14);
 
   // Ordinal 15: OffsetWindowOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_15', 6, () => {
+  gdi.register('OffsetWindowOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -364,10 +364,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((dc.windowOrgY & 0xFFFF) << 16) | (dc.windowOrgX & 0xFFFF);
     }
     return 0;
-  });
+  }, 15);
 
   // Ordinal 16: ScaleWindowExt(hdc, xNum, xDenom, yNum, yDenom) — pascal, 10 bytes
-  gdi.register('ord_16', 10, () => {
+  gdi.register('ScaleWindowExt', 10, () => {
     const [hdc, xNum, xDenom, yNum, yDenom] = emu.readPascalArgs16([2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc && xDenom && yDenom) {
@@ -376,10 +376,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return (((dc.windowExtY ?? 1) & 0xFFFF) << 16) | ((dc.windowExtX ?? 1) & 0xFFFF);
     }
     return 0;
-  });
+  }, 16);
 
   // Ordinal 17: OffsetViewportOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_17', 6, () => {
+  gdi.register('OffsetViewportOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -388,10 +388,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((dc.viewportOrgY & 0xFFFF) << 16) | (dc.viewportOrgX & 0xFFFF);
     }
     return 0;
-  });
+  }, 17);
 
   // Ordinal 18: ScaleViewportExt(hdc, xNum, xDenom, yNum, yDenom) — pascal, 10 bytes
-  gdi.register('ord_18', 10, () => {
+  gdi.register('ScaleViewportExt', 10, () => {
     const [hdc, xNum, xDenom, yNum, yDenom] = emu.readPascalArgs16([2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc && xDenom && yDenom) {
@@ -400,10 +400,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return (((dc.viewportExtY ?? 1) & 0xFFFF) << 16) | ((dc.viewportExtX ?? 1) & 0xFFFF);
     }
     return 0;
-  });
+  }, 18);
 
   // Ordinal 19: LineTo(hdc, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_19', 6, () => {
+  gdi.register('LineTo', 6, () => {
     const [hdc, xRaw, yRaw] = emu.readPascalArgs16([2, 2, 2]);
     const x = (xRaw << 16) >> 16;
     const y = (yRaw << 16) >> 16;
@@ -471,10 +471,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.syncDCToCanvas(hdc);
     }
     return 1;
-  });
+  }, 19);
 
   // Ordinal 20: MoveTo(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_20', 6, () => {
+  gdi.register('MoveTo', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -485,16 +485,16 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 20);
 
   // Ordinal 21: ExcludeClipRect(hdc, l, t, r, b) — pascal -ret16, 10 bytes
-  gdi.register('ord_21', 10, () => SIMPLEREGION);
+  gdi.register('ExcludeClipRect', 10, () => SIMPLEREGION, 21);
 
   // Ordinal 22: IntersectClipRect(hdc, l, t, r, b) — pascal -ret16, 10 bytes
-  gdi.register('ord_22', 10, () => SIMPLEREGION);
+  gdi.register('IntersectClipRect', 10, () => SIMPLEREGION, 22);
 
   // Ordinal 23: Arc(hdc, l, t, r, b, xStart, yStart, xEnd, yEnd) — pascal -ret16, 18 bytes
-  gdi.register('ord_23', 18, () => {
+  gdi.register('Arc', 18, () => {
     const [hdc, l, t, r, b, xStart, yStart, xEnd, yEnd] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -514,10 +514,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 23);
 
   // Ordinal 24: Ellipse(hdc, left, top, right, bottom) — pascal -ret16, 10 bytes
-  gdi.register('ord_24', 10, () => {
+  gdi.register('Ellipse', 10, () => {
     const [hdc, left, top, right, bottom] = emu.readPascalArgs16([2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -530,11 +530,11 @@ export function registerWin16Gdi(emu: Emulator): void {
       fillAndStroke(dc);
     }
     return 1;
-  });
+  }, 24);
 
   // Ordinal 25: FloodFill(hdc, x, y, crColor) — pascal -ret16, 10 bytes (2+2+2+4)
   // FloodFill fills until it hits crColor (boundary fill)
-  gdi.register('ord_25', 10, () => {
+  gdi.register('FloodFill', 10, () => {
     const [hdc, x, y, crColor] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
@@ -571,10 +571,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     dc.ctx.putImageData(imgData, 0, 0);
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 25);
 
   // Ordinal 26: Pie(hdc, l, t, r, b, xR1, yR1, xR2, yR2) — pascal -ret16, 18 bytes
-  gdi.register('ord_26', 18, () => {
+  gdi.register('Pie', 18, () => {
     const [hdc, l, t, r, b, xR1, yR1, xR2, yR2] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -591,10 +591,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       fillAndStroke(dc);
     }
     return 1;
-  });
+  }, 26);
 
   // Ordinal 27: Rectangle(hdc, left, top, right, bottom) — pascal -ret16, 10 bytes
-  gdi.register('ord_27', 10, () => {
+  gdi.register('Rectangle', 10, () => {
     const [hdc, leftRaw, topRaw, rightRaw, bottomRaw] = emu.readPascalArgs16([2, 2, 2, 2, 2]);
     const left = (leftRaw << 16) >> 16;
     const top = (topRaw << 16) >> 16;
@@ -615,10 +615,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 27);
 
   // Ordinal 28: RoundRect(hdc, l, t, r, b, w, h) — pascal -ret16, 14 bytes
-  gdi.register('ord_28', 14, () => {
+  gdi.register('RoundRect', 14, () => {
     const [hdc, l, t, r, b, w, h] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -633,10 +633,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       fillAndStroke(dc);
     }
     return 1;
-  });
+  }, 28);
 
   // Ordinal 29: PatBlt(hdc, x, y, w, h, rop_long) — pascal -ret16, 14 bytes (2+2+2+2+2+4)
-  gdi.register('ord_29', 14, () => {
+  gdi.register('PatBlt', 14, () => {
     const [hdc, xRaw, yRaw, wRaw, hRaw, rop] = emu.readPascalArgs16([2, 2, 2, 2, 2, 4]);
     const x = (xRaw << 16) >> 16;
     const y = (yRaw << 16) >> 16;
@@ -673,18 +673,18 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 29);
 
   // Ordinal 30: SaveDC(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_30', 2, () => {
+  gdi.register('SaveDC', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) dc.ctx.save();
     return 1;
-  });
+  }, 30);
 
   // Ordinal 31: SetPixel(hdc, x, y, crColor_long) — pascal, 10 bytes (2+2+2+4)
-  gdi.register('ord_31', 10, () => {
+  gdi.register('SetPixel', 10, () => {
     const [hdc, x, y, color] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -692,13 +692,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.ctx.fillRect(x, y, 1, 1);
     }
     return color;
-  });
+  }, 31);
 
   // Ordinal 32: OffsetClipRgn(hdc, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_32', 6, () => SIMPLEREGION);
+  gdi.register('OffsetClipRgn', 6, () => SIMPLEREGION, 32);
 
   // Ordinal 33: TextOut(hdc, x, y, lpString_ptr, nCount) — pascal -ret16, 12 bytes (2+2+2+4+2)
-  gdi.register('ord_33', 12, () => {
+  gdi.register('TextOut', 12, () => {
     const [hdc, x, y, lpString, nCount] = emu.readPascalArgs16([2, 2, 2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (dc && lpString && nCount > 0) {
@@ -719,10 +719,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.syncDCToCanvas(hdc);
     }
     return 1;
-  });
+  }, 33);
 
   // Ordinal 34: BitBlt(hdcDest, xDest, yDest, w, h, hdcSrc, xSrc, ySrc, rop_long) — pascal -ret16, 20 bytes
-  gdi.register('ord_34', 20, () => {
+  gdi.register('BitBlt', 20, () => {
     const [hdcDest, xDstRaw, yDstRaw, wRaw, hRaw, hdcSrc, xSrcRaw, ySrcRaw, rop] =
       emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 4]);
     const xDst = (xDstRaw << 16) >> 16;
@@ -802,10 +802,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
     }
     return 1;
-  });
+  }, 34);
 
   // Ordinal 35: StretchBlt — pascal -ret16, 24 bytes
-  gdi.register('ord_35', 24, () => {
+  gdi.register('StretchBlt', 24, () => {
     const [hdcDest, xDstR, yDstR, wDstR, hDstR, hdcSrc, xSrcR, ySrcR, wSrcR, hSrcR, rop] =
       emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4]);
     const dstDC = emu.getDC(hdcDest);
@@ -826,10 +826,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, wSrc, hSrc, xDst, yDst, wDst, hDst);
     dstDC.ctx.restore();
     return 1;
-  });
+  }, 35);
 
   // Ordinal 36: Polygon(hdc, lpPoints, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_36', 8, () => {
+  gdi.register('Polygon', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (dc && lpPoints && nCount > 2) {
@@ -844,10 +844,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       fillAndStroke(dc);
     }
     return 1;
-  });
+  }, 36);
 
   // Ordinal 37: Polyline(hdc, lpPoints_ptr, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_37', 8, () => {
+  gdi.register('Polyline', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (dc && lpPoints && nCount > 1) {
@@ -866,36 +866,36 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 37);
 
   // Ordinal 38: Escape(hdc, nEscape, cbInput, lpInData, lpOutData) — pascal -ret16, 14 bytes (2+2+2+4+4)
-  gdi.register('ord_38', 14, () => 0);
+  gdi.register('Escape', 14, () => 0, 38);
 
   // Ordinal 39: RestoreDC(hdc, nSavedDC) — pascal -ret16, 4 bytes
-  gdi.register('ord_39', 4, () => {
+  gdi.register('RestoreDC', 4, () => {
     const [hdc] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) dc.ctx.restore();
     return 1;
-  });
+  }, 39);
 
   // Ordinal 40: FillRgn(hdc, hRgn, hBrush) — pascal -ret16, 6 bytes
-  gdi.register('ord_40', 6, () => 1);
+  gdi.register('FillRgn', 6, () => 1, 40);
 
   // Ordinal 41: FrameRgn(hdc, hRgn, hBrush, w, h) — pascal -ret16, 10 bytes
-  gdi.register('ord_41', 10, () => 1);
+  gdi.register('FrameRgn', 10, () => 1, 41);
 
   // Ordinal 42: InvertRgn(hdc, hRgn) — pascal -ret16, 4 bytes
-  gdi.register('ord_42', 4, () => 1);
+  gdi.register('InvertRgn', 4, () => 1, 42);
 
   // Ordinal 43: PaintRgn(hdc, hRgn) — pascal -ret16, 4 bytes
-  gdi.register('ord_43', 4, () => 1);
+  gdi.register('PaintRgn', 4, () => 1, 43);
 
   // Ordinal 44: SelectClipRgn(hdc, hRgn) — pascal -ret16, 4 bytes
-  gdi.register('ord_44', 4, () => SIMPLEREGION);
+  gdi.register('SelectClipRgn', 4, () => SIMPLEREGION, 44);
 
   // Ordinal 45: SelectObject(hdc, hGdiObj) — pascal -ret16, 4 bytes
-  gdi.register('ord_45', 4, () => {
+  gdi.register('SelectObject', 4, () => {
     const [hdc, hObj] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
@@ -974,13 +974,13 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
 
     return 0;
-  });
+  }, 45);
 
   // Ordinal 47: CombineRgn(hrgnDest, hrgnSrc1, hrgnSrc2, fnCombineMode) — pascal -ret16, 8 bytes
-  gdi.register('ord_47', 8, () => SIMPLEREGION);
+  gdi.register('CombineRgn', 8, () => SIMPLEREGION, 47);
 
   // Ordinal 48: CreateBitmap(w, h, nPlanes, nBitCount, lpBits) — pascal -ret16, 12 bytes (2+2+2+2+4)
-  gdi.register('ord_48', 12, () => {
+  gdi.register('CreateBitmap', 12, () => {
     const [w, h, nPlanes, nBitCount, lpBits] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
     const bw = w || 1, bh = h || 1;
     const canvas = new OffscreenCanvas(bw, bh);
@@ -1004,10 +1004,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
     const bmp: BitmapInfo = { width: bw, height: bh, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
-  });
+  }, 48);
 
   // Ordinal 49: CreateBitmapIndirect(lpBitmap_ptr) — pascal -ret16, 4 bytes
-  gdi.register('ord_49', 4, () => {
+  gdi.register('CreateBitmapIndirect', 4, () => {
     const lpBitmap = emu.readArg16DWord(0);
     if (lpBitmap) {
       const w = emu.memory.readU16(lpBitmap + 2);
@@ -1018,10 +1018,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return emu.handles.alloc('bitmap', bmp);
     }
     return 0;
-  });
+  }, 49);
 
   // Ordinal 50: CreateBrushIndirect(lpLogBrush) — pascal -ret16, 4 bytes
-  gdi.register('ord_50', 4, () => {
+  gdi.register('CreateBrushIndirect', 4, () => {
     const lpLogBrush = emu.readArg16DWord(0);
     if (lpLogBrush) {
       const lbStyle = emu.memory.readU16(lpLogBrush);
@@ -1031,34 +1031,34 @@ export function registerWin16Gdi(emu: Emulator): void {
       return emu.handles.alloc('brush', brush);
     }
     return 0;
-  });
+  }, 50);
 
   // Ordinal 51: CreateCompatibleBitmap(hdc, w, h) — pascal -ret16, 6 bytes
-  gdi.register('ord_51', 6, () => {
+  gdi.register('CreateCompatibleBitmap', 6, () => {
     const [hdc, w, h] = emu.readPascalArgs16([2, 2, 2]);
     const canvas = new OffscreenCanvas(w || 1, h || 1);
     const ctx = canvas.getContext('2d')!;
     const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
-  });
+  }, 51);
 
   // Ordinal 52: CreateCompatibleDC(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_52', 2, () => createMemDC());
+  gdi.register('CreateCompatibleDC', 2, () => createMemDC(), 52);
 
   // Ordinal 53: CreateDC(lpDriverName, lpDeviceName, lpOutput, lpInitData) — pascal -ret16, 16 bytes (4+4+4+4)
-  gdi.register('ord_53', 16, () => createMemDC());
+  gdi.register('CreateDC', 16, () => createMemDC(), 53);
 
   // Ordinal 54: CreateEllipticRgn(l, t, r, b) — pascal -ret16, 8 bytes
-  gdi.register('ord_54', 8, () => emu.handles.alloc('region', {}));
+  gdi.register('CreateEllipticRgn', 8, () => emu.handles.alloc('region', {}), 54);
 
   // Ordinal 55: CreateEllipticRgnIndirect(lpRect) — pascal -ret16, 4 bytes
-  gdi.register('ord_55', 4, () => emu.handles.alloc('region', {}));
+  gdi.register('CreateEllipticRgnIndirect', 4, () => emu.handles.alloc('region', {}), 55);
 
   // Ordinal 56: CreateFont(nHeight, nWidth, nEsc, nOrient, fnWeight, fdwItalic, fdwUnderline, fdwStrikeOut,
   //   fdwCharSet, fdwOutputPrecision, fdwClipPrecision, fdwQuality, fdwPitchAndFamily, lpszFace)
   // pascal -ret16, 28 bytes (2*9 + 1*4 + 1 + 4 = actually 2+2+2+2+2+1+1+1+1+1+1+1+1+4 but Win16 pushes WORDs)
   // Win16 CreateFont: 14 params all pushed as WORDs = 28 bytes
-  gdi.register('ord_56', 28, () => {
+  gdi.register('CreateFont', 28, () => {
     const [nHeight, _nWidth, _nEsc, _nOrient, fnWeight,
            fdwItalic, _fdwUnderline, _fdwStrikeOut, _fdwCharSet,
            _fdwOutPrec, _fdwClipPrec, _fdwQuality, _fdwPitch, lpszFace] =
@@ -1074,13 +1074,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       weight: fnWeight,
       italic: !!(fdwItalic & 0xFF),
     });
-  });
+  }, 56);
 
   // Ordinal 57: CreateFontIndirect(lpLogFont) — pascal -ret16, 4 bytes
   // LOGFONT16: lfHeight(2), lfWidth(2), lfEscapement(2), lfOrientation(2), lfWeight(2),
   //   lfItalic(1), lfUnderline(1), lfStrikeOut(1), lfCharSet(1), lfOutPrecision(1),
   //   lfClipPrecision(1), lfQuality(1), lfPitchAndFamily(1), lfFaceName(32)
-  gdi.register('ord_57', 4, () => {
+  gdi.register('CreateFontIndirect', 4, () => {
     const lpLogFont = emu.readArg16DWord(0);
     if (!lpLogFont) return emu.handles.alloc('font', { height: 13 });
     const height = emu.memory.readI16(lpLogFont);
@@ -1094,32 +1094,32 @@ export function registerWin16Gdi(emu: Emulator): void {
       weight,
       italic: !!italic,
     });
-  });
+  }, 57);
 
   // Ordinal 58: CreateHatchBrush(fnStyle, clrref) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_58', 6, () => {
+  gdi.register('CreateHatchBrush', 6, () => {
     const [fnStyle, color] = emu.readPascalArgs16([2, 4]);
     const brush: BrushInfo = { color, isNull: false };
     return emu.handles.alloc('brush', brush);
-  });
+  }, 58);
 
   // Ordinal 60: CreatePatternBrush(hBitmap) — pascal -ret16, 2 bytes
-  gdi.register('ord_60', 2, () => {
+  gdi.register('CreatePatternBrush', 2, () => {
     const hBitmap = emu.readArg16(0);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     const brush: BrushInfo = { color: 0x808080, isNull: false, patternBitmap: bmp?.canvas };
     return emu.handles.alloc('brush', brush);
-  });
+  }, 60);
 
   // Ordinal 61: CreatePen(fnPenStyle, nWidth, crColor_long) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('ord_61', 8, () => {
+  gdi.register('CreatePen', 8, () => {
     const [style, width, color] = emu.readPascalArgs16([2, 2, 4]);
     const pen: PenInfo = { style, width, color };
     return emu.handles.alloc('pen', pen);
-  });
+  }, 61);
 
   // Ordinal 62: CreatePenIndirect(lpLogPen) — pascal -ret16, 4 bytes
-  gdi.register('ord_62', 4, () => {
+  gdi.register('CreatePenIndirect', 4, () => {
     const lpLogPen = emu.readArg16DWord(0);
     if (lpLogPen) {
       const style = emu.memory.readU16(lpLogPen);
@@ -1129,26 +1129,26 @@ export function registerWin16Gdi(emu: Emulator): void {
       return emu.handles.alloc('pen', pen);
     }
     return 0;
-  });
+  }, 62);
 
   // Ordinal 63: CreatePolygonRgn(lpPoints, nCount, fnPolyFillMode) — pascal -ret16, 10 bytes (4+2+2)
-  gdi.register('ord_63', 10, () => emu.handles.alloc('region', {}));
+  gdi.register('CreatePolygonRgn', 10, () => emu.handles.alloc('region', {}), 63);
 
   // Ordinal 64: CreateRectRgn(l, t, r, b) — pascal -ret16, 8 bytes
-  gdi.register('ord_64', 8, () => emu.handles.alloc('region', {}));
+  gdi.register('CreateRectRgn', 8, () => emu.handles.alloc('region', {}), 64);
 
   // Ordinal 65: CreateRectRgnIndirect(lpRect) — pascal -ret16, 4 bytes
-  gdi.register('ord_65', 4, () => emu.handles.alloc('region', {}));
+  gdi.register('CreateRectRgnIndirect', 4, () => emu.handles.alloc('region', {}), 65);
 
   // Ordinal 66: CreateSolidBrush(crColor_long) — pascal -ret16, 4 bytes
-  gdi.register('ord_66', 4, () => {
+  gdi.register('CreateSolidBrush', 4, () => {
     const color = emu.readArg16DWord(0);
     const brush: BrushInfo = { color, isNull: false };
     return emu.handles.alloc('brush', brush);
-  });
+  }, 66);
 
   // Ordinal 67: DPtoLP(hdc, lpPoints, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_67', 8, () => {
+  gdi.register('DPtoLP', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lpPoints) return 0;
@@ -1168,28 +1168,28 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(addr + 2, lpY);
     }
     return 1;
-  });
+  }, 67);
 
   // Ordinal 68: DeleteDC(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_68', 2, () => 1);
+  gdi.register('DeleteDC', 2, () => 1, 68);
 
   // Ordinal 69: DeleteObject(hObj) — pascal -ret16, 2 bytes
-  gdi.register('ord_69', 2, () => 1);
+  gdi.register('DeleteObject', 2, () => 1, 69);
 
   // Ordinal 70: EnumFonts(hdc, lpFaceName, lpFontFunc, lParam) — pascal -ret16, 14 bytes (2+4+4+4)
-  gdi.register('ord_70', 14, () => 0);
+  gdi.register('EnumFonts', 14, () => 0, 70);
 
   // Ordinal 71: EnumObjects(hdc, nObjectType, lpObjectFunc, lParam) — pascal -ret16, 12 bytes (2+2+4+4)
-  gdi.register('ord_71', 12, () => 0);
+  gdi.register('EnumObjects', 12, () => 0, 71);
 
   // Ordinal 72: EqualRgn(hRgn1, hRgn2) — pascal -ret16, 4 bytes
-  gdi.register('ord_72', 4, () => 0);
+  gdi.register('EqualRgn', 4, () => 0, 72);
 
   // Ordinal 73: ExcludeVisRect(hdc, l, t, r, b) — pascal -ret16, 10 bytes
-  gdi.register('ord_73', 10, () => SIMPLEREGION);
+  gdi.register('ExcludeVisRect', 10, () => SIMPLEREGION, 73);
 
   // Ordinal 74: GetBitmapBits(hBitmap, cbBuffer, lpvBits) — pascal, 10 bytes (2+4+4)
-  gdi.register('ord_74', 10, () => {
+  gdi.register('GetBitmapBits', 10, () => {
     const [hBitmap, cbBuffer, lpvBits] = emu.readPascalArgs16([2, 4, 4]);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     if (!bmp || !lpvBits || cbBuffer <= 0) return 0;
@@ -1201,24 +1201,24 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeU8(lpvBits + i, px[i * 4]);
     }
     return total;
-  });
+  }, 74);
 
   // Ordinal 75: GetBkColor(hdc) — pascal, 2 bytes
-  gdi.register('ord_75', 2, () => {
+  gdi.register('GetBkColor', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.bkColor : 0xFFFFFF;
-  });
+  }, 75);
 
   // Ordinal 76: GetBkMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_76', 2, () => {
+  gdi.register('GetBkMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.bkMode : OPAQUE;
-  });
+  }, 76);
 
   // Ordinal 77: GetClipBox(hdc, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_77', 6, () => {
+  gdi.register('GetClipBox', 6, () => {
     const [hdc, lpRect] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (dc && lpRect) {
@@ -1228,21 +1228,21 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpRect + 6, dc.canvas.height);
     }
     return SIMPLEREGION;
-  });
+  }, 77);
 
   // Ordinal 78: GetCurrentPosition(hdc) — pascal, 2 bytes
-  gdi.register('ord_78', 2, () => {
+  gdi.register('GetCurrentPosition', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) return ((dc.penPosY & 0xFFFF) << 16) | (dc.penPosX & 0xFFFF);
     return 0;
-  });
+  }, 78);
 
   // Ordinal 79: GetDCOrg(hdc) — pascal, 2 bytes
-  gdi.register('ord_79', 2, () => 0);
+  gdi.register('GetDCOrg', 2, () => 0, 79);
 
   // Ordinal 80: GetDeviceCaps(hdc, nIndex) — pascal -ret16, 4 bytes
-  gdi.register('ord_80', 4, () => {
+  gdi.register('GetDeviceCaps', 4, () => {
     const [hdc, nIndex] = emu.readPascalArgs16([2, 2]);
     const DRIVERVERSION = 0;
     const TECHNOLOGY = 2;
@@ -1289,17 +1289,17 @@ export function registerWin16Gdi(emu: Emulator): void {
       26: 0x7E99,          // RASTERCAPS
     };
     return caps[nIndex] ?? 0;
-  });
+  }, 80);
 
   // Ordinal 81: GetMapMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_81', 2, () => {
+  gdi.register('GetMapMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.mapMode ?? MM_TEXT;
-  });
+  }, 81);
 
   // Ordinal 82: GetObject(hObj, cbBuffer, lpvObject_ptr) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('ord_82', 8, () => {
+  gdi.register('GetObject', 8, () => {
     const [hObj, cbBuffer, lpvObject] = emu.readPascalArgs16([2, 2, 4]);
     if (!lpvObject || cbBuffer <= 0) return 0;
 
@@ -1341,10 +1341,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return bytesToWrite;
     }
     return 0;
-  });
+  }, 82);
 
   // Ordinal 83: GetPixel(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_83', 6, () => {
+  gdi.register('GetPixel', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1355,55 +1355,55 @@ export function registerWin16Gdi(emu: Emulator): void {
       } catch { /* empty */ }
     }
     return 0;
-  });
+  }, 83);
 
   // Ordinal 84: GetPolyFillMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_84', 2, () => {
+  gdi.register('GetPolyFillMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.polyFillMode ?? 1;
-  });
+  }, 84);
 
   // Ordinal 85: GetROP2(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_85', 2, () => {
+  gdi.register('GetROP2', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.rop2 ?? 13;
-  });
+  }, 85);
 
   // Ordinal 86: GetRelAbs(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_86', 2, () => 1); // ABSOLUTE
+  gdi.register('GetRelAbs', 2, () => 1, 86); // ABSOLUTE
 
   // Ordinal 87: GetStockObject(fnObject) — pascal -ret16, 2 bytes
-  gdi.register('ord_87', 2, () => {
+  gdi.register('GetStockObject', 2, () => {
     const fnObject = emu.readArg16(0);
     return 0x8000 + fnObject;
-  });
+  }, 87);
 
   // Ordinal 88: GetStretchBltMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_88', 2, () => {
+  gdi.register('GetStretchBltMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.stretchBltMode ?? 1;
-  });
+  }, 88);
 
   // Ordinal 89: GetTextCharacterExtra(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_89', 2, () => {
+  gdi.register('GetTextCharacterExtra', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.textCharExtra ?? 0;
-  });
+  }, 89);
 
   // Ordinal 90: GetTextColor(hdc) — pascal, 2 bytes
-  gdi.register('ord_90', 2, () => {
+  gdi.register('GetTextColor', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.textColor : 0;
-  });
+  }, 90);
 
   // Ordinal 91: GetTextExtent(hdc, lpString_ptr, nCount) — pascal, 8 bytes (2+4+2)
   // Returns DWORD: HIWORD=height, LOWORD=width
-  gdi.register('ord_91', 8, () => {
+  gdi.register('GetTextExtent', 8, () => {
     const [hdc, lpString, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const fontSize = getFontSize(hdc);
     const dc = emu.getDC(hdc);
@@ -1415,10 +1415,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       width = Math.ceil(dc.ctx.measureText(text).width);
     }
     return ((fontSize & 0xFFFF) << 16) | (width & 0xFFFF);
-  });
+  }, 91);
 
   // Ordinal 92: GetTextFace(hdc, nCount, lpFaceName) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('ord_92', 8, () => {
+  gdi.register('GetTextFace', 8, () => {
     const [hdc, nCount, lpFaceName] = emu.readPascalArgs16([2, 2, 4]);
     if (lpFaceName && nCount > 0) {
       const face = 'System';
@@ -1429,11 +1429,11 @@ export function registerWin16Gdi(emu: Emulator): void {
       return Math.min(face.length, nCount - 1);
     }
     return 0;
-  });
+  }, 92);
 
   // Ordinal 93: GetTextMetrics(hdc, lptm_ptr) — pascal -ret16, 6 bytes (2+4)
   // TEXTMETRIC16: 24 bytes total
-  gdi.register('ord_93', 6, () => {
+  gdi.register('GetTextMetrics', 6, () => {
     const [hdc, lptm] = emu.readPascalArgs16([2, 4]);
     if (lptm) {
       const fontSize = getFontSize(hdc);
@@ -1472,49 +1472,49 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lptm + off, 96);            // tmDigitizedAspectY
     }
     return 1;
-  });
+  }, 93);
 
   // Ordinal 94: GetViewportExt(hdc) — pascal, 2 bytes
-  gdi.register('ord_94', 2, () => {
+  gdi.register('GetViewportExt', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const extX = dc?.viewportExtX ?? 1;
     const extY = dc?.viewportExtY ?? 1;
     return ((extY & 0xFFFF) << 16) | (extX & 0xFFFF);
-  });
+  }, 94);
 
   // Ordinal 95: GetViewportOrg(hdc) — pascal, 2 bytes
-  gdi.register('ord_95', 2, () => {
+  gdi.register('GetViewportOrg', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const orgX = dc?.viewportOrgX ?? 0;
     const orgY = dc?.viewportOrgY ?? 0;
     return ((orgY & 0xFFFF) << 16) | (orgX & 0xFFFF);
-  });
+  }, 95);
 
   // Ordinal 96: GetWindowExt(hdc) — pascal, 2 bytes
-  gdi.register('ord_96', 2, () => {
+  gdi.register('GetWindowExt', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const extX = dc?.windowExtX ?? 1;
     const extY = dc?.windowExtY ?? 1;
     return ((extY & 0xFFFF) << 16) | (extX & 0xFFFF);
-  });
+  }, 96);
 
   // Ordinal 97: GetWindowOrg(hdc) — pascal, 2 bytes
-  gdi.register('ord_97', 2, () => {
+  gdi.register('GetWindowOrg', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const orgX = dc?.windowOrgX ?? 0;
     const orgY = dc?.windowOrgY ?? 0;
     return ((orgY & 0xFFFF) << 16) | (orgX & 0xFFFF);
-  });
+  }, 97);
 
   // Ordinal 98: IntersectVisRect(hdc, l, t, r, b) — pascal -ret16, 10 bytes
-  gdi.register('ord_98', 10, () => SIMPLEREGION);
+  gdi.register('IntersectVisRect', 10, () => SIMPLEREGION, 98);
 
   // Ordinal 99: LPtoDP(hdc, lpPoints, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_99', 8, () => {
+  gdi.register('LPtoDP', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lpPoints) return 0;
@@ -1534,28 +1534,28 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(addr + 2, dpY);
     }
     return 1;
-  });
+  }, 99);
 
   // Ordinal 100: LineDDA(x1, y1, x2, y2, lpLineFunc, lParam) — pascal -ret16, 16 bytes (2+2+2+2+4+4)
-  gdi.register('ord_100', 16, () => 0);
+  gdi.register('LineDDA', 16, () => 0, 100);
 
   // Ordinal 101: OffsetRgn(hRgn, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_101', 6, () => SIMPLEREGION);
+  gdi.register('OffsetRgn', 6, () => SIMPLEREGION, 101);
 
   // Ordinal 102: OffsetVisRgn(hdc, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_102', 6, () => SIMPLEREGION);
+  gdi.register('OffsetVisRgn', 6, () => SIMPLEREGION, 102);
 
   // Ordinal 103: PtVisible(hdc, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_103', 6, () => 1);
+  gdi.register('PtVisible', 6, () => 1, 103);
 
   // Ordinal 104: RectVisibleOld(hdc, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_104', 6, () => 1);
+  gdi.register('RectVisibleOld', 6, () => 1, 104);
 
   // Ordinal 105: SelectVisRgn(hdc, hRgn) — pascal -ret16, 4 bytes
-  gdi.register('ord_105', 4, () => SIMPLEREGION);
+  gdi.register('SelectVisRgn', 4, () => SIMPLEREGION, 105);
 
   // Ordinal 106: SetBitmapBits(hBitmap, cbBuffer, lpBits) — pascal, 10 bytes (2+4+4)
-  gdi.register('ord_106', 10, () => {
+  gdi.register('SetBitmapBits', 10, () => {
     const [hBitmap, cbBuffer, lpBits] = emu.readPascalArgs16([2, 4, 4]);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     if (!bmp || !lpBits || cbBuffer <= 0) return 0;
@@ -1568,35 +1568,35 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
     bmp.ctx.putImageData(imgData, 0, 0);
     return total;
-  });
+  }, 106);
 
   // Ordinal 117: SetDCOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_117', 6, () => 0);
+  gdi.register('SetDCOrg', 6, () => 0, 117);
 
   // Ordinal 119: AddFontResource(lpFilename) — pascal -ret16, 4 bytes
-  gdi.register('ord_119', 4, () => 1);
+  gdi.register('AddFontResource', 4, () => 1, 119);
 
   // Ordinal 128: MulDiv(nNumber, nNumerator, nDenominator) — pascal -ret16, 6 bytes
-  gdi.register('ord_128', 6, () => {
+  gdi.register('MulDiv', 6, () => {
     const [nNumber, nNumerator, nDenominator] = emu.readPascalArgs16([2, 2, 2]);
     const a = (nNumber << 16) >> 16;
     const b = (nNumerator << 16) >> 16;
     const c = (nDenominator << 16) >> 16;
     if (c === 0) return -1;
     return Math.round((a * b) / c) & 0xFFFF;
-  });
+  }, 128);
 
   // Ordinal 129: SaveVisRgn(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_129', 2, () => 1);
+  gdi.register('SaveVisRgn', 2, () => 1, 129);
 
   // Ordinal 130: RestoreVisRgn(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_130', 2, () => SIMPLEREGION);
+  gdi.register('RestoreVisRgn', 2, () => SIMPLEREGION, 130);
 
   // Ordinal 131: InquireVisRgn(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_131', 2, () => emu.handles.alloc('region', {}));
+  gdi.register('InquireVisRgn', 2, () => emu.handles.alloc('region', {}), 131);
 
   // Ordinal 134: GetRgnBox(hRgn, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_134', 6, () => {
+  gdi.register('GetRgnBox', 6, () => {
     const [hRgn, lpRect] = emu.readPascalArgs16([2, 4]);
     if (lpRect) {
       emu.memory.writeI16(lpRect, 0);
@@ -1605,13 +1605,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpRect + 6, 480);
     }
     return SIMPLEREGION;
-  });
+  }, 134);
 
   // Ordinal 136: RemoveFontResource(lpFilename) — pascal -ret16, 4 bytes
-  gdi.register('ord_136', 4, () => 1);
+  gdi.register('RemoveFontResource', 4, () => 1, 136);
 
   // Ordinal 148: SetBrushOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('ord_148', 6, () => {
+  gdi.register('SetBrushOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1622,10 +1622,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((oldY & 0xFFFF) << 16) | (oldX & 0xFFFF);
     }
     return 0;
-  });
+  }, 148);
 
   // Ordinal 149: GetBrushOrg(hdc) — pascal, 2 bytes
-  gdi.register('ord_149', 2, () => {
+  gdi.register('GetBrushOrg', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1634,51 +1634,51 @@ export function registerWin16Gdi(emu: Emulator): void {
       return ((orgY & 0xFFFF) << 16) | (orgX & 0xFFFF);
     }
     return 0;
-  });
+  }, 149);
 
   // Ordinal 150: UnrealizeObject(hObj) — pascal -ret16, 2 bytes
-  gdi.register('ord_150', 2, () => 1);
+  gdi.register('UnrealizeObject', 2, () => 1, 150);
 
   // Ordinal 153: CreateIC(lpDriverName, lpDeviceName, lpOutput, lpInitData) — pascal -ret16, 16 bytes (4+4+4+4)
-  gdi.register('ord_153', 16, () => createMemDC());
+  gdi.register('CreateIC', 16, () => createMemDC(), 153);
 
   // Ordinal 154: GetNearestColor(hdc, crColor) — pascal, 6 bytes (2+4)
-  gdi.register('ord_154', 6, () => {
+  gdi.register('GetNearestColor', 6, () => {
     const [hdc, crColor] = emu.readPascalArgs16([2, 4]);
     return crColor;
-  });
+  }, 154);
 
   // Ordinal 156: CreateDiscardableBitmap(hdc, w, h) — pascal -ret16, 6 bytes
-  gdi.register('ord_156', 6, () => {
+  gdi.register('CreateDiscardableBitmap', 6, () => {
     const [hdc, w, h] = emu.readPascalArgs16([2, 2, 2]);
     const canvas = new OffscreenCanvas(w || 1, h || 1);
     const ctx = canvas.getContext('2d')!;
     const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
-  });
+  }, 156);
 
   // Ordinal 161: PtInRegion(hRgn, x, y) — pascal -ret16, 6 bytes
-  gdi.register('ord_161', 6, () => 0);
+  gdi.register('PtInRegion', 6, () => 0, 161);
 
   // Ordinal 162: GetBitmapDimension(hBitmap) — pascal, 2 bytes
-  gdi.register('ord_162', 2, () => {
+  gdi.register('GetBitmapDimension', 2, () => {
     const hbmp = emu.readArg16(0);
     const bmp = emu.handles.get<BitmapInfo>(hbmp);
     if (bmp) return ((bmp.height & 0xFFFF) << 16) | (bmp.width & 0xFFFF);
     return 0;
-  });
+  }, 162);
 
   // Ordinal 163: SetBitmapDimension(hBitmap, x, y) — pascal, 6 bytes
-  gdi.register('ord_163', 6, () => 0);
+  gdi.register('SetBitmapDimension', 6, () => 0, 163);
 
   // Ordinal 172: SetRectRgn(hRgn, l, t, r, b) — pascal -ret16, 10 bytes
-  gdi.register('ord_172', 10, () => 1);
+  gdi.register('SetRectRgn', 10, () => 1, 172);
 
   // Ordinal 173: GetClipRgn(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_173', 2, () => 0);
+  gdi.register('GetClipRgn', 2, () => 0, 173);
 
   // Ordinal 307: GetCharABCWidths(hdc, uFirstChar, uLastChar, lpabc) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_307', 10, () => {
+  gdi.register('GetCharABCWidths', 10, () => {
     const [hdc, uFirstChar, uLastChar, lpabc] = emu.readPascalArgs16([2, 2, 2, 4]);
     if (lpabc) {
       const dc = emu.getDC(hdc);
@@ -1695,20 +1695,20 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 307);
 
   // Ordinal 330: EnumFontFamilies(hdc, lpszFamily, lpEnumFontFamProc, lParam) — pascal -ret16, 14 bytes (2+4+4+4)
-  gdi.register('ord_330', 14, () => 0);
+  gdi.register('EnumFontFamilies', 14, () => 0, 330);
 
   // Ordinal 345: GetTextAlign(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_345', 2, () => {
+  gdi.register('GetTextAlign', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.textAlign ?? TA_LEFT;
-  });
+  }, 345);
 
   // Ordinal 346: SetTextAlign(hdc, fMode) — pascal -ret16, 4 bytes
-  gdi.register('ord_346', 4, () => {
+  gdi.register('SetTextAlign', 4, () => {
     const [hdc, fMode] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1717,10 +1717,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return TA_LEFT;
-  });
+  }, 346);
 
   // Ordinal 348: Chord(hdc, l, t, r, b, xR1, yR1, xR2, yR2) — pascal -ret16, 18 bytes
-  gdi.register('ord_348', 18, () => {
+  gdi.register('Chord', 18, () => {
     const [hdc, l, t, r, b, xR1, yR1, xR2, yR2] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1736,13 +1736,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       fillAndStroke(dc);
     }
     return 1;
-  });
+  }, 348);
 
   // Ordinal 349: SetMapperFlags(hdc, dwFlag) — pascal, 6 bytes (2+4)
-  gdi.register('ord_349', 6, () => 0);
+  gdi.register('SetMapperFlags', 6, () => 0, 349);
 
   // Ordinal 350: GetCharWidth(hdc, uFirstChar, uLastChar, lpBuffer) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_350', 10, () => {
+  gdi.register('GetCharWidth', 10, () => {
     const [hdc, uFirstChar, uLastChar, lpBuffer] = emu.readPascalArgs16([2, 2, 2, 4]);
     if (lpBuffer) {
       const dc = emu.getDC(hdc);
@@ -1756,10 +1756,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 350);
 
   // Ordinal 351: ExtTextOut(hdc, x, y, fuOptions, lprc, lpString, cbCount, lpDx) — pascal -ret16, 22 bytes
-  gdi.register('ord_351', 22, () => {
+  gdi.register('ExtTextOut', 22, () => {
     const [hdc, xRaw, yRaw, fuOptions, lprc, lpString, cbCount, lpDx] =
       emu.readPascalArgs16([2, 2, 2, 2, 4, 4, 2, 4]);
     const dc = emu.getDC(hdc);
@@ -1801,10 +1801,10 @@ export function registerWin16Gdi(emu: Emulator): void {
 
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 351);
 
   // Ordinal 360: CreatePalette(lpLogPalette) — pascal -ret16, 4 bytes
-  gdi.register('ord_360', 4, () => {
+  gdi.register('CreatePalette', 4, () => {
     const lpLogPalette = emu.readArg16DWord(0);
     if (lpLogPalette) {
       const count = emu.memory.readU16(lpLogPalette + 2);
@@ -1816,10 +1816,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return emu.handles.alloc('palette', pal);
     }
     return emu.handles.alloc('palette', { entries: new Uint8Array(0), count: 0 });
-  });
+  }, 360);
 
   // Ordinal 361: GDISelectPalette(hdc, hPal, bForceBackground) — pascal -ret16, 6 bytes
-  gdi.register('ord_361', 6, () => {
+  gdi.register('GDISelectPalette', 6, () => {
     const [hdc, hPal, bForce] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1828,13 +1828,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       return old;
     }
     return 0;
-  });
+  }, 361);
 
   // Ordinal 362: GDIRealizePalette(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_362', 2, () => 0);
+  gdi.register('GDIRealizePalette', 2, () => 0, 362);
 
   // Ordinal 363: GetPaletteEntries(hPal, wStartIndex, wNumEntries, lpPaletteEntries) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_363', 10, () => {
+  gdi.register('GetPaletteEntries', 10, () => {
     const [hPal, wStart, wNum, lpEntries] = emu.readPascalArgs16([2, 2, 2, 4]);
     const pal = emu.handles.get<PaletteInfo>(hPal);
     if (pal && lpEntries) {
@@ -1847,10 +1847,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       return count;
     }
     return 0;
-  });
+  }, 363);
 
   // Ordinal 364: SetPaletteEntries(hPal, wStartIndex, wNumEntries, lpPaletteEntries) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_364', 10, () => {
+  gdi.register('SetPaletteEntries', 10, () => {
     const [hPal, wStart, wNum, lpEntries] = emu.readPascalArgs16([2, 2, 2, 4]);
     const pal = emu.handles.get<PaletteInfo>(hPal);
     if (pal && lpEntries) {
@@ -1863,26 +1863,26 @@ export function registerWin16Gdi(emu: Emulator): void {
       return count;
     }
     return 0;
-  });
+  }, 364);
 
   // Ordinal 365: RealizeDefaultPalette(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_365', 2, () => 0);
+  gdi.register('RealizeDefaultPalette', 2, () => 0, 365);
 
   // Ordinal 366: UpdateColors(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_366', 2, () => 0);
+  gdi.register('UpdateColors', 2, () => 0, 366);
 
   // Ordinal 367: AnimatePalette(hPal, wStartIndex, wNumEntries, lpPaletteEntries) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_367', 10, () => 1);
+  gdi.register('AnimatePalette', 10, () => 1, 367);
 
   // Ordinal 368: ResizePalette(hPal, nEntries) — pascal -ret16, 4 bytes
-  gdi.register('ord_368', 4, () => 1);
+  gdi.register('ResizePalette', 4, () => 1, 368);
 
   // Ordinal 370: GetNearestPaletteIndex(hPal, crColor) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_370', 6, () => 0);
+  gdi.register('GetNearestPaletteIndex', 6, () => 0, 370);
 
   // Ordinal 372: ExtFloodFill(hdc, x, y, crColor, fuFillType) — pascal -ret16, 12 bytes (2+2+2+4+2)
   // fuFillType: FLOODFILLBORDER=0, FLOODFILLSURFACE=1
-  gdi.register('ord_372', 12, () => {
+  gdi.register('ExtFloodFill', 12, () => {
     const [hdc, x, y, crColor, fuFillType] = emu.readPascalArgs16([2, 2, 2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
@@ -1931,33 +1931,33 @@ export function registerWin16Gdi(emu: Emulator): void {
     dc.ctx.putImageData(imgData, 0, 0);
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 372);
 
   // Ordinal 373: SetSystemPaletteUse(hdc, wUsage) — pascal -ret16, 4 bytes
-  gdi.register('ord_373', 4, () => 1); // SYSPAL_STATIC
+  gdi.register('SetSystemPaletteUse', 4, () => 1); // SYSPAL_STATIC
 
   // Ordinal 374: GetSystemPaletteUse(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_374', 2, () => 1); // SYSPAL_STATIC
+  gdi.register('GetSystemPaletteUse', 2, () => 1); // SYSPAL_STATIC
 
   // Ordinal 375: GetSystemPaletteEntries(hdc, wStartIndex, wNumEntries, lpPaletteEntries) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_375', 10, () => 0);
+  gdi.register('GetSystemPaletteEntries', 10, () => 0, 375);
 
   // Ordinal 377: StartDoc(hdc, lpDocInfo) — pascal -ret16, 6 bytes (2+4)
   // NOTE: Ordinal 377 is StartDoc in the Wine spec, not CreateDIBitmap. CreateDIBitmap is 442.
-  gdi.register('ord_377', 6, () => 1);
+  gdi.register('StartDoc', 6, () => 1, 377);
 
   // Ordinal 378: EndDoc(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_378', 2, () => 1);
+  gdi.register('EndDoc', 2, () => 1, 378);
 
   // Ordinal 379: StartPage(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_379', 2, () => 1);
+  gdi.register('StartPage', 2, () => 1, 379);
 
   // Ordinal 380: EndPage(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_380', 2, () => 1);
+  gdi.register('EndPage', 2, () => 1, 380);
 
   // Ordinal 439: StretchDIBits(hdc, xDst, yDst, wDst, hDst, xSrc, ySrc, wSrc, hSrc, lpBits, lpBitsInfo, fuUsage, rop)
   // pascal -ret16, 28 bytes (2+2+2+2+2+2+2+2+2+4+4+2+4)
-  gdi.register('ord_439', 28, () => {
+  gdi.register('StretchDIBits', 28, () => {
     const [hdc, xDstRaw, yDstRaw, wDstRaw, hDstRaw, xSrcRaw, ySrcRaw, wSrcRaw, hSrcRaw, bitsPtr, bmiPtr, fuUsage, rop] =
       emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 2, 4]);
     const dc = emu.getDC(hdc);
@@ -2034,10 +2034,10 @@ export function registerWin16Gdi(emu: Emulator): void {
 
     emu.syncDCToCanvas(hdc);
     return absHSrc;
-  });
+  }, 439);
 
   // Ordinal 440: SetDIBits(hdc, hbmp, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse) — pascal -ret16, 18 bytes (2+2+2+2+4+4+2)
-  gdi.register('ord_440', 18, () => {
+  gdi.register('SetDIBits', 18, () => {
     const [hdc, hbmp, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse] =
       emu.readPascalArgs16([2, 2, 2, 2, 4, 4, 2]);
     const bmp = emu.handles.get<BitmapInfo>(hbmp);
@@ -2077,10 +2077,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
     bmp.ctx.putImageData(imgData, 0, 0);
     return lines;
-  });
+  }, 440);
 
   // Ordinal 441: GetDIBits(hdc, hbmp, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse) — pascal -ret16, 18 bytes (2+2+2+2+4+4+2)
-  gdi.register('ord_441', 18, () => {
+  gdi.register('GetDIBits', 18, () => {
     const [hdc, hbmp, uStartScan, cScanLines, lpvBits, lpbmi, _fuColorUse] =
       emu.readPascalArgs16([2, 2, 2, 2, 4, 4, 2]);
     const bmp = emu.handles.get<BitmapInfo>(hbmp);
@@ -2118,10 +2118,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return lines;
-  });
+  }, 441);
 
   // Ordinal 442: CreateDIBitmap(hdc, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage) — pascal -ret16, 20 bytes (2+4+4+4+4+2)
-  gdi.register('ord_442', 20, () => {
+  gdi.register('CreateDIBitmap', 20, () => {
     const [hdc, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage] =
       emu.readPascalArgs16([2, 4, 4, 4, 4, 2]);
     let w = 1, h = 1;
@@ -2158,11 +2158,11 @@ export function registerWin16Gdi(emu: Emulator): void {
     const ctx = canvas.getContext('2d')!;
     const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
-  });
+  }, 442);
 
   // Ordinal 443: SetDIBitsToDevice(hdc, xDst, yDst, cx, cy, xSrc, ySrc, startScan, numScans, lpBits, lpBitsInfo, fuUsage)
   // pascal -ret16, 24 bytes (2+2+2+2+2+2+2+2+2+4+4+2)
-  gdi.register('ord_443', 24, () => {
+  gdi.register('SetDIBitsToDevice', 24, () => {
     const [hdc, xDest, yDest, width, height, xSrc, ySrc, startScan, numScans, bitsPtr, bmiPtr, fuUsage] =
       emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 2]);
     const dc = emu.getDC(hdc);
@@ -2208,19 +2208,19 @@ export function registerWin16Gdi(emu: Emulator): void {
     dc.ctx.putImageData(imgData, (xDest << 16) >> 16, (yDest << 16) >> 16);
     emu.syncDCToCanvas(hdc);
     return drawH;
-  });
+  }, 443);
 
   // Ordinal 444: CreateRoundRectRgn(l, t, r, b, w, h) — pascal -ret16, 12 bytes
-  gdi.register('ord_444', 12, () => emu.handles.alloc('region', {}));
+  gdi.register('CreateRoundRectRgn', 12, () => emu.handles.alloc('region', {}), 444);
 
   // Ordinal 445: CreateDIBPatternBrush(hGlobal, fuColorSpec) — pascal -ret16, 4 bytes
-  gdi.register('ord_445', 4, () => {
+  gdi.register('CreateDIBPatternBrush', 4, () => {
     const brush: BrushInfo = { color: 0, isNull: false };
     return emu.handles.alloc('brush', brush);
-  });
+  }, 445);
 
   // Ordinal 450: PolyPolygon(hdc, lpPoints, lpPolyCounts, nCount) — pascal -ret16, 12 bytes (2+4+4+2)
-  gdi.register('ord_450', 12, () => {
+  gdi.register('PolyPolygon', 12, () => {
     const [hdc, lpPoints, lpPolyCounts, nCount] = emu.readPascalArgs16([2, 4, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lpPoints || !lpPolyCounts || nCount <= 0) return 0;
@@ -2241,25 +2241,25 @@ export function registerWin16Gdi(emu: Emulator): void {
     fillAndStroke(dc);
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 450);
 
   // Ordinal 461: SetObjectOwner(hObj, hOwner) — pascal -ret16, 4 bytes
-  gdi.register('ord_461', 4, () => 1);
+  gdi.register('SetObjectOwner', 4, () => 1, 461);
 
   // Ordinal 462: IsGDIObject(hObj) — pascal -ret16, 2 bytes
-  gdi.register('ord_462', 2, () => {
+  gdi.register('IsGDIObject', 2, () => {
     const hObj = emu.readArg16(0);
     return emu.handles.getType(hObj) ? 1 : 0;
-  });
+  }, 462);
 
   // Ordinal 465: RectVisible(hdc, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_465', 6, () => 1);
+  gdi.register('RectVisible', 6, () => 1, 465);
 
   // Ordinal 466: RectInRegion(hRgn, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_466', 6, () => 0);
+  gdi.register('RectInRegion', 6, () => 0, 466);
 
   // Ordinal 468: GetBitmapDimensionEx(hbmp, lpDimension) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_468', 6, () => {
+  gdi.register('GetBitmapDimensionEx', 6, () => {
     const [hbmp, lpDimension] = emu.readPascalArgs16([2, 4]);
     if (lpDimension) {
       const bmp = emu.handles.get<BitmapInfo>(hbmp);
@@ -2271,10 +2271,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 468);
 
   // Ordinal 469: GetBrushOrgEx(hdc, lpPoint) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_469', 6, () => {
+  gdi.register('GetBrushOrgEx', 6, () => {
     const [hdc, lpPoint] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (lpPoint) {
@@ -2282,10 +2282,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpPoint + 2, dc?.brushOrgY ?? 0);
     }
     return 1;
-  });
+  }, 469);
 
   // Ordinal 470: GetCurrentPositionEx(hdc, lpPoint) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_470', 6, () => {
+  gdi.register('GetCurrentPositionEx', 6, () => {
     const [hdc, lpPoint] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (dc && lpPoint) {
@@ -2293,10 +2293,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpPoint + 2, dc.penPosY);
     }
     return 1;
-  });
+  }, 470);
 
   // Ordinal 471: GetTextExtentPoint(hdc, lpString, cbString, lpSize) — pascal -ret16, 12 bytes (2+4+2+4)
-  gdi.register('ord_471', 12, () => {
+  gdi.register('GetTextExtentPoint', 12, () => {
     const [hdc, lpString, cbString, lpSize] = emu.readPascalArgs16([2, 4, 2, 4]);
     if (lpSize) {
       const fontSize = getFontSize(hdc);
@@ -2312,10 +2312,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpSize + 2, fontSize);
     }
     return 1;
-  });
+  }, 471);
 
   // Ordinal 472: GetViewportExtEx(hdc, lpSize) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_472', 6, () => {
+  gdi.register('GetViewportExtEx', 6, () => {
     const [hdc, lpSize] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (lpSize) {
@@ -2323,10 +2323,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpSize + 2, dc?.viewportExtY ?? 1);
     }
     return 1;
-  });
+  }, 472);
 
   // Ordinal 473: GetViewportOrgEx(hdc, lpPoint) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_473', 6, () => {
+  gdi.register('GetViewportOrgEx', 6, () => {
     const [hdc, lpPoint] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (lpPoint) {
@@ -2334,10 +2334,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpPoint + 2, dc?.viewportOrgY ?? 0);
     }
     return 1;
-  });
+  }, 473);
 
   // Ordinal 474: GetWindowExtEx(hdc, lpSize) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_474', 6, () => {
+  gdi.register('GetWindowExtEx', 6, () => {
     const [hdc, lpSize] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (lpSize) {
@@ -2345,10 +2345,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpSize + 2, dc?.windowExtY ?? 1);
     }
     return 1;
-  });
+  }, 474);
 
   // Ordinal 475: GetWindowOrgEx(hdc, lpPoint) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_475', 6, () => {
+  gdi.register('GetWindowOrgEx', 6, () => {
     const [hdc, lpPoint] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (lpPoint) {
@@ -2356,10 +2356,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.memory.writeI16(lpPoint + 2, dc?.windowOrgY ?? 0);
     }
     return 1;
-  });
+  }, 475);
 
   // Ordinal 476: OffsetViewportOrgEx(hdc, x, y, lpPoint) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_476', 10, () => {
+  gdi.register('OffsetViewportOrgEx', 10, () => {
     const [hdc, x, y, lpPoint] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2371,10 +2371,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.viewportOrgY = (dc.viewportOrgY ?? 0) + ((y << 16) >> 16);
     }
     return 1;
-  });
+  }, 476);
 
   // Ordinal 477: OffsetWindowOrgEx(hdc, x, y, lpPoint) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_477', 10, () => {
+  gdi.register('OffsetWindowOrgEx', 10, () => {
     const [hdc, x, y, lpPoint] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2386,13 +2386,13 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.windowOrgY = (dc.windowOrgY ?? 0) + ((y << 16) >> 16);
     }
     return 1;
-  });
+  }, 477);
 
   // Ordinal 478: SetBitmapDimensionEx(hBitmap, x, y, lpSize) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_478', 10, () => 1);
+  gdi.register('SetBitmapDimensionEx', 10, () => 1, 478);
 
   // Ordinal 479: SetViewportExtEx(hdc, x, y, lpSize) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_479', 10, () => {
+  gdi.register('SetViewportExtEx', 10, () => {
     const [hdc, x, y, lpSize] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2404,10 +2404,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.viewportExtY = (y << 16) >> 16;
     }
     return 1;
-  });
+  }, 479);
 
   // Ordinal 480: SetViewportOrgEx(hdc, x, y, lpPoint) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_480', 10, () => {
+  gdi.register('SetViewportOrgEx', 10, () => {
     const [hdc, x, y, lpPoint] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2419,10 +2419,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.viewportOrgY = (y << 16) >> 16;
     }
     return 1;
-  });
+  }, 480);
 
   // Ordinal 481: SetWindowExtEx(hdc, x, y, lpSize) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_481', 10, () => {
+  gdi.register('SetWindowExtEx', 10, () => {
     const [hdc, x, y, lpSize] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2434,10 +2434,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.windowExtY = (y << 16) >> 16;
     }
     return 1;
-  });
+  }, 481);
 
   // Ordinal 482: SetWindowOrgEx(hdc, x, y, lpPoint) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_482', 10, () => {
+  gdi.register('SetWindowOrgEx', 10, () => {
     const [hdc, x, y, lpPoint] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2449,10 +2449,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.windowOrgY = (y << 16) >> 16;
     }
     return 1;
-  });
+  }, 482);
 
   // Ordinal 483: MoveToEx(hdc, x, y, lpPoint) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_483', 10, () => {
+  gdi.register('MoveToEx', 10, () => {
     const [hdc, x, y, lpPoint] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2464,10 +2464,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       dc.penPosY = (y << 16) >> 16;
     }
     return 1;
-  });
+  }, 483);
 
   // Ordinal 489: CreateDIBSection(hdc, lpbmi, fuUsage, lplpvBits, hSection, dwOffset) — pascal -ret16, 20 bytes (2+4+2+4+4+4)
-  gdi.register('ord_489', 20, () => {
+  gdi.register('CreateDIBSection', 20, () => {
     const [hdc, lpbmi, fuUsage, lplpvBits, hSection, dwOffset] =
       emu.readPascalArgs16([2, 4, 2, 4, 4, 4]);
     let w = 1, h = 1, bpp = 8;
@@ -2486,10 +2486,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     const ctx = canvas.getContext('2d')!;
     const bmp: BitmapInfo = { width: w, height: h, canvas, ctx, dibBitsPtr: pixelBuf, dibBpp: bpp };
     return emu.handles.alloc('bitmap', bmp);
-  });
+  }, 489);
 
   // Ordinal 502: PolyBezier(hdc, lppt, cPoints) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_502', 8, () => {
+  gdi.register('PolyBezier', 8, () => {
     const [hdc, lppt, cPoints] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lppt || cPoints < 4) return 0;
@@ -2514,10 +2514,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 502);
 
   // Ordinal 503: PolyBezierTo(hdc, lppt, cPoints) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_503', 8, () => {
+  gdi.register('PolyBezierTo', 8, () => {
     const [hdc, lppt, cPoints] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lppt || cPoints < 3) return 0;
@@ -2544,158 +2544,158 @@ export function registerWin16Gdi(emu: Emulator): void {
     }
     emu.syncDCToCanvas(hdc);
     return 1;
-  });
+  }, 503);
 
   // Ordinal 508: ExtSelectClipRgn(hdc, hRgn, fnMode) — pascal -ret16, 6 bytes
-  gdi.register('ord_508', 6, () => SIMPLEREGION);
+  gdi.register('ExtSelectClipRgn', 6, () => SIMPLEREGION, 508);
 
   // Ordinal 529: CreateHalftonePalette(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_529', 2, () => emu.handles.alloc('palette', { entries: new Uint8Array(0), count: 0 }));
+  gdi.register('CreateHalftonePalette', 2, () => emu.handles.alloc('palette', { entries: new Uint8Array(0), count: 0 }), 529);
 
   // Ordinal 612: GetTextCharset(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_612', 2, () => 0); // ANSI_CHARSET
+  gdi.register('GetTextCharset', 2, () => 0, 612); // ANSI_CHARSET
 
   // Ordinal 613: EnumFontFamiliesEx(hdc, lpLogFont, lpEnumFontFamExProc, lParam, dwFlags) — pascal -ret16, 18 bytes (2+4+4+4+4)
-  gdi.register('ord_613', 18, () => 0);
+  gdi.register('EnumFontFamiliesEx', 18, () => 0, 613);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Additional Wine-referenced GDI16 APIs
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Ordinal 121: Death(hdc) — pascal -ret16, 2 bytes (prepares for mode switch)
-  gdi.register('ord_121', 2, () => 1);
+  gdi.register('Death', 2, () => 1, 121);
 
   // Ordinal 122: Resurrection(hdc, w1, w2, w3, w4, w5, w6) — pascal -ret16, 14 bytes
-  gdi.register('ord_122', 14, () => 1);
+  gdi.register('Resurrection', 14, () => 1, 122);
 
   // Ordinal 123: PlayMetaFile(hdc, hmf) — pascal -ret16, 4 bytes
-  gdi.register('ord_123', 4, () => 1);
+  gdi.register('PlayMetaFile', 4, () => 1, 123);
 
   // Ordinal 124: GetMetaFile(lpFileName) — pascal -ret16, 4 bytes
-  gdi.register('ord_124', 4, () => 0);
+  gdi.register('GetMetaFile', 4, () => 0, 124);
 
   // Ordinal 125: CreateMetaFile(lpFileName) — pascal -ret16, 4 bytes
-  gdi.register('ord_125', 4, () => 0);
+  gdi.register('CreateMetaFile', 4, () => 0, 125);
 
   // Ordinal 126: CloseMetaFile(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_126', 2, () => 0);
+  gdi.register('CloseMetaFile', 2, () => 0, 126);
 
   // Ordinal 127: DeleteMetaFile(hmf) — pascal -ret16, 2 bytes
-  gdi.register('ord_127', 2, () => 1);
+  gdi.register('DeleteMetaFile', 2, () => 1, 127);
 
   // Ordinal 132: SetEnvironment(lpPortName, lpEnviron, nCount) — pascal -ret16, 10 bytes (4+4+2)
-  gdi.register('ord_132', 10, () => 0);
+  gdi.register('SetEnvironment', 10, () => 0, 132);
 
   // Ordinal 133: GetEnvironment(lpPortName, lpEnviron, nMaxCount) — pascal -ret16, 10 bytes (4+4+2)
-  gdi.register('ord_133', 10, () => 0);
+  gdi.register('GetEnvironment', 10, () => 0, 133);
 
   // Ordinal 151: CopyMetaFile(hmfSrc, lpFileName) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_151', 6, () => 0);
+  gdi.register('CopyMetaFile', 6, () => 0, 151);
 
   // Ordinal 155: QueryAbort(hdc, reserved) — pascal -ret16, 4 bytes
-  gdi.register('ord_155', 4, () => 1); // continue
+  gdi.register('QueryAbort', 4, () => 1); // continue
 
   // Ordinal 159: GetMetaFileBits(hmf) — pascal -ret16, 2 bytes
-  gdi.register('ord_159', 2, () => 0);
+  gdi.register('GetMetaFileBits', 2, () => 0, 159);
 
   // Ordinal 160: SetMetaFileBits(hMem) — pascal -ret16, 2 bytes
-  gdi.register('ord_160', 2, () => 0);
+  gdi.register('SetMetaFileBits', 2, () => 0, 160);
 
   // Ordinal 175: EnumMetaFile(hdc, hmf, lpMFFunc, lParam) — pascal -ret16, 12 bytes (2+2+4+4)
-  gdi.register('ord_175', 12, () => 1);
+  gdi.register('EnumMetaFile', 12, () => 1, 175);
 
   // Ordinal 176: PlayMetaFileRecord(hdc, lpHandleTable, lpMR, nHandles) — pascal -ret16, 12 bytes (2+4+4+2)
-  gdi.register('ord_176', 12, () => 1);
+  gdi.register('PlayMetaFileRecord', 12, () => 1, 176);
 
   // Ordinal 179: GetDCState(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_179', 2, () => 0);
+  gdi.register('GetDCState', 2, () => 0, 179);
 
   // Ordinal 180: SetDCState(hdc, hSavedDC) — pascal -ret16, 4 bytes
-  gdi.register('ord_180', 4, () => 0);
+  gdi.register('SetDCState', 4, () => 0, 180);
 
   // Ordinal 181: RectInRegion(hRgn, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_181', 6, () => 1);
+  gdi.register('RectInRegion', 6, () => 1, 181);
 
   // Ordinal 190: SetDCHook(hdc, hookProc, dwHookData) — pascal -ret16, 10 bytes (2+4+4)
-  gdi.register('ord_190', 10, () => 1);
+  gdi.register('SetDCHook', 10, () => 1, 190);
 
   // Ordinal 191: GetDCHook(hdc, lpHookData) — pascal, 6 bytes (2+4)
-  gdi.register('ord_191', 6, () => 0);
+  gdi.register('GetDCHook', 6, () => 0, 191);
 
   // Ordinal 192: SetHookFlags(hdc, flags) — pascal -ret16, 4 bytes
-  gdi.register('ord_192', 4, () => 0);
+  gdi.register('SetHookFlags', 4, () => 0, 192);
 
   // Ordinal 193: SetBoundsRect(hdc, lprcBounds, flags) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_193', 8, () => 0);
+  gdi.register('SetBoundsRect', 8, () => 0, 193);
 
   // Ordinal 194: GetBoundsRect(hdc, lprcBounds, flags) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('ord_194', 8, () => 0);
+  gdi.register('GetBoundsRect', 8, () => 0, 194);
 
   // Ordinal 196: SetMetaFileBitsBetter(hMem) — pascal -ret16, 2 bytes
-  gdi.register('ord_196', 2, () => 0);
+  gdi.register('SetMetaFileBitsBetter', 2, () => 0, 196);
 
   // Ordinal 308: GetOutlineTextMetrics(hdc, cbData, lpOTM) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('ord_308', 8, () => 0); // not supported
+  gdi.register('GetOutlineTextMetrics', 8, () => 0); // not supported
 
   // Ordinal 309: GetGlyphOutline(hdc, uChar, fuFormat, lpgm, cbBuffer, lpBuffer, lpmat2) — 22 bytes
-  gdi.register('ord_309', 22, () => 0xFFFFFFFF); // GDI_ERROR
+  gdi.register('GetGlyphOutline', 22, () => 0xFFFFFFFF); // GDI_ERROR
 
   // Ordinal 310: CreateScalableFontResource(fHidden, lpszResFile, lpszFontFile, lpszCurPath) — 16 bytes (2+4+4+4)
-  gdi.register('ord_310', 16, () => 0);
+  gdi.register('CreateScalableFontResource', 16, () => 0, 310);
 
   // Ordinal 311: GetFontData(hdc, dwTable, dwOffset, lpvBuffer, cbData) — 14 bytes (2+4+4+4+4→ wait, need to check)
-  gdi.register('ord_311', 14, () => 0xFFFFFFFF); // GDI_ERROR
+  gdi.register('GetFontData', 14, () => 0xFFFFFFFF); // GDI_ERROR
 
   // Ordinal 313: GetRasterizerCaps(lprs, cb) — pascal -ret16, 6 bytes (4+2)
-  gdi.register('ord_313', 6, () => {
+  gdi.register('GetRasterizerCaps', 6, () => {
     const [lprs, cb] = emu.readPascalArgs16([4, 2]);
     if (lprs && cb >= 4) {
       emu.memory.writeU16(lprs, 4);     // nSize
       emu.memory.writeU16(lprs + 2, 3); // wFlags: TT_AVAILABLE | TT_ENABLED
     }
     return 1;
-  });
+  }, 313);
 
   // Ordinal 332: GetKerningPairs(hdc, nNumPairs, lpkrnpair) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('ord_332', 8, () => 0);
+  gdi.register('GetKerningPairs', 8, () => 0, 332);
 
   // Ordinal 376: ResetDC(hdc, lpDevMode) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_376', 6, () => {
+  gdi.register('ResetDC', 6, () => {
     return emu.readArg16(0); // return the hdc
-  });
+  }, 376);
 
   // Ordinal 381: SetAbortProc(hdc, lpAbortProc) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_381', 6, () => 1);
+  gdi.register('SetAbortProc', 6, () => 1, 381);
 
   // Ordinal 382: AbortDoc(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_382', 2, () => 1);
+  gdi.register('AbortDoc', 2, () => 1, 382);
 
   // Ordinal 400: FastWindowFrame(hdc, lpRect, xWidth, yWidth, rop) — pascal -ret16, 14 bytes (2+4+2+2+4)
-  gdi.register('ord_400', 14, () => 1);
+  gdi.register('FastWindowFrame', 14, () => 1, 400);
 
   // Ordinal 403: GdiInit2(hInstance, hPrevInstance) — pascal -ret16, 4 bytes (2+2)
-  gdi.register('ord_403', 4, () => 1);
+  gdi.register('GdiInit2', 4, () => 1, 403);
 
   // Ordinal 405: FinalGdiInit(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_405', 2, () => 1);
+  gdi.register('FinalGdiInit', 2, () => 1, 405);
 
   // Ordinal 410: IsValidMetaFile(hmf) — pascal -ret16, 2 bytes
-  gdi.register('ord_410', 2, () => 0);
+  gdi.register('IsValidMetaFile', 2, () => 0, 410);
 
   // Ordinal 411: GetCurLogFont(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ord_411', 2, () => {
+  gdi.register('GetCurLogFont', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.selectedFont ?? 0;
-  });
+  }, 411);
 
   // Ordinal 451: CreatePolyPolygonRgn(lpPoints, lpPolyCounts, nCount, fnPolyFillMode) — pascal -ret16, 14 bytes (4+4+2+2→ but need check)
-  gdi.register('ord_451', 14, () => {
+  gdi.register('CreatePolyPolygonRgn', 14, () => {
     return emu.handles.alloc('region', { type: 'poly' });
-  });
+  }, 451);
 
   // Ordinal 484: ScaleViewportExtEx(hdc, xNum, xDenom, yNum, yDenom, lpSize) — pascal -ret16, 14 bytes (2+2+2+2+2+4)
-  gdi.register('ord_484', 14, () => {
+  gdi.register('ScaleViewportExtEx', 14, () => {
     const [hdc, xNum, xDenom, yNum, yDenom, lpSize] = emu.readPascalArgs16([2, 2, 2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2711,10 +2711,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 484);
 
   // Ordinal 485: ScaleWindowExtEx(hdc, xNum, xDenom, yNum, yDenom, lpSize) — pascal -ret16, 14 bytes (2+2+2+2+2+4)
-  gdi.register('ord_485', 14, () => {
+  gdi.register('ScaleWindowExtEx', 14, () => {
     const [hdc, xNum, xDenom, yNum, yDenom, lpSize] = emu.readPascalArgs16([2, 2, 2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2730,43 +2730,43 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
     return 1;
-  });
+  }, 485);
 
   // Ordinal 486: GetAspectRatioFilterEx(hdc, lpAspectRatio) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_486', 6, () => {
+  gdi.register('GetAspectRatioFilterEx', 6, () => {
     const [hdc, lpAspectRatio] = emu.readPascalArgs16([2, 4]);
     if (lpAspectRatio) {
       emu.memory.writeI16(lpAspectRatio, 0);
       emu.memory.writeI16(lpAspectRatio + 2, 0);
     }
     return 1;
-  });
+  }, 486);
 
   // Path operations (ordinals 511-522)
   // Ordinal 511: AbortPath(hdc) — 2 bytes
-  gdi.register('ord_511', 2, () => 1);
+  gdi.register('AbortPath', 2, () => 1, 511);
 
   // Ordinal 512: BeginPath(hdc) — 2 bytes
-  gdi.register('ord_512', 2, () => {
+  gdi.register('BeginPath', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) dc.ctx.beginPath();
     return 1;
-  });
+  }, 512);
 
   // Ordinal 513: CloseFigure(hdc) — 2 bytes
-  gdi.register('ord_513', 2, () => {
+  gdi.register('CloseFigure', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) dc.ctx.closePath();
     return 1;
-  });
+  }, 513);
 
   // Ordinal 514: EndPath(hdc) — 2 bytes
-  gdi.register('ord_514', 2, () => 1);
+  gdi.register('EndPath', 2, () => 1, 514);
 
   // Ordinal 515: FillPath(hdc) — 2 bytes
-  gdi.register('ord_515', 2, () => {
+  gdi.register('FillPath', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2778,24 +2778,24 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.syncDCToCanvas(hdc);
     }
     return 1;
-  });
+  }, 515);
 
   // Ordinal 516: FlattenPath(hdc) — 2 bytes
-  gdi.register('ord_516', 2, () => 1);
+  gdi.register('FlattenPath', 2, () => 1, 516);
 
   // Ordinal 517: GetPath(hdc, lpPoints, lpTypes, nSize) — pascal -ret16, 12 bytes (2+4+4+2)
-  gdi.register('ord_517', 12, () => -1); // error / no path
+  gdi.register('GetPath', 12, () => -1); // error / no path
 
   // Ordinal 518: PathToRegion(hdc) — 2 bytes
-  gdi.register('ord_518', 2, () => {
+  gdi.register('PathToRegion', 2, () => {
     return emu.handles.alloc('region', { type: 'path' });
-  });
+  }, 518);
 
   // Ordinal 519: SelectClipPath(hdc, mode) — pascal -ret16, 4 bytes
-  gdi.register('ord_519', 4, () => 1);
+  gdi.register('SelectClipPath', 4, () => 1, 519);
 
   // Ordinal 520: StrokeAndFillPath(hdc) — 2 bytes
-  gdi.register('ord_520', 2, () => {
+  gdi.register('StrokeAndFillPath', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2813,10 +2813,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.syncDCToCanvas(hdc);
     }
     return 1;
-  });
+  }, 520);
 
   // Ordinal 521: StrokePath(hdc) — 2 bytes
-  gdi.register('ord_521', 2, () => {
+  gdi.register('StrokePath', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -2829,43 +2829,43 @@ export function registerWin16Gdi(emu: Emulator): void {
       emu.syncDCToCanvas(hdc);
     }
     return 1;
-  });
+  }, 521);
 
   // Ordinal 522: WidenPath(hdc) — 2 bytes
-  gdi.register('ord_522', 2, () => 1);
+  gdi.register('WidenPath', 2, () => 1, 522);
 
   // Ordinal 524: GetArcDirection(hdc) — 2 bytes
-  gdi.register('ord_524', 2, () => 2); // AD_COUNTERCLOCKWISE
+  gdi.register('GetArcDirection', 2, () => 2); // AD_COUNTERCLOCKWISE
 
   // Ordinal 525: SetArcDirection(hdc, dir) — pascal -ret16, 4 bytes
-  gdi.register('ord_525', 4, () => 2); // return old direction
+  gdi.register('SetArcDirection', 4, () => 2); // return old direction
 
   // Ordinal 602: SetDIBColorTable(hdc, uStartIndex, cEntries, pColors) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_602', 10, () => {
+  gdi.register('SetDIBColorTable', 10, () => {
     const [hdc, uStartIndex, cEntries] = emu.readPascalArgs16([2, 2, 2, 4]);
     return cEntries;
-  });
+  }, 602);
 
   // Ordinal 603: GetDIBColorTable(hdc, uStartIndex, cEntries, pColors) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('ord_603', 10, () => 0);
+  gdi.register('GetDIBColorTable', 10, () => 0, 603);
 
   // Ordinal 604: SetSolidBrush(hBrush, color) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_604', 6, () => {
+  gdi.register('SetSolidBrush', 6, () => {
     const [hBrush, color] = emu.readPascalArgs16([2, 4]);
     const brush = emu.getBrush(hBrush);
     if (brush) brush.color = color;
     return 1;
-  });
+  }, 604);
 
   // Ordinal 607: GetRegionData(hRgn, dwCount, lpRgnData) — pascal, 10 bytes (2+4+4)
-  gdi.register('ord_607', 10, () => 0);
+  gdi.register('GetRegionData', 10, () => 0, 607);
 
   // Ordinal 609: GdiFreeResources(wFlags) — pascal -ret16, 4 bytes
-  gdi.register('ord_609', 4, () => 90); // 90% free
+  gdi.register('GdiFreeResources', 4, () => 90); // 90% free
 
   // Ordinal 616: GetFontLanguageInfo(hdc) — pascal, 2 bytes
-  gdi.register('ord_616', 2, () => 0);
+  gdi.register('GetFontLanguageInfo', 2, () => 0, 616);
 
   // Ordinal 1000: SetLayout(hdc, dwLayout) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('ord_1000', 6, () => 0);
+  gdi.register('SetLayout', 6, () => 0, 1000);
 }

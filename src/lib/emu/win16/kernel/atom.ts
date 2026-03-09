@@ -8,10 +8,10 @@ export function registerKernelAtom(kernel: Win16Module, emu: Emulator, state: Ke
   }
 
   // --- Ordinal 68: InitAtomTable(size) — 2 bytes (word) ---
-  kernel.register('ord_68', 2, () => 1);
+  kernel.register('InitAtomTable', 2, () => 1, 68);
 
   // --- Ordinal 69: FindAtom(str) — 4 bytes (str) ---
-  kernel.register('ord_69', 4, () => {
+  kernel.register('FindAtom', 4, () => {
     const lpString = emu.readArg16DWord(0);
     if (!lpString) return 0;
     const str = readAtomString(lpString);
@@ -24,10 +24,10 @@ export function registerKernelAtom(kernel: Win16Module, emu: Emulator, state: Ke
       if (name === str) return atom;
     }
     return 0;
-  });
+  }, 69);
 
   // --- Ordinal 70: AddAtom(str) — 4 bytes (str) ---
-  kernel.register('ord_70', 4, () => {
+  kernel.register('AddAtom', 4, () => {
     const lpString = emu.readArg16DWord(0);
     if (!lpString) return 0;
     const str = readAtomString(lpString);
@@ -43,17 +43,17 @@ export function registerKernelAtom(kernel: Win16Module, emu: Emulator, state: Ke
     const atom = state.nextAtom++;
     state.atomTable.set(atom, str);
     return atom;
-  });
+  }, 70);
 
   // --- Ordinal 71: DeleteAtom(word) — 2 bytes ---
-  kernel.register('ord_71', 2, () => {
+  kernel.register('DeleteAtom', 2, () => {
     const atom = emu.readArg16(0);
     if (atom >= 0xC000) state.atomTable.delete(atom);
     return 0;
-  });
+  }, 71);
 
   // --- Ordinal 72: GetAtomName(word ptr word) — 8 bytes (word+ptr+word) ---
-  kernel.register('ord_72', 8, () => {
+  kernel.register('GetAtomName', 8, () => {
     const [atom, lpBuffer, nSize] = emu.readPascalArgs16([2, 4, 2]);
     const buf = emu.resolveFarPtr(lpBuffer);
     const str = state.atomTable.get(atom);
@@ -67,11 +67,11 @@ export function registerKernelAtom(kernel: Win16Module, emu: Emulator, state: Ke
     }
     emu.memory.writeU8(buf + maxCopy, 0);
     return maxCopy;
-  });
+  }, 72);
 
   // --- Ordinal 73: GetAtomHandle(word) — 2 bytes ---
-  kernel.register('ord_73', 2, () => {
+  kernel.register('GetAtomHandle', 2, () => {
     const atom = emu.readArg16(0);
     return state.atomTable.has(atom) ? atom : 0;
-  });
+  }, 73);
 }

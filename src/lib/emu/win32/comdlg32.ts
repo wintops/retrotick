@@ -1,4 +1,5 @@
 import type { Emulator } from '../emulator';
+import type { WindowInfo } from './user32/types';
 import { emuCompleteThunk } from '../emu-exec';
 
 export function registerComdlg32(emu: Emulator): void {
@@ -158,7 +159,79 @@ export function registerComdlg32(emu: Emulator): void {
   comdlg32.register('GetOpenFileNameW', 1, () => doGetOpenFileName(true));
   comdlg32.register('GetSaveFileNameW', 1, () => doGetSaveFileName(true));
   comdlg32.register('ChooseFontW', 1, () => 0);
-  comdlg32.register('FindTextW', 1, () => 0);
+  // FINDREPLACEW struct offsets (Win32)
+  const FR_lStructSize      = 0x00; // DWORD
+  const FR_hwndOwner        = 0x04; // HWND
+  const FR_hInstance        = 0x08; // HINSTANCE
+  const FR_Flags            = 0x0C; // DWORD
+  const FR_lpstrFindWhat    = 0x10; // LPWSTR
+  const FR_lpstrReplaceWith = 0x14; // LPWSTR
+  const FR_wFindWhatLen     = 0x18; // WORD
+  const FR_wReplaceWithLen  = 0x1A; // WORD
+
+  // FINDREPLACE flags
+  const FR_DOWN      = 0x00000001;
+  const FR_MATCHCASE = 0x00000004;
+  const FR_FINDNEXT  = 0x00000008;
+  const FR_DIALOGTERM = 0x00000040;
+
+  const FINDMSGSTRING = 'commdlg_FindReplace';
+
+  function findEditChild(hwndOwner: number): number {
+    const owner = emu.handles.get<WindowInfo>(hwndOwner);
+    if (!owner?.childList) return 0;
+    for (const childHwnd of owner.childList) {
+      const child = emu.handles.get<WindowInfo>(childHwnd);
+      if (child?.classInfo?.className?.toUpperCase() === 'EDIT') return childHwnd;
+    }
+    return 0;
+  }
+
+  comdlg32.register('FindTextW', 1, () => {
+    const lpFr = emu.readArg(0);
+    console.log(`[FIND] FindTextW lpFr=0x${lpFr.toString(16)}`);
+    if (!lpFr) return 0;
+
+    const hwndOwner = emu.memory.readU32(lpFr + FR_hwndOwner);
+    const editHwnd = findEditChild(hwndOwner);
+
+    // Store the FINDREPLACEW pointer for later use
+    emu.findReplacePtr = lpFr;
+
+    // Create a fake dialog window handle for the Find dialog
+    const findDlgHwnd = emu.handles.alloc('window', {
+      classInfo: { className: '#32770' }, // standard dialog class
+      title: 'Find', visible: true, style: 0,
+      x: 0, y: 0, width: 0, height: 0,
+    } as WindowInfo);
+
+    // Show the HTML Find dialog
+    emu.onShowCommonDialog?.({
+      type: 'find',
+      editHwnd,
+      onClose: () => {
+        // Set FR_DIALOGTERM flag and notify owner
+        if (emu.findReplacePtr) {
+          const flags = emu.memory.readU32(emu.findReplacePtr + FR_Flags);
+          emu.memory.writeU32(emu.findReplacePtr + FR_Flags, (flags & ~FR_FINDNEXT) | FR_DIALOGTERM);
+          if (emu.registerWindowMessage) {
+            const msgId = emu.registerWindowMessage(FINDMSGSTRING);
+            emu.postMessage(hwndOwner, msgId, 0, emu.findReplacePtr);
+          }
+          emu.findReplacePtr = 0;
+        }
+        emu.handles.free(findDlgHwnd);
+      },
+    });
+
+    return findDlgHwnd;
+  });
+
+  comdlg32.register('FindTextA', 1, () => {
+    // Notepad uses FindTextW, but register A variant as stub
+    return 0;
+  });
+
   comdlg32.register('ReplaceTextW', 1, () => 0);
   comdlg32.register('PrintDlgExW', 1, () => 1); // E_FAIL
   comdlg32.register('GetFileTitleW', 3, () => 0);

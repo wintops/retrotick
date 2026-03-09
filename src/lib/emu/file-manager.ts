@@ -96,6 +96,31 @@ const KNOWN_DIRS = new Set([
   'D:\\',
 ]);
 
+/** Synthetic files that exist on C:\ for directory listings. Map<dir, files[]> */
+const KNOWN_FILES = new Map<string, { name: string; size: number }[]>([
+  ['C:\\', [
+    { name: 'AUTOEXEC.BAT', size: 128 },
+    { name: 'CONFIG.SYS', size: 64 },
+    { name: 'COMMAND.COM', size: 54619 },
+    { name: 'IO.SYS', size: 40566 },
+    { name: 'MSDOS.SYS', size: 9 },
+  ]],
+  ['C:\\WINDOWS', [
+    { name: 'WIN.INI', size: 3456 },
+    { name: 'SYSTEM.INI', size: 1024 },
+    { name: 'PROGMAN.INI', size: 512 },
+    { name: 'CONTROL.INI', size: 256 },
+    { name: 'WINFILE.INI', size: 128 },
+  ]],
+  ['C:\\WINDOWS\\SYSTEM', [
+    { name: 'GDI.EXE', size: 81920 },
+    { name: 'USER.EXE', size: 135168 },
+    { name: 'KRNL386.EXE', size: 59904 },
+    { name: 'SHELL.DLL', size: 32768 },
+    { name: 'COMMDLG.DLL', size: 49152 },
+  ]],
+]);
+
 // ---- Default implementation ----
 
 export class DefaultFileManager implements FileManager {
@@ -256,6 +281,16 @@ export class DefaultFileManager implements FileManager {
     if (resolved.length > 3 && resolved.endsWith('\\')) resolved = resolved.slice(0, -1);
     if (/^[A-Z]:\\?$/.test(resolved)) return FILE_ATTRIBUTE_DIRECTORY;
     if (KNOWN_DIRS.has(resolved)) return FILE_ATTRIBUTE_DIRECTORY;
+    // Check synthetic files in KNOWN_FILES
+    if (resolved.startsWith('C:\\')) {
+      const lastBS = resolved.lastIndexOf('\\');
+      const dir = resolved.substring(0, lastBS);
+      const fname = resolved.substring(lastBS + 1);
+      const knownFiles = KNOWN_FILES.get(dir);
+      if (knownFiles && knownFiles.some(f => f.name.toUpperCase() === fname)) {
+        return FILE_ATTRIBUTE_ARCHIVE;
+      }
+    }
     if (resolved.startsWith('Z:\\')) {
       if (this.externalFiles.has(resolved)) return FILE_ATTRIBUTE_ARCHIVE;
     }
@@ -368,6 +403,34 @@ export class DefaultFileManager implements FileManager {
         if (this.matchesPattern(fileName, filePat)) {
           const displayName = lastSep >= 0 ? name.substring(lastSep + 1) : name;
           results.push({ name: displayName, size: data.byteLength, isDir: false });
+        }
+      }
+    }
+
+    // Synthesize subdirectory and file entries for known C:\ paths
+    if (dirPart.startsWith('C:\\')) {
+      const dirNorm = dirPart.endsWith('\\') ? dirPart.slice(0, -1) : dirPart;
+      for (const kd of KNOWN_DIRS) {
+        if (kd === dirNorm) continue; // skip self
+        const parent = kd.substring(0, kd.lastIndexOf('\\'));
+        if (parent === dirNorm) {
+          const childName = kd.substring(kd.lastIndexOf('\\') + 1);
+          if (childName && this.matchesPattern(childName, filePat)) {
+            if (!results.some(e => e.name.toUpperCase() === childName.toUpperCase())) {
+              results.push({ name: childName, size: 0, isDir: true });
+            }
+          }
+        }
+      }
+      // Synthesize files from KNOWN_FILES
+      const knownFiles = KNOWN_FILES.get(dirNorm);
+      if (knownFiles) {
+        for (const kf of knownFiles) {
+          if (this.matchesPattern(kf.name, filePat)) {
+            if (!results.some(e => e.name.toUpperCase() === kf.name.toUpperCase())) {
+              results.push({ name: kf.name, size: kf.size, isDir: false });
+            }
+          }
         }
       }
     }

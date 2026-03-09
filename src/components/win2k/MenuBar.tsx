@@ -35,7 +35,7 @@ export function MenuDropdown({ items, onCommand, onClose, isSubmenu, x, y }: {
   return (
     <div
       ref={ref}
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
       style={{
         position: hasAbsPos ? 'fixed' : 'absolute',
         ...posStyle,
@@ -117,7 +117,7 @@ export function MenuBar({ menus, onCommand, onFocus }: { menus: MenuResult[]; on
 
   return (
     <div
-      onPointerDown={(e) => { onFocus?.(); e.stopPropagation(); }}
+      onPointerDown={(e) => { onFocus?.(); e.stopPropagation(); e.preventDefault(); }}
       style={{
         display: 'flex', flexWrap: 'wrap', background: '#D4D0C8', padding: '1px',
         userSelect: 'none', touchAction: 'none',
@@ -133,6 +133,7 @@ export function MenuBar({ menus, onCommand, onFocus }: { menus: MenuResult[]; on
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
+              e.preventDefault();
               if (item.children) {
                 setOpenIdx(openIdx === i ? null : i);
               }

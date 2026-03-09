@@ -233,6 +233,7 @@ export function registerComctl32(emu: Emulator): void {
       hMenu: 0, extraBytes: new Uint8Array(8), userData: 0, controlId: wID,
     };
     const hwnd = emu.handles.alloc('window', wnd);
+    wnd.hwnd = hwnd;
     if (parentWnd) {
       if (!parentWnd.children) parentWnd.children = new Map();
       parentWnd.children.set(wID, hwnd);
@@ -263,6 +264,7 @@ export function registerComctl32(emu: Emulator): void {
       statusTexts: text ? [text] : [],
     };
     const hwnd = emu.handles.alloc('window', wnd);
+    wnd.hwnd = hwnd;
     if (parentWnd) {
       if (!parentWnd.children) parentWnd.children = new Map();
       parentWnd.children.set(wID, hwnd);

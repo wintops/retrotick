@@ -234,7 +234,7 @@ export function registerMessage(emu: Emulator): void {
 
     // Track whether endPaint was called during WM_PAINT
     const trackPaint = message === WM_PAINT && hwnd === emu.mainWindow;
-    if (trackPaint) emu._dispatchPaintUsedBeginPaint = false;
+    if (trackPaint) { emu._dispatchPaintUsedBeginPaint = false; }
 
     // Call WndProc via stack frame replacement
     const ret = emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam);
@@ -579,6 +579,11 @@ export function registerMessage(emu: Emulator): void {
         if (end > text.length) end = text.length;
         wnd.editSelStart = start;
         wnd.editSelEnd = end;
+        // Sync selection to DOM textarea
+        if (wnd.domInput) {
+          wnd.domInput.selectionStart = start;
+          wnd.domInput.selectionEnd = end;
+        }
         return 0;
       }
       if (message === EM_REPLACESEL) {

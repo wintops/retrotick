@@ -39,6 +39,8 @@ export function registerSelect(emu: Emulator): void {
     if (objType === 'bitmap' || stockIdx === -1 && !objType) {
       const bmp = emu.handles.get<BitmapInfo>(hObj);
       if (bmp && bmp.width && bmp.height && bmp.canvas) {
+        // In Windows, bitmaps can only be selected into memory (compat) DCs, not window DCs
+        if (dc.canvas === emu.canvas) return 0;
         const old = dc.selectedBitmap;
         // Sync DC canvas content back to the old bitmap before deselecting
         if (old) {
@@ -52,7 +54,6 @@ export function registerSelect(emu: Emulator): void {
           }
         }
         dc.selectedBitmap = hObj;
-        // Resize the DC's canvas to match bitmap
         dc.canvas.width = bmp.width;
         dc.canvas.height = bmp.height;
         // Draw the bitmap content onto the DC

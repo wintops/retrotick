@@ -284,7 +284,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
   // The standard prolog "push ds; pop ax; nop" (1E 58 90) must be patched to
   // "mov ax, DGROUP_selector" (B8 xx xx) so DS gets set to the module's own data segment.
   if (autoDataSeg) {
-    const dgroupSelector = selectorBase + autoDataSeg - 1;
+    const dgroupSelector = segments[autoDataSeg - 1].selector;
     for (const seg of segments) {
       if (seg.flags & 0x01) continue; // skip DATA segments, only patch CODE segments
       const base = seg.linearBase;
@@ -292,7 +292,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
       // Scan for exported entry points and patch their prologs
       // ep.seg is 1-based local segment index; convert to global selector
       for (const [, ep] of entryPoints) {
-        const epSelector = selectorBase + ep.seg - 1;
+        const epSelector = segments[ep.seg - 1]?.selector ?? (selectorBase + ep.seg - 1);
         if (epSelector !== seg.selector) continue;
         const addr = base + ep.offset;
         if (memory.readU8(addr) === 0x1E && memory.readU8(addr + 1) === 0x58 &&
@@ -447,9 +447,9 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
   console.log(`[NE] API thunks: ${apiMap.size} entries, thunk range: 0x${THUNK_LINEAR_BASE.toString(16)}-0x${thunkAddr.toString(16)}`);
 
   // Map 1-based NE-header indices to actual selectors
-  const codeSegSelector = selectorBase + entryCS - 1;
-  const stackSegSelector = selectorBase + entrySS - 1;
-  const dataSegSelector = autoDataSeg ? (selectorBase + autoDataSeg - 1) : 0;
+  const codeSegSelector = segments[entryCS - 1]?.selector ?? 0;
+  const stackSegSelector = entrySS ? (segments[entrySS - 1]?.selector ?? 0) : 0;
+  const dataSegSelector = autoDataSeg ? (segments[autoDataSeg - 1]?.selector ?? 0) : 0;
 
   return {
     segments,

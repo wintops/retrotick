@@ -5,8 +5,7 @@ export function registerLocale(emu: Emulator): void {
   const kernel32 = emu.registerDll('KERNEL32.DLL');
 
   kernel32.register('GetACP', 0, () => {
-    const preset = getLocalePreset(loadSettings().localeId);
-    return preset.ansiCodePage;
+    return getLocalePreset(emu.configuredLcid).ansiCodePage;
   });
 
   kernel32.register('GetCPInfo', 2, () => {
@@ -95,30 +94,31 @@ export function registerLocale(emu: Emulator): void {
   });
 
   function getLocaleDefaults(): Record<number, string> {
-    const settings = loadSettings();
-    const preset = getLocalePreset(settings.localeId);
+    const preset = getLocalePreset(emu.configuredLcid);
     return {
       0x0001: '0',                      // LOCALE_ILANGUAGE
-      0x0002: preset.name,              // LOCALE_SLANGUAGE
-      0x000C: preset.listSep,           // LOCALE_SLIST
-      0x000D: preset.measure,           // LOCALE_IMEASURE
-      0x000E: settings.decimalSep,      // LOCALE_SDECIMAL
-      0x000F: settings.thousandsSep,     // LOCALE_STHOUSAND
-      0x0010: preset.grouping,          // LOCALE_SGROUPING
-      0x0011: preset.iDigits,           // LOCALE_IDIGITS
-      0x0012: preset.iLZero,            // LOCALE_ILZERO
-      0x001D: preset.dateSep,           // LOCALE_SDATE
-      0x001E: preset.timeSep,           // LOCALE_STIME
-      0x001F: settings.shortDateFmt,     // LOCALE_SSHORTDATE
-      0x0020: settings.longDateFmt,     // LOCALE_SLONGDATE
-      0x0023: preset.iTime,             // LOCALE_ITIME
-      0x0025: preset.iTLZero,           // LOCALE_ITLZERO
-      0x0028: preset.am,               // LOCALE_S1159
-      0x0029: preset.pm,               // LOCALE_S2359
-      0x1003: settings.timeFmt,         // LOCALE_STIMEFORMAT
+      0x0002: preset.name,
+      0x000C: preset.listSep,
+      0x000D: preset.measure,
+      0x000E: preset.decimalSep,
+      0x000F: preset.thousandsSep,
+      0x0010: preset.grouping,
+      0x0011: preset.iDigits,
+      0x0012: preset.iLZero,
+      0x001D: preset.dateSep,
+      0x001E: preset.timeSep,
+      0x001F: preset.shortDate,
+      0x0020: preset.longDate,
+      0x0023: preset.iTime,
+      0x0025: preset.iTLZero,
+      0x0028: preset.am,
+      0x0029: preset.pm,
+      0x1003: preset.timeFormat,
       0x1005: '0',                      // LOCALE_ITIMEMARKPOSN
     };
   }
+
+  const LOCALE_RETURN_NUMBER = 0x20000000;
 
   kernel32.register('GetLocaleInfoA', 4, () => {
     const _lcid = emu.readArg(0);
@@ -126,8 +126,17 @@ export function registerLocale(emu: Emulator): void {
     const buf = emu.readArg(2);
     const cchBuf = emu.readArg(3);
     const defaults = getLocaleDefaults();
-    const str = defaults[lcType & 0xFFFF] || '';
-    if (!str) return 0;
+    const key = lcType & 0xFFFF;
+    const hasKey = key in defaults;
+    if (!hasKey) return 0; // unknown locale type
+    const str = defaults[key];
+    if (lcType & LOCALE_RETURN_NUMBER) {
+      // Return numeric value as DWORD
+      const val = parseInt(str, 10) || 0;
+      if (cchBuf === 0) return 4; // sizeof(DWORD)
+      if (buf && cchBuf >= 4) emu.memory.writeU32(buf, val);
+      return 4;
+    }
     if (cchBuf === 0) return str.length + 1;
     if (buf && cchBuf > 0) {
       for (let i = 0; i < Math.min(str.length, cchBuf - 1); i++) {
@@ -143,7 +152,16 @@ export function registerLocale(emu: Emulator): void {
     const buf = emu.readArg(2);
     const cchBuf = emu.readArg(3);
     const defaults = getLocaleDefaults();
-    const str = defaults[lcType & 0xFFFF] || '';
+    const key = lcType & 0xFFFF;
+    const hasKey = key in defaults;
+    if (!hasKey) return 0; // unknown locale type
+    const str = defaults[key];
+    if (lcType & LOCALE_RETURN_NUMBER) {
+      const val = parseInt(str, 10) || 0;
+      if (cchBuf === 0) return 2; // sizeof(DWORD) in WCHARs
+      if (buf && cchBuf >= 2) emu.memory.writeU32(buf, val);
+      return 2;
+    }
     if (cchBuf === 0) return str.length + 1; // query size
     if (buf && cchBuf > 0) {
       for (let i = 0; i < Math.min(str.length, cchBuf - 1); i++) {
@@ -166,12 +184,12 @@ export function registerLocale(emu: Emulator): void {
     const valueStr = emu.memory.readUTF16String(lpValue);
 
     // Parse format or use locale defaults
-    const settings = loadSettings();
+    const nfPreset = getLocalePreset(emu.configuredLcid);
     let numDigits = 0;
     let leadingZero = 1;
     let grouping = 3;
-    let decSep = settings.decimalSep;
-    let thousandSep = settings.thousandsSep;
+    let decSep = nfPreset.decimalSep;
+    let thousandSep = nfPreset.thousandsSep;
     let negOrder = 1;
 
     if (lpFormat) {
@@ -234,15 +252,16 @@ export function registerLocale(emu: Emulator): void {
   });
 
   kernel32.register('GetOEMCP', 0, () => {
-    const preset = getLocalePreset(loadSettings().localeId);
-    return preset.oemCodePage;
+    return getLocalePreset(emu.configuredLcid).oemCodePage;
   });
-  kernel32.register('GetUserDefaultLCID', 0, () => loadSettings().localeId);
-  kernel32.register('GetSystemDefaultLCID', 0, () => loadSettings().localeId);
-  kernel32.register('GetThreadLocale', 0, () => loadSettings().localeId);
+  kernel32.register('GetUserDefaultLCID', 0, () => {
+    return emu.configuredLcid;
+  });
+  kernel32.register('GetSystemDefaultLCID', 0, () => emu.configuredLcid);
+  kernel32.register('GetThreadLocale', 0, () => emu.configuredLcid);
   kernel32.register('IsDBCSLeadByte', 1, () => 0);
   kernel32.register('IsDBCSLeadByteEx', 2, () => 0);
-  kernel32.register('GetUserDefaultLangID', 0, () => loadSettings().localeId & 0xFFFF);
+  kernel32.register('GetUserDefaultLangID', 0, () => emu.configuredLcid & 0xFFFF);
 
   // --- Date/Time formatting helpers ---
 
@@ -375,20 +394,19 @@ export function registerLocale(emu: Emulator): void {
     const lpBuf = emu.readArg(4);
     const cchBuf = emu.readArg(5);
 
-    const settings = loadSettings();
-    const preset = getLocalePreset(settings.localeId);
+    const dfwPreset = getLocalePreset(emu.configuredLcid);
     const st = readSystemTime(lpDate);
 
     let fmt: string;
     if (lpFormat) {
       fmt = emu.memory.readUTF16String(lpFormat);
     } else if (dwFlags & DATE_LONGDATE) {
-      fmt = settings.longDateFmt;
+      fmt = dfwPreset.longDate;
     } else {
-      fmt = settings.shortDateFmt;
+      fmt = dfwPreset.shortDate;
     }
 
-    const result = formatDatePicture(fmt, st, preset);
+    const result = formatDatePicture(fmt, st, dfwPreset);
 
     if (cchBuf === 0) return result.length + 1;
     if (lpBuf && cchBuf > 0) {
@@ -410,18 +428,17 @@ export function registerLocale(emu: Emulator): void {
     const lpBuf = emu.readArg(4);
     const cchBuf = emu.readArg(5);
 
-    const settings = loadSettings();
-    const preset = getLocalePreset(settings.localeId);
+    const tfwPreset = getLocalePreset(emu.configuredLcid);
     const st = readSystemTime(lpTime);
 
     let fmt: string;
     if (lpFormat) {
       fmt = emu.memory.readUTF16String(lpFormat);
     } else {
-      fmt = settings.timeFmt;
+      fmt = tfwPreset.timeFormat;
     }
 
-    const result = formatTimePicture(fmt, st, preset, dwFlags);
+    const result = formatTimePicture(fmt, st, tfwPreset, dwFlags);
 
     if (cchBuf === 0) return result.length + 1;
     if (lpBuf && cchBuf > 0) {
@@ -560,8 +577,8 @@ export function registerLocale(emu: Emulator): void {
   });
 
   // GetUserDefaultUILanguage / GetSystemDefaultUILanguage: return configured locale
-  kernel32.register('GetUserDefaultUILanguage', 0, () => loadSettings().localeId & 0xFFFF);
-  kernel32.register('GetSystemDefaultUILanguage', 0, () => loadSettings().localeId & 0xFFFF);
+  kernel32.register('GetUserDefaultUILanguage', 0, () => emu.configuredLcid & 0xFFFF);
+  kernel32.register('GetSystemDefaultUILanguage', 0, () => emu.configuredLcid & 0xFFFF);
 
   // SetThreadUILanguage: return the language passed in
   kernel32.register('SetThreadUILanguage', 1, () => {
@@ -618,20 +635,19 @@ export function registerLocale(emu: Emulator): void {
     const lpBuf = emu.readArg(4);
     const cchBuf = emu.readArg(5);
 
-    const settings = loadSettings();
-    const preset = getLocalePreset(settings.localeId);
+    const dfaPreset = getLocalePreset(emu.configuredLcid);
     const st = readSystemTime(lpDate);
 
     let fmt: string;
     if (lpFormat) {
       fmt = emu.memory.readCString(lpFormat);
     } else if (dwFlags & DATE_LONGDATE) {
-      fmt = settings.longDateFmt;
+      fmt = dfaPreset.longDate;
     } else {
-      fmt = settings.shortDateFmt;
+      fmt = dfaPreset.shortDate;
     }
 
-    const result = formatDatePicture(fmt, st, preset);
+    const result = formatDatePicture(fmt, st, dfaPreset);
 
     if (cchBuf === 0) return result.length + 1;
     if (lpBuf && cchBuf > 0) {
@@ -653,18 +669,17 @@ export function registerLocale(emu: Emulator): void {
     const lpBuf = emu.readArg(4);
     const cchBuf = emu.readArg(5);
 
-    const settings = loadSettings();
-    const preset = getLocalePreset(settings.localeId);
+    const tfaPreset = getLocalePreset(emu.configuredLcid);
     const st = readSystemTime(lpTime);
 
     let fmt: string;
     if (lpFormat) {
       fmt = emu.memory.readCString(lpFormat);
     } else {
-      fmt = settings.timeFmt;
+      fmt = tfaPreset.timeFormat;
     }
 
-    const result = formatTimePicture(fmt, st, preset, dwFlags);
+    const result = formatTimePicture(fmt, st, tfaPreset, dwFlags);
 
     if (cchBuf === 0) return result.length + 1;
     if (lpBuf && cchBuf > 0) {

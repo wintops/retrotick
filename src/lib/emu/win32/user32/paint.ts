@@ -12,7 +12,8 @@ export function registerPaint(emu: Emulator): void {
   // DC operations
   user32.register('GetDC', 1, () => {
     const hwnd = emu.readArg(0);
-    return emu.getWindowDC(hwnd);
+    const dc = emu.getWindowDC(hwnd);
+    return dc;
   });
 
   user32.register('GetDCEx', 3, () => {
@@ -78,8 +79,6 @@ export function registerPaint(emu: Emulator): void {
     const hwnd = emu.readArg(0);
     const _rectPtr = emu.readArg(1);
     const erase = emu.readArg(2);
-    // Just mark the window as needing paint — WM_PAINT is synthesized by GetMessage
-    // Skip if we're currently inside BeginPaint/EndPaint to avoid infinite WM_PAINT loop
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd && !wnd.painting) {
       wnd.needsPaint = true;

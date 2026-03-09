@@ -8,10 +8,13 @@ export function buildNEThunkTable(emu: Emulator): void {
     const key = `${info.dll}:${info.name}`;
     const def = emu.apiDefs.get(key);
     const stackBytes = def?.stackBytes ?? 0;
+    // Resolve human-readable name for ordinal-based thunks
+    const humanName = info.ordinal ? emu.ordinalNames.get(`${info.dll}:${info.ordinal}`) : undefined;
+    const displayName = humanName || info.name;
     if (!def) {
-      console.warn(`[NE THUNK] No API definition for ${key} — defaulting to stackBytes=0`);
+      console.warn(`[NE THUNK] No API definition for ${info.dll}:${displayName} (${key}) — defaulting to stackBytes=0`);
     }
-    emu.thunkToApi.set(addr, { dll: info.dll, name: info.name, stackBytes });
+    emu.thunkToApi.set(addr, { dll: info.dll, name: info.name, stackBytes, displayName });
   }
 
   console.log(`[NE] Thunk table built: ${emu.thunkToApi.size} entries`);

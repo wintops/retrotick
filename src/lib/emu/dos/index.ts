@@ -78,6 +78,17 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       return true;
     case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
+    case 0x25: // Absolute Disk Read — return error (drive not ready)
+    case 0x26: { // Absolute Disk Write — return error
+      // INT 25h/26h leave the original flags on the stack.
+      // The CPU already pushed flags+CS+IP for the INT instruction.
+      // These interrupts push an extra copy of flags that the caller must POPF.
+      cpu.push16(cpu.getFlags() & 0xFFFF);
+      // Return CF=1 with error code 0x02 (drive not ready) in AX
+      cpu.setFlag(0x001, true); // CF
+      cpu.setReg16(EAX, 0x0002);
+      return true;
+    }
     case XMS_INT: return handleXms(cpu, emu);
     default:
       if (cpu.realMode) {

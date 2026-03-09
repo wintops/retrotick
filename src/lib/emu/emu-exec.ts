@@ -596,7 +596,7 @@ export function emuTick(emu: Emulator): void {
           }
         }
       } else {
-        emu.haltReason = `Unimplemented API: ${key}`;
+        emu.haltReason = `Unimplemented API: ${thunk.dll}:${thunk.displayName || thunk.name}`;
         emu.halted = true;
         break;
       }

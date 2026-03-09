@@ -483,7 +483,6 @@ function renderControlOverlay(
     const multiline = !!(ctrl.style & 0x0004); // ES_MULTILINE
     const password = !!(ctrl.style & 0x0020);   // ES_PASSWORD
     const readonly = !!(ctrl.style & 0x0800);   // ES_READONLY
-    console.log(`[EDIT-RENDER] hwnd=0x${ctrl.childHwnd.toString(16)} class=${ctrl.className} style=0x${ctrl.style.toString(16)} readonly=${readonly} title="${ctrl.title}" hasEmuRef=${!!emuRef.current}`);
     const sunken = !!(ctrl.exStyle & WS_EX_CLIENTEDGE);
     const thinBorder = !sunken && !!(ctrl.style & WS_BORDER);
     const onTextChange = (text: string) => {
@@ -491,7 +490,6 @@ function renderControlOverlay(
       if (!emu) return;
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (wnd) {
-        console.log(`[EDIT] onTextChange hwnd=0x${ctrl.childHwnd.toString(16)} text="${text}"`);
         wnd.title = text;
         // Also update dialog controlValues so GetDlgItemInt/GetDlgItemText see it
         if (emu.dialogState && wnd.controlId !== undefined) {
@@ -504,9 +502,24 @@ function renderControlOverlay(
         emu.postMessage(wnd.parent, WM_COMMAND, wParam, ctrl.childHwnd);
       }
     };
+    const onEditRef = (el: HTMLTextAreaElement | HTMLInputElement | null) => {
+      const emu = emuRef.current;
+      if (!emu) return;
+      const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+      if (wnd) {
+        wnd.domInput = el ?? undefined;
+        if (el) {
+          // Save selection when textarea loses focus (e.g. menu click)
+          el.addEventListener('blur', () => {
+            wnd.editSelStart = el.selectionStart ?? 0;
+            wnd.editSelEnd = el.selectionEnd ?? 0;
+          });
+        }
+      }
+    };
     return (
       <div key={ctrl.childHwnd} style={posStyle}>
-        <Edit fontCSS={ctrlFont(ctrl)} text={ctrl.title} multiline={multiline} password={password} readonly={readonly} sunken={sunken} thinBorder={thinBorder} onTextChange={onTextChange} />
+        <Edit fontCSS={ctrlFont(ctrl)} text={ctrl.title} multiline={multiline} password={password} readonly={readonly} sunken={sunken} thinBorder={thinBorder} onTextChange={onTextChange} onRef={onEditRef} />
       </div>
     );
   }
@@ -553,8 +566,14 @@ function renderControlOverlay(
     const sendLBNotify = (emu: Emulator, code: number) => {
       const parent = getParentHwnd(emu);
       if (!parent) return;
-      const wParam = ((code << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
-      emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+      if (emu.isNE) {
+        // Win16 WM_COMMAND: wParam=controlId, lParam=MAKELONG(childHwnd, notifyCode)
+        const lParam = ((code & 0xFFFF) << 16) | (ctrl.childHwnd & 0xFFFF);
+        emu.postMessage(parent, WM_COMMAND, ctrl.controlId, lParam);
+      } else {
+        const wParam = ((code << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
+        emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+      }
     };
 
     const onItemClick = (idx: number, e: MouseEvent) => {
@@ -578,6 +597,7 @@ function renderControlOverlay(
         wnd.lbSelectedIndex = idx;
       }
       sendLBNotify(emu, LBN_SELCHANGE);
+      emu.notifyControlOverlays();
       const mainWnd = emu.handles.get<WindowInfo>(getParentHwnd(emu));
       if (mainWnd) mainWnd.needsPaint = true;
     };
@@ -1182,6 +1202,77 @@ function renderControlOverlay(
 }
 
 
+// --- Find Dialog ---
+
+function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focused, parentRef }: {
+  findTerm: string;
+  onTermChange: (v: string) => void;
+  onFindNext: () => void;
+  onClose: () => void;
+  focused?: boolean;
+  parentRef?: { current: HTMLDivElement | null };
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [initPos] = useState<{ x: number; y: number }>(() => {
+    const p = parentRef?.current?.getBoundingClientRect();
+    const cx = p ? p.left + p.width / 2 : window.innerWidth / 2;
+    const cy = p ? p.top + 60 : 80;
+    return { x: Math.max(0, cx - 175), y: cy };
+  });
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); onFindNext(); }
+    if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+  };
+
+  const btnStyle = {
+    minWidth: '72px', height: '23px',
+    background: '#D4D0C8', cursor: 'var(--win2k-cursor)',
+    border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF',
+    boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
+    fontFamily: '"Tahoma", "MS Sans Serif", sans-serif', fontSize: '11px',
+  };
+
+  return (
+    <div style={{ position: 'fixed', left: '0', top: '0', zIndex: 10000 }}>
+      <Window
+        title="Find"
+        style={WS_CAPTION | WS_SYSMENU}
+        clientW={370}
+        clientH={56}
+        focused={focused}
+        onClose={onClose}
+        draggable
+        initialPos={initPos}
+      >
+        <div style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center', fontFamily: '"Tahoma", "MS Sans Serif", sans-serif', fontSize: '11px' }}>
+          <label style={{ whiteSpace: 'nowrap' }}>Find what:</label>
+          <input
+            ref={inputRef}
+            type="text"
+            value={findTerm}
+            onInput={(e) => onTermChange((e.target as HTMLInputElement).value)}
+            onKeyDown={handleKeyDown}
+            style={{ flex: 1, height: '21px', border: '1px solid #7f9db9', padding: '1px 4px', fontFamily: 'inherit', fontSize: 'inherit', background: '#FFF' }}
+          />
+          <button
+            onClick={onFindNext}
+            disabled={!findTerm}
+            style={btnStyle}
+          >Find Next</button>
+          <button
+            onClick={onClose}
+            style={btnStyle}
+          >Cancel</button>
+        </div>
+      </Window>
+    </div>
+  );
+}
+
+
 // --- Main EmulatorView ---
 
 export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
@@ -1213,6 +1304,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [crashInfo, setCrashInfo] = useState<{ eip: string; description: string } | null>(null);
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
+  const [findTerm, setFindTerm] = useState('');
   const [modalFlashTrigger, setModalFlashTrigger] = useState(0);
   const flashModal = useCallback(() => setModalFlashTrigger(c => c + 1), []);
 
@@ -1587,6 +1679,85 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     };
   }, [arrayBuffer, peInfo, resetCount]);
 
+  // --- File open/save dialogs (trigger native browser UI) ---
+  useEffect(() => {
+    if (commonDialog?.type === 'file-open') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            commonDialog.onResult({ name: file.name, data: new Uint8Array(reader.result as ArrayBuffer) });
+            setCommonDialog(null);
+          };
+          reader.readAsArrayBuffer(file);
+        } else {
+          commonDialog.onResult(null);
+          setCommonDialog(null);
+        }
+      };
+      input.addEventListener('cancel', () => {
+        commonDialog.onResult(null);
+        setCommonDialog(null);
+      });
+      input.click();
+    }
+    if (commonDialog?.type === 'file-save') {
+      const name = prompt('Save as:', commonDialog.defaultName);
+      if (name) {
+        const blob = new Blob([commonDialog.content], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        commonDialog.onResult(name);
+      } else {
+        commonDialog.onResult(null);
+      }
+      setCommonDialog(null);
+    }
+  }, [commonDialog]);
+
+  // --- Find dialog: Find Next handler ---
+  const handleFindNext = useCallback(() => {
+    if (!commonDialog || commonDialog.type !== 'find' || !findTerm) return;
+    const emu = emuRef.current;
+    if (!emu) return;
+    const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
+    if (!wnd) return;
+    const text = wnd.domInput?.value || wnd.title || '';
+    const startPos = (emu.findState?.term === findTerm) ? (emu.findState.lastIndex + 1) : 0;
+    const idx = text.toLowerCase().indexOf(findTerm.toLowerCase(), startPos);
+    if (idx >= 0) {
+      emu.findState = { term: findTerm, lastIndex: idx };
+      wnd.editSelStart = idx;
+      wnd.editSelEnd = idx + findTerm.length;
+      if (wnd.domInput) {
+        wnd.domInput.focus();
+        wnd.domInput.setSelectionRange(idx, idx + findTerm.length);
+      }
+      emu.notifyControlOverlays();
+    } else {
+      emu.findState = { term: findTerm, lastIndex: -1 };
+      alert('Cannot find "' + findTerm + '"');
+    }
+    // Sync search term to FINDREPLACEW struct so menu "Find Next" (F3) also works
+    if (emu.findReplacePtr) {
+      const lpBuf = emu.memory.readU32(emu.findReplacePtr + 0x10); // lpstrFindWhat
+      const bufLen = emu.memory.readU16(emu.findReplacePtr + 0x18); // wFindWhatLen
+      if (lpBuf && bufLen > 0) {
+        const maxChars = Math.min(findTerm.length, Math.floor(bufLen / 2) - 1);
+        for (let i = 0; i < maxChars; i++) {
+          emu.memory.writeU16(lpBuf + i * 2, findTerm.charCodeAt(i));
+        }
+        emu.memory.writeU16(lpBuf + maxChars * 2, 0);
+      }
+    }
+  }, [commonDialog, findTerm]);
+
   // --- Resize drag handling ---
   const onResizeStart = useCallback((edge: string, e: PointerEvent) => {
     e.preventDefault();
@@ -1731,10 +1902,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // lParam: repeat count (1) | scanCode << 16 | extended << 24 | previous state << 30
       const scanCode = e.keyCode & 0xFF;
       const lParam = 1 | (scanCode << 16);
-      emu.postMessage(emu.mainWindow, WM_KEYDOWN, vk, lParam);
+      const target = emu.focusedWindow || emu.mainWindow;
+      emu.postMessage(target, WM_KEYDOWN, vk, lParam);
       // Also send WM_CHAR for printable characters
       if (e.key.length === 1 && !e.ctrlKey && !e.altKey) {
-        emu.postMessage(emu.mainWindow, WM_CHAR, e.key.charCodeAt(0), lParam);
+        emu.postMessage(target, WM_CHAR, e.key.charCodeAt(0), lParam);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -1750,7 +1922,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       emu.keyStates.delete(vk);
       const scanCode = e.keyCode & 0xFF;
       const lParam = 1 | (scanCode << 16) | (3 << 30); // transition + previous state
-      emu.postMessage(emu.mainWindow, WM_KEYUP, vk, lParam);
+      emu.postMessage(emu.focusedWindow || emu.mainWindow, WM_KEYUP, vk, lParam);
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -1899,6 +2071,15 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             onDismiss={() => { commonDialog.onDismiss(); setCommonDialog(null); }}
           />
         )}
+        {commonDialog?.type === 'find' && (
+          <FindDialog
+            findTerm={findTerm}
+            onTermChange={setFindTerm}
+            onFindNext={handleFindNext}
+            onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); }}
+            focused={focused}
+          />
+        )}
       </>
     );
   }
@@ -2002,6 +2183,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           flashTrigger={modalFlashTrigger}
           parentRef={desktopRef}
           onDismiss={() => { commonDialog.onDismiss(); setCommonDialog(null); }}
+        />
+      )}
+      {commonDialog?.type === 'find' && (
+        <FindDialog
+          findTerm={findTerm}
+          onTermChange={setFindTerm}
+          onFindNext={handleFindNext}
+          onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); }}
+          focused={focused}
+          parentRef={desktopRef}
         />
       )}
     </div>

@@ -79,7 +79,15 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
   }, []);
 
   useEffect(() => {
-    loadFiles();
+    loadFiles().then(() => {
+      const params = new URLSearchParams(window.location.search);
+      const autoOpen = params.get('open');
+      if (autoOpen) {
+        // Remove the param so it doesn't re-trigger on HMR
+        window.history.replaceState({}, '', window.location.pathname);
+        handleOpen(autoOpen, false);
+      }
+    });
     const onRefresh = () => { loadFiles(); };
     window.addEventListener('desktop-files-changed', onRefresh);
     return () => window.removeEventListener('desktop-files-changed', onRefresh);

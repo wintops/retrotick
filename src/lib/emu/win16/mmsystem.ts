@@ -6,8 +6,8 @@ export function registerWin16Mmsystem(emu: Emulator): void {
   const mmsystem = emu.registerModule16('MMSYSTEM');
 
   // Ordinal 2: sndPlaySound — stub (no sound)
-  mmsystem.register('ord_2', 6, () => 1);
+  mmsystem.register('sndPlaySound', 6, () => 1, 2);
 
   // Ordinal 401: PlaySound — stub (no sound)
-  mmsystem.register('ord_401', 10, () => 1);
+  mmsystem.register('PlaySound', 10, () => 1, 401);
 }

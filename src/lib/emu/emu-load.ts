@@ -32,8 +32,8 @@ import { registerImm32 } from './win32/imm32';
 import { registerNtdll } from './win32/ntdll';
 import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
+import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
-import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound } from './win16/index';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
 import { parsePE, extractExports } from '../pe';
@@ -315,6 +315,10 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     registerWin16Commdlg(emu);
     registerWin16Keyboard(emu);
     registerWin16Win87em(emu);
+    registerWin16Ver(emu);
+    registerWin16Commctrl(emu);
+    registerWin16Sconfig(emu);
+    registerWin16Lzexpand(emu);
 
     // Build thunk table for NE (includes thunks from loaded DLLs)
     buildNEThunkTable(emu);
@@ -381,6 +385,15 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
     emu.threads.push(mainThread);
     emu.currentThread = mainThread;
+
+    // NE (Win16) programs expect C: as the current drive
+    emu.currentDrive = 'C';
+    emu.currentDirs.set('C', 'C:\\');
+
+    // Allocate a default DTA for NE apps using DOS3Call (FindFirst/FindNext)
+    // The DTA is 43 bytes; place it in the heap area
+    const dtaAddr = emu.allocHeap(128);
+    emu._dosDTA = dtaAddr;
 
     console.log(`[EMU] NE loaded: entry=0x${emu.ne.entryPoint.toString(16)} CS=${emu.ne.codeSegSelector} SS=${emu.ne.stackSegSelector} DS=${emu.ne.dataSegSelector} heapBase=0x${emu.heapBase.toString(16)}`);
     return;
@@ -736,7 +749,8 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
   // Built-in modules handled by JS stubs — don't try to load these as DLLs
   const builtinModules = new Set([
     'KERNEL', 'USER', 'GDI', 'KEYBOARD', 'WIN87EM',
-    'SHELL', 'COMMDLG', 'DDEML', 'MMSYSTEM',
+    'SHELL', 'COMMDLG', 'DDEML', 'MMSYSTEM', 'LZEXPAND',
+    'SOUND',
   ]);
 
   // Store loaded DLL info for resolving imports
@@ -972,7 +986,7 @@ function findResourceInDir(emu: Emulator, imageBase: number, resRva: number, typ
         const cfgLcid = emu.configuredLcid;
         const cfgPrimary = cfgLcid & 0x3FF;
         let bestIdx = 0;
-        let bestScore = 1; // default: first found (score 1)
+        let bestScore = 0; // default: first found
         for (let k = 0; k < totalLangs; k++) {
           const langId = emu.memory.readU32(dir3 + 16 + k * 8);
           let score = 1;

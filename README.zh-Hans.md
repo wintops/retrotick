@@ -27,7 +27,7 @@ RetroTick 是一个完全使用 TypeScript 从零构建的 x86 虚拟机与 Wind
 - **x86 CPU 模拟器** — x87 FPU、惰性标志求值、32 位保护模式（平坦模型）和 16 位实模式（segment:offset 寻址、IVT、PSP）
 - **PE/NE/MZ 二进制加载器** — 解析文件头、映射节区、解析导入表、提取资源
 - **Win32 API 兼容层** — kernel32、user32、gdi32、advapi32、comctl32、comdlg32、shell32、msvcrt、opengl32、glu32、ddraw、ole32、oleaut32、winmm、winspool、ws2_32、version、psapi、shlwapi、iphlpapi、msacm32 等
-- **Win16 API 兼容层** — KERNEL、USER、GDI、SHELL、COMMDLG、MMSYSTEM、KEYBOARD、DDEML、WIN87EM
+- **Win16 API 兼容层** — KERNEL、USER、GDI、SHELL、COMMDLG、COMMCTRL、MMSYSTEM、KEYBOARD、DDEML、LZEXPAND、SOUND、VER、SCONFIG、WIN87EM
 - **DOS 中断模拟** — 为 MZ 可执行文件提供 INT 21h 服务
 - **OpenGL 1.x → WebGL2 转译** — 完整的立即模式管线，映射到 WebGL2，驱动 3D 屏幕保护程序
 - **窗口管理器** — 多窗口、Z 序、焦点、任务栏、消息分发、通用对话框

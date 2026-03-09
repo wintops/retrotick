@@ -58,6 +58,8 @@ export interface WindowInfo {
   lbItemData?: number[];
   lbSelectedIndex?: number;       // single-select: current selection (-1 = none)
   lbSelectedIndices?: Set<number>; // multi-select: set of selected indices
+  lbTopIndex?: number;             // first visible item index
+  lbItemHeight?: number;           // item height in pixels
   // ListView state
   listColumns?: ListViewColumn[];
   listItems?: ListViewItem[];
@@ -84,9 +86,12 @@ export interface WindowInfo {
   editSelEnd?: number;
   editLimit?: number;     // EM_LIMITTEXT limit (0 = default 30000/32KB)
   editModified?: boolean; // EM_SETMODIFY / EM_GETMODIFY
+  editBufferHandle?: number; // EM_GETHANDLE local heap handle
   ownerThreadId?: number; // thread that created this window
   /** Per-control canvas for custom drawing (overlay companion canvas) */
   domCanvas?: HTMLCanvasElement;
+  /** DOM input/textarea element for EDIT controls (clipboard operations) */
+  domInput?: HTMLTextAreaElement | HTMLInputElement;
   // Scroll bar state (SB_HORZ=0, SB_VERT=1)
   scrollInfo?: { min: number; max: number; pos: number; page: number }[];
 }

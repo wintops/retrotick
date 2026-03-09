@@ -17,7 +17,7 @@ export function registerWin16Win87em(emu: Emulator): void {
   // --- Ordinal 1: __fpMath() — register-based dispatch on BX ---
   // This is a register-based call; Wine dispatches on context->Ebx.
   // In our 16-bit emulator, BX holds the sub-operation code.
-  mod.register('ord_1', 0, () => {
+  mod.register('__fpMath', 0, () => {
     const cpu = emu.cpu;
     const op = cpu.getReg16(EBX);
 
@@ -68,14 +68,14 @@ export function registerWin16Win87em(emu: Emulator): void {
         break;
     }
     return 0;
-  });
+  }, 1);
 
   // --- Ordinal 3: __WinEm87Info(ptr, word) — 6 bytes (dword ptr + word) ---
-  mod.register('ord_3', 6, () => 0);
+  mod.register('__WinEm87Info', 6, () => 0, 3);
 
   // --- Ordinal 4: __WinEm87Restore(ptr, word) — 6 bytes ---
-  mod.register('ord_4', 6, () => 0);
+  mod.register('__WinEm87Restore', 6, () => 0, 4);
 
   // --- Ordinal 5: __WinEm87Save(ptr, word) — 6 bytes ---
-  mod.register('ord_5', 6, () => 0);
+  mod.register('__WinEm87Save', 6, () => 0, 5);
 }

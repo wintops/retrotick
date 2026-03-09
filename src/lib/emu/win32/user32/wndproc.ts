@@ -24,6 +24,9 @@ export function registerWndProc(emu: Emulator): void {
     return atom;
   }
 
+  // Expose for use by other modules (e.g. comdlg32 FindTextW)
+  emu.registerWindowMessage = registerMessage;
+
   user32.register('DefWindowProcA', 4, () => {
     const hwnd = emu.readArg(0);
     const message = emu.readArg(1);
