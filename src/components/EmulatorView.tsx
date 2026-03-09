@@ -7,7 +7,9 @@ import type { WindowInfo } from '../lib/emu/win32/user32/index';
 import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
 import { MessageBox, MsgBoxIcon, MB_ICONERROR } from './win2k/MessageBox';
 import { MenuBar } from './win2k/MenuBar';
-import { Window, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, getBorderWidth } from './win2k/Window';
+import { Window, WS_DLGFRAME, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, getBorderWidth } from './win2k/Window';
+import { getClientSize, getNonClientMetrics } from '../lib/emu/win32/user32/_helpers';
+import { Static } from './win2k/Static';
 import { AboutDialog } from './win2k/AboutDialog';
 import { ConsoleView } from './ConsoleView';
 import { renderControlOverlay } from './ControlOverlay';
@@ -1195,40 +1197,141 @@ function renderMdiChildOverlay(
   emuRef: { current: Emulator | null },
   setPressedControl: (id: number | null) => void,
   pressedControl: number | null,
-  onResizeStart?: (edge: string, e: PointerEvent) => void,
+  _onResizeStart: ((edge: string, e: PointerEvent) => void) | undefined,
+  mdiDrag?: { current: { hwnd: number; startX: number; startY: number; startWndX: number; startWndY: number } | null },
+  mdiResize?: { current: { hwnd: number; edge: string; startX: number; startY: number; startWndX: number; startWndY: number; startW: number; startH: number } | null },
+  zIndex?: number,
 ) {
-  const hasCaption = (ctrl.style & WS_CAPTION) === WS_CAPTION;
-  // Compute client area using emulator's metrics (not CSS metrics) for correct sizing
   const emu = emuRef.current;
   const isWin16 = !!emu?.isNE;
-  const bw = isWin16 ? 1 : getBorderWidth(ctrl.style);
-  const captionH = hasCaption ? (isWin16 ? 20 : 18) : 0;
+  const { bw, captionH } = getNonClientMetrics(ctrl.style, false, isWin16);
+  const isMaximized = !!ctrl.isMdiMaximized;
   const clientW = Math.max(0, ctrl.width - 2 * bw);
   const clientH = Math.max(0, ctrl.height - 2 * bw - captionH);
+
+  const activateMdiChild = () => {
+    const emu = emuRef.current;
+    if (!emu) return;
+    const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+    if (!childWnd) return;
+    const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
+    if (!mdiClient) return;
+    // Already active? skip
+    if ((mdiClient as any).mdiActiveChild === ctrl.childHwnd) return;
+    // Set active child
+    (mdiClient as any).mdiActiveChild = ctrl.childHwnd;
+    // Move to end of childList for z-ordering
+    if (mdiClient.childList) {
+      const idx = mdiClient.childList.indexOf(ctrl.childHwnd);
+      if (idx >= 0) {
+        mdiClient.childList.splice(idx, 1);
+        mdiClient.childList.push(ctrl.childHwnd);
+      }
+    }
+    emu.notifyControlOverlays();
+  };
+
+  const handleMaximize = () => {
+    const emu = emuRef.current;
+    if (!emu) return;
+    const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+    if (!childWnd) return;
+    const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
+    if (!mdiClient) return;
+    if (childWnd.maximized) {
+      // Restore to saved position or default
+      const saved = childWnd._preMaxRect ?? { x: 0, y: 0, w: 300, h: 200 };
+      childWnd.x = saved.x;
+      childWnd.y = saved.y;
+      childWnd.width = saved.w;
+      childWnd.height = saved.h;
+      childWnd._preMaxRect = undefined;
+      childWnd.maximized = false;
+    } else {
+      // Save pre-maximize state
+      childWnd._preMaxRect = { x: childWnd.x, y: childWnd.y, w: childWnd.width, h: childWnd.height };
+      // Maximize to fill MDICLIENT area
+      childWnd.x = 0;
+      childWnd.y = 0;
+      childWnd.width = mdiClient.width || (emu.canvas?.width ?? 640);
+      childWnd.height = mdiClient.height || (emu.canvas?.height ?? 480);
+      childWnd.maximized = true;
+    }
+    childWnd.needsPaint = true;
+    // Send WM_SIZE with wParam = SIZE_MAXIMIZED(2) or SIZE_RESTORED(0)
+    if (childWnd.wndProc) {
+      const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
+      const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+      if (emu.isNE) emu.callWndProc16(childWnd.wndProc, ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, lp);
+      else emu.callWndProc(childWnd.wndProc, ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, lp);
+    }
+    emu.notifyControlOverlays();
+  };
 
   return (
     <div key={ctrl.childHwnd} style={{
       position: 'absolute',
       left: `${ctrl.x}px`,
       top: `${ctrl.y}px`,
-      zIndex: 15,
-    }}>
+      zIndex: zIndex ?? 15,
+    }}
+    onPointerDown={activateMdiChild}
+    >
       <Window
         title={ctrl.title || ''}
         style={ctrl.style}
         clientW={clientW}
         clientH={clientH}
         clientBg="transparent"
-        focused={true}
+        focused={!!ctrl.isMdiActive}
+        maximized={isMaximized}
+        onTitleBarMouseDown={(e: PointerEvent) => {
+          if ((e.target as HTMLElement).closest('span[style*="border"]')) return;
+          if (isMaximized) return;
+          e.preventDefault();
+          activateMdiChild();
+          const childWnd = emuRef.current?.handles.get<WindowInfo>(ctrl.childHwnd);
+          if (childWnd && mdiDrag) {
+            mdiDrag.current = {
+              hwnd: ctrl.childHwnd,
+              startX: e.clientX, startY: e.clientY,
+              startWndX: childWnd.x, startWndY: childWnd.y,
+            };
+          }
+        }}
+        onTitleBarDblClick={handleMaximize}
+        onResizeStart={!isMaximized ? (edge: string, e: PointerEvent) => {
+          e.preventDefault();
+          activateMdiChild();
+          const childWnd = emuRef.current?.handles.get<WindowInfo>(ctrl.childHwnd);
+          if (childWnd && mdiResize) {
+            mdiResize.current = {
+              hwnd: ctrl.childHwnd, edge,
+              startX: e.clientX, startY: e.clientY,
+              startWndX: childWnd.x, startWndY: childWnd.y,
+              startW: childWnd.width, startH: childWnd.height,
+            };
+          }
+        } : undefined}
         onClose={() => {
+          emuRef.current?.postMessage(ctrl.childHwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+        }}
+        onMaximize={handleMaximize}
+        onMinimize={() => {
           const emu = emuRef.current;
-          if (emu) {
-            emu.postMessage(ctrl.childHwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+          if (!emu) return;
+          const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+          if (childWnd) {
+            childWnd.visible = false;
+            childWnd.minimized = true;
+            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+            if (mainWnd) mainWnd.needsPaint = true;
+            emu.notifyControlOverlays();
           }
         }}
       >
         {ctrl.mdiChildren?.map(childCtrl =>
-          renderControlOverlay(childCtrl, emuRef, setPressedControl, pressedControl, onResizeStart)
+          renderControlOverlay(childCtrl, emuRef, setPressedControl, pressedControl, _onResizeStart)
         )}
       </Window>
     </div>
@@ -1328,6 +1431,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [windowPos, setWindowPos] = useState({ x: 40, y: 10 });
   const resizeDrag = useRef<{ edge: string; startX: number; startY: number; startW: number; startH: number; startPosX: number; startPosY: number } | null>(null);
   const moveDrag = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
+  const mdiDrag = useRef<{ hwnd: number; startX: number; startY: number; startWndX: number; startWndY: number } | null>(null);
+  const mdiResize = useRef<{ hwnd: number; edge: string; startX: number; startY: number; startWndX: number; startWndY: number; startW: number; startH: number } | null>(null);
   const windowPosInitialized = useRef(false);
   const preMaxState = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const mouseIsDown = useRef(false);
@@ -1830,6 +1935,52 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
+      // MDI child move drag
+      const md = mdiDrag.current;
+      if (md) {
+        const emu = emuRef.current;
+        if (emu) {
+          const childWnd = emu.handles.get<WindowInfo>(md.hwnd);
+          if (childWnd) {
+            childWnd.x = md.startWndX + e.clientX - md.startX;
+            childWnd.y = md.startWndY + e.clientY - md.startY;
+            // Trigger main window repaint so canvas content follows the MDI child
+            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+            if (mainWnd) mainWnd.needsPaint = true;
+            emu.notifyControlOverlays();
+          }
+        }
+        return;
+      }
+      // MDI child resize drag
+      const mr = mdiResize.current;
+      if (mr) {
+        const emu = emuRef.current;
+        if (emu) {
+          const childWnd = emu.handles.get<WindowInfo>(mr.hwnd);
+          if (childWnd) {
+            const dx = e.clientX - mr.startX;
+            const dy = e.clientY - mr.startY;
+            let w = mr.startW, h = mr.startH;
+            let wx = mr.startWndX, wy = mr.startWndY;
+            if (mr.edge.includes('e')) w = mr.startW + dx;
+            if (mr.edge.includes('w')) { w = mr.startW - dx; wx = mr.startWndX + dx; }
+            if (mr.edge.includes('s')) h = mr.startH + dy;
+            if (mr.edge.includes('n')) { h = mr.startH - dy; wy = mr.startWndY + dy; }
+            if (w < 80) { if (mr.edge.includes('w')) wx -= 80 - w; w = 80; }
+            if (h < 40) { if (mr.edge.includes('n')) wy -= 40 - h; h = 40; }
+            childWnd.x = wx;
+            childWnd.y = wy;
+            childWnd.width = w;
+            childWnd.height = h;
+            childWnd.needsPaint = true;
+            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+            if (mainWnd) mainWnd.needsPaint = true;
+            emu.notifyControlOverlays();
+          }
+        }
+        return;
+      }
       // Move drag
       const m = moveDrag.current;
       if (m) {
@@ -1869,6 +2020,27 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       applyCanvasToEmu(w, h);
     };
     const onUp = () => {
+      if (mdiDrag.current) {
+        mdiDrag.current = null;
+        return;
+      }
+      if (mdiResize.current) {
+        const emu = emuRef.current;
+        const hwnd = mdiResize.current.hwnd;
+        mdiResize.current = null;
+        // Send WM_SIZE to the MDI child after resize
+        if (emu) {
+          const childWnd = emu.handles.get<WindowInfo>(hwnd);
+          if (childWnd?.wndProc) {
+            const isNE = emu.isNE;
+            const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, isNE);
+            const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+            if (isNE) emu.callWndProc16(childWnd.wndProc, hwnd, 0x0005, 0, lp);
+            else emu.callWndProc(childWnd.wndProc, hwnd, 0x0005, 0, lp);
+          }
+        }
+        return;
+      }
       if (moveDrag.current) { moveDrag.current = null; return; }
       resizeDrag.current = null;
     };
@@ -2181,9 +2353,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
               onContextMenu={(e) => e.preventDefault()}
             />
           )}
-          {!isConsole && controlOverlays.map((ctrl) =>
+          {!isConsole && controlOverlays.map((ctrl, idx) =>
             ctrl.isMdiChild
-              ? renderMdiChildOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart)
+              ? renderMdiChildOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart, mdiDrag, mdiResize, 15 + idx)
               : renderControlOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart)
           )}
         </div>

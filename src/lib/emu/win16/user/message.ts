@@ -800,6 +800,17 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       const WM_MDISETMENU = 0x0230;
       if (message === WM_MDIACTIVATE) {
         (wnd as any).mdiActiveChild = wParam;
+        // Move to end of childList for z-ordering (top = last)
+        if (wnd.childList) {
+          const idx = wnd.childList.indexOf(wParam);
+          if (idx >= 0) {
+            wnd.childList.splice(idx, 1);
+            wnd.childList.push(wParam);
+          }
+        }
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd) mainWnd.needsPaint = true;
+        emu.notifyControlOverlays();
         return 0;
       }
       if (message === WM_MDIDESTROY) {

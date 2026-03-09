@@ -107,6 +107,12 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
     if (isMdiChild) {
       overlay.isMdiChild = true;
       overlay.mdiChildren = [];
+      // Check if this MDI child is the active one
+      const mdiClient = emu.handles.get<WindowInfo>(child.parent);
+      if (mdiClient && (mdiClient as any).mdiActiveChild === childHwnd) {
+        overlay.isMdiActive = true;
+      }
+      if (child.maximized) overlay.isMdiMaximized = true;
       mdiChildMap.set(childHwnd, overlay);
       overlays.push(overlay);
     } else if (mdiParentHwnd) {

@@ -405,6 +405,15 @@ export function registerMessage(emu: Emulator): void {
 
       if (message === WM_MDIACTIVATE) {
         (wnd as any).mdiActiveChild = wParam;
+        // Move to end of childList for z-ordering
+        if (wnd.childList) {
+          const idx = wnd.childList.indexOf(wParam);
+          if (idx >= 0) {
+            wnd.childList.splice(idx, 1);
+            wnd.childList.push(wParam);
+          }
+        }
+        emu.notifyControlOverlays();
         return 0;
       }
 
