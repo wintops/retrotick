@@ -1258,13 +1258,9 @@ function renderMdiChildOverlay(
       childWnd.maximized = true;
     }
     childWnd.needsPaint = true;
-    // Send WM_SIZE with wParam = SIZE_MAXIMIZED(2) or SIZE_RESTORED(0)
-    if (childWnd.wndProc) {
-      const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
-      const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      if (emu.isNE) emu.callWndProc16(childWnd.wndProc, ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, lp);
-      else emu.callWndProc(childWnd.wndProc, ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, lp);
-    }
+    // Queue WM_SIZE via postMessage (safe from browser event handlers)
+    const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
+    emu.postMessage(ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, makeLParam(cw, ch)); // WM_SIZE
     emu.notifyControlOverlays();
   };
 
@@ -2028,15 +2024,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         const emu = emuRef.current;
         const hwnd = mdiResize.current.hwnd;
         mdiResize.current = null;
-        // Send WM_SIZE to the MDI child after resize
+        // Queue WM_SIZE via postMessage (safe from browser event handlers)
         if (emu) {
           const childWnd = emu.handles.get<WindowInfo>(hwnd);
-          if (childWnd?.wndProc) {
-            const isNE = emu.isNE;
-            const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, isNE);
-            const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-            if (isNE) emu.callWndProc16(childWnd.wndProc, hwnd, 0x0005, 0, lp);
-            else emu.callWndProc(childWnd.wndProc, hwnd, 0x0005, 0, lp);
+          if (childWnd) {
+            const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
+            emu.postMessage(hwnd, 0x0005, 0, makeLParam(cw, ch)); // WM_SIZE
           }
         }
         return;
@@ -2348,6 +2341,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
                 else if (e.button === 2) handlePointerEvent(e, e.detail >= 2 ? WM_RBUTTONDBLCLK : WM_RBUTTONDOWN);
               }}
               onPointerMove={(e) => {
+                if (mdiDrag.current || mdiResize.current) return;
                 if (!mouseIsDown.current) handlePointerEvent(e, WM_MOUSEMOVE);
               }}
               onContextMenu={(e) => e.preventDefault()}

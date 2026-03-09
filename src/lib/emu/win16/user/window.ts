@@ -345,21 +345,19 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       const WM_SIZE = 0x0005;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
       if (wnd.wndProc) {
-        emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
+        // Queue WM_SIZE to avoid recursive stack overflow from nested MoveWindow calls
+        emu.postMessage(hWnd, WM_SIZE, 0, lParam);
       }
-      // MDICLIENT: when resized, also resize MDI children to fill the new area
+      // MDICLIENT: resize maximized MDI children to fill new area
       if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
         for (const childHwnd of wnd.childList) {
           const child = emu.handles.get<WindowInfo>(childHwnd);
-          if (child) {
+          if (child && child.maximized) {
             child.x = 0; child.y = 0;
             child.width = cw; child.height = ch;
             child.needsPaint = true; child.needsErase = true;
-            if (child.wndProc) {
-              const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
-              emu.callWndProc16(child.wndProc, childHwnd, WM_SIZE, 0,
-                ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
-            }
+            const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
+            emu.postMessage(childHwnd, WM_SIZE, 2, ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
           }
         }
       }
@@ -533,22 +531,22 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       if (wnd.wndProc) {
-        emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0,
+        // Queue WM_SIZE via postMessage to avoid recursive stack overflow
+        // (each synchronous callWndProc16 nests MoveWindow→SetWindowPos→WM_SIZE)
+        emu.postMessage(hWnd, WM_SIZE, 0,
           ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
       }
-      // MDICLIENT: resize MDI children to fill new area
+      // MDICLIENT: resize maximized MDI children to fill new area
       if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
         for (const childHwnd of wnd.childList) {
           const child = emu.handles.get<WindowInfo>(childHwnd);
-          if (child) {
+          if (child && child.maximized) {
             child.x = 0; child.y = 0;
             child.width = cw; child.height = ch;
             child.needsPaint = true; child.needsErase = true;
-            if (child.wndProc) {
-              const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
-              emu.callWndProc16(child.wndProc, childHwnd, WM_SIZE, 0,
-                ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
-            }
+            // Queue WM_SIZE via postMessage to avoid recursive stack overflow
+            const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
+            emu.postMessage(childHwnd, WM_SIZE, 2, ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
           }
         }
       }
