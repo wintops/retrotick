@@ -227,7 +227,7 @@ export function Window({
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}
-            {(wStyle & WS_MAXIMIZEBOX) ? capBtnSvg(maximized ? svgRestore : svgMax, maximized ? 'top 0px left 2px' : 'top 1px left 2px', onMaximize) : null}
+            {(wStyle & WS_MAXIMIZEBOX) ? capBtnSvg((maximized || minimized) ? svgRestore : svgMax, (maximized || minimized) ? 'top 0px left 2px' : 'top 1px left 2px', onMaximize) : null}
             {((wStyle & WS_MINIMIZEBOX) || (wStyle & WS_MAXIMIZEBOX)) ? <span style={{ width: '2px' }} /> : null}
             {(wStyle & WS_SYSMENU) ? capBtnSvg(svgClose, 'top 2px left 3px', onClose) : null}
           </span>

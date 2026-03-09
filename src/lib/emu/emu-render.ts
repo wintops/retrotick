@@ -113,6 +113,7 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
         overlay.isMdiActive = true;
       }
       if (child.maximized) overlay.isMdiMaximized = true;
+      if (child.minimized) overlay.isMdiMinimized = true;
       mdiChildMap.set(childHwnd, overlay);
       overlays.push(overlay);
     } else if (mdiParentHwnd) {
@@ -155,10 +156,12 @@ function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offset
         // MDICLIENT's direct children are MDI child windows
         for (const mdiChildHwnd of child.childList) {
           const mdiChild = emu.handles.get<WindowInfo>(mdiChildHwnd);
-          if (!mdiChild || !mdiChild.visible) continue;
+          if (!mdiChild) continue;
+          // Include minimized MDI children (they render as small title bars)
+          if (!mdiChild.visible && !mdiChild.minimized) continue;
           out.push({ hwnd: mdiChildHwnd, info: mdiChild, ox: offsetX + child.x, oy: offsetY + child.y, isMdiChild: true });
-          // Recurse into MDI child's children, offset by MDI child's non-client area
-          if (mdiChild.childList && mdiChild.childList.length > 0) {
+          // Recurse into MDI child's children (skip if minimized — no client area visible)
+          if (!mdiChild.minimized && mdiChild.childList && mdiChild.childList.length > 0) {
             const { bw, captionH } = getNonClientMetrics(mdiChild.style, !!mdiChild.hMenu, emu.isNE);
             collectChildren(emu, mdiChild,
               offsetX + child.x + mdiChild.x + bw,

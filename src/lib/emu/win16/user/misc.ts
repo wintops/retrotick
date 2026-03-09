@@ -1099,9 +1099,12 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
   // Ordinal 447: DefMDIChildProc(hWnd, uMsg, wParam, lParam) — 10 bytes (2+2+2+4)
   user.register('DefMDIChildProc', 10, () => {
-    const [hWnd, uMsg] = emu.readPascalArgs16([2, 2, 2, 4]);
+    const [hWnd, uMsg, wParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const WM_PAINT = 0x000F;
     const WM_ERASEBKGND = 0x0014;
+    const WM_SYSCOMMAND = 0x0112;
+    const WM_CLOSE = 0x0010;
+    const SC_CLOSE = 0xF060;
     if (uMsg === WM_PAINT) {
       // Validate paint region
       const hdc = emu.beginPaint(hWnd);
@@ -1109,6 +1112,31 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
       return 0;
     }
     if (uMsg === WM_ERASEBKGND) return 1;
+    if (uMsg === WM_SYSCOMMAND && (wParam & 0xFFF0) === SC_CLOSE) {
+      emu.postMessage(hWnd, WM_CLOSE, 0, 0);
+      return 0;
+    }
+    if (uMsg === WM_CLOSE) {
+      // Destroy the MDI child window
+      const wnd = emu.handles.get<WindowInfo>(hWnd);
+      if (wnd && wnd.wndProc) {
+        emu.callWndProc16(wnd.wndProc, hWnd, 0x0002 /* WM_DESTROY */, 0, 0);
+        emu.callWndProc16(wnd.wndProc, hWnd, 0x0082 /* WM_NCDESTROY */, 0, 0);
+      }
+      // Remove from parent's childList
+      if (wnd && wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd?.childList) {
+          const idx = parentWnd.childList.indexOf(hWnd);
+          if (idx >= 0) parentWnd.childList.splice(idx, 1);
+        }
+      }
+      emu.handles.free(hWnd);
+      const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+      if (mainWnd) mainWnd.needsPaint = true;
+      emu.notifyControlOverlays();
+      return 0;
+    }
     return 0;
   }, 447);
 

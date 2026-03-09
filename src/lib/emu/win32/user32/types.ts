@@ -43,6 +43,7 @@ export interface WindowInfo {
   minimized?: boolean;
   maximized?: boolean;
   _preMaxRect?: { x: number; y: number; w: number; h: number };
+  _preMinRect?: { x: number; y: number; w: number; h: number };
   checked?: number;   // BST_UNCHECKED=0, BST_CHECKED=1, BST_INDETERMINATE=2
   hFont?: number;     // font handle set via WM_SETFONT
   props?: Map<string, number>;  // window properties (SetProp/GetProp)

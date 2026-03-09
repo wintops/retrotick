@@ -97,6 +97,8 @@ export interface ControlOverlay {
   isMdiActive?: boolean;
   /** True if this MDI child is maximized */
   isMdiMaximized?: boolean;
+  /** True if this MDI child is minimized */
+  isMdiMinimized?: boolean;
   /** Children overlays nested inside this MDI child window */
   mdiChildren?: ControlOverlay[];
 }

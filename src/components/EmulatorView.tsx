@@ -1206,8 +1206,10 @@ function renderMdiChildOverlay(
   const isWin16 = !!emu?.isNE;
   const { bw, captionH } = getNonClientMetrics(ctrl.style, false, isWin16);
   const isMaximized = !!ctrl.isMdiMaximized;
-  const clientW = Math.max(0, ctrl.width - 2 * bw);
-  const clientH = Math.max(0, ctrl.height - 2 * bw - captionH);
+  const isMinimized = !!ctrl.isMdiMinimized;
+  const MINIMIZED_WIDTH = 160;
+  const clientW = isMinimized ? MINIMIZED_WIDTH - 2 * bw : Math.max(0, ctrl.width - 2 * bw);
+  const clientH = isMinimized ? 0 : Math.max(0, ctrl.height - 2 * bw - captionH);
 
   const activateMdiChild = () => {
     const emu = emuRef.current;
@@ -1231,6 +1233,26 @@ function renderMdiChildOverlay(
     emu.notifyControlOverlays();
   };
 
+  const handleRestore = () => {
+    const emu = emuRef.current;
+    if (!emu) return;
+    const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+    if (!childWnd) return;
+    // Restore from minimized state
+    const saved = childWnd._preMinRect ?? { x: 0, y: 0, w: 300, h: 200 };
+    childWnd.x = saved.x;
+    childWnd.y = saved.y;
+    childWnd.width = saved.w;
+    childWnd.height = saved.h;
+    childWnd._preMinRect = undefined;
+    childWnd.minimized = false;
+    childWnd.visible = true;
+    childWnd.needsPaint = true;
+    const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
+    emu.postMessage(ctrl.childHwnd, 0x0005, 0, makeLParam(cw, ch)); // WM_SIZE SIZE_RESTORED
+    emu.notifyControlOverlays();
+  };
+
   const handleMaximize = () => {
     const emu = emuRef.current;
     if (!emu) return;
@@ -1238,8 +1260,19 @@ function renderMdiChildOverlay(
     if (!childWnd) return;
     const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
     if (!mdiClient) return;
+    // If minimized, restore first then maximize
+    if (childWnd.minimized) {
+      const saved = childWnd._preMinRect ?? { x: 0, y: 0, w: 300, h: 200 };
+      childWnd.x = saved.x;
+      childWnd.y = saved.y;
+      childWnd.width = saved.w;
+      childWnd.height = saved.h;
+      childWnd._preMinRect = undefined;
+      childWnd.minimized = false;
+      childWnd.visible = true;
+    }
     if (childWnd.maximized) {
-      // Restore to saved position or default
+      // Restore from maximized
       const saved = childWnd._preMaxRect ?? { x: 0, y: 0, w: 300, h: 200 };
       childWnd.x = saved.x;
       childWnd.y = saved.y;
@@ -1258,9 +1291,46 @@ function renderMdiChildOverlay(
       childWnd.maximized = true;
     }
     childWnd.needsPaint = true;
-    // Queue WM_SIZE via postMessage (safe from browser event handlers)
     const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
     emu.postMessage(ctrl.childHwnd, 0x0005, childWnd.maximized ? 2 : 0, makeLParam(cw, ch)); // WM_SIZE
+    emu.notifyControlOverlays();
+  };
+
+  const handleMinimize = () => {
+    const emu = emuRef.current;
+    if (!emu) return;
+    const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+    if (!childWnd) return;
+    const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
+    if (!mdiClient) return;
+    // If maximized, save max rect and unmaximize first
+    if (childWnd.maximized) {
+      // _preMaxRect already saved, just clear maximized
+      childWnd.maximized = false;
+    }
+    // Save pre-minimize rect (use current or _preMaxRect if was maximized)
+    if (!childWnd._preMinRect) {
+      childWnd._preMinRect = childWnd._preMaxRect
+        ? { ...childWnd._preMaxRect }
+        : { x: childWnd.x, y: childWnd.y, w: childWnd.width, h: childWnd.height };
+    }
+    // Count existing minimized children to compute slot position
+    let minSlot = 0;
+    if (mdiClient.childList) {
+      for (const sibHwnd of mdiClient.childList) {
+        if (sibHwnd === ctrl.childHwnd) continue;
+        const sib = emu.handles.get<WindowInfo>(sibHwnd);
+        if (sib?.minimized) minSlot++;
+      }
+    }
+    const mdiH = mdiClient.height || (emu.canvas?.height ?? 480);
+    const minH = captionH + 2 * bw;
+    childWnd.minimized = true;
+    childWnd.x = minSlot * (MINIMIZED_WIDTH + 2);
+    childWnd.y = mdiH - minH;
+    childWnd.width = MINIMIZED_WIDTH;
+    childWnd.height = minH;
+    childWnd.needsPaint = true;
     emu.notifyControlOverlays();
   };
 
@@ -1281,6 +1351,7 @@ function renderMdiChildOverlay(
         clientBg="transparent"
         focused={!!ctrl.isMdiActive}
         maximized={isMaximized}
+        minimized={isMinimized}
         onTitleBarMouseDown={(e: PointerEvent) => {
           if ((e.target as HTMLElement).closest('span[style*="border"]')) return;
           if (isMaximized) return;
@@ -1295,8 +1366,8 @@ function renderMdiChildOverlay(
             };
           }
         }}
-        onTitleBarDblClick={handleMaximize}
-        onResizeStart={!isMaximized ? (edge: string, e: PointerEvent) => {
+        onTitleBarDblClick={isMinimized ? handleRestore : handleMaximize}
+        onResizeStart={(!isMaximized && !isMinimized) ? (edge: string, e: PointerEvent) => {
           e.preventDefault();
           activateMdiChild();
           const childWnd = emuRef.current?.handles.get<WindowInfo>(ctrl.childHwnd);
@@ -1312,21 +1383,10 @@ function renderMdiChildOverlay(
         onClose={() => {
           emuRef.current?.postMessage(ctrl.childHwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
         }}
-        onMaximize={handleMaximize}
-        onMinimize={() => {
-          const emu = emuRef.current;
-          if (!emu) return;
-          const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
-          if (childWnd) {
-            childWnd.visible = false;
-            childWnd.minimized = true;
-            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
-            if (mainWnd) mainWnd.needsPaint = true;
-            emu.notifyControlOverlays();
-          }
-        }}
+        onMaximize={isMinimized ? handleRestore : handleMaximize}
+        onMinimize={isMinimized ? undefined : handleMinimize}
       >
-        {ctrl.mdiChildren?.map(childCtrl =>
+        {!isMinimized && ctrl.mdiChildren?.map(childCtrl =>
           renderControlOverlay(childCtrl, emuRef, setPressedControl, pressedControl, _onResizeStart)
         )}
       </Window>
