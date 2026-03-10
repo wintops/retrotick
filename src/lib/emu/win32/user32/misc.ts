@@ -643,4 +643,31 @@ export function registerMisc(emu: Emulator): void {
 
   // IsWindowUnicode(hWnd) — return FALSE (we treat everything as ANSI)
   user32.register('IsWindowUnicode', 1, () => 0);
+
+
+// CharUpperBuffW(lpsz, cchLength) → DWORD
+// 全局emu已定义，无需传参 | 完全对齐CharUpperBuffA风格 | 极简实现
+user32.register('CharUpperBuffW', 2, () => {
+  const lpsz = emu.readArg(0);    // 宽字符缓冲区地址（UTF-16）
+  const cchLength = emu.readArg(1); // 缓冲区字符数（非字节数）
+  
+  // 边界校验：空指针/无效长度直接返回0
+  if (lpsz === 0 || cchLength === 0) return 0;
+
+  // 遍历UTF-16缓冲区（2字节/字符）
+  for (let i = 0; i < cchLength; i++) {
+    const addr = lpsz + (i * 2); // 计算宽字符实际内存地址
+    const ch = emu.memory.readU16(addr); // 读取1个UTF-16字符
+    
+    // 小写字母(a-z)转大写(A-Z)，其他字符不变
+    if (ch >= 0x0061 && ch <= 0x007A) {
+      emu.memory.writeU16(addr, ch - 0x0020);
+    }
+  }
+
+  // 直接return返回字符数（全局emu会自动处理eax寄存器）
+  return cchLength;
+});
+
+
 }
