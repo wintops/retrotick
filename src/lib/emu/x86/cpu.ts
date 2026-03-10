@@ -62,7 +62,7 @@ export class CPU {
   ds = 0; // data segment selector
   es = 0; // extra segment selector
   ss = 0; // stack segment selector
-  segBases = new Map<number, number>(); // selector → linear base address
+  segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
 
   constructor(mem: Memory) {
@@ -72,7 +72,16 @@ export class CPU {
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
     if (this.realMode) return (sel * 16) >>> 0;
-    return this.segBases.get(sel) ?? 0;
+    const base = this.segBases.get(sel);
+    if (base !== undefined) return base;
+    // LDT-style selector: strip RPL/TI bits (low 3 bits = __AHSHIFT)
+    // to find the canonical selector assigned by the NE loader
+    const canonical = sel >>> 3;
+    if (canonical > 0) {
+      const cbase = this.segBases.get(canonical);
+      if (cbase !== undefined) return cbase;
+    }
+    return 0;
   }
 
   // Register accessors for 8/16 bit subregisters

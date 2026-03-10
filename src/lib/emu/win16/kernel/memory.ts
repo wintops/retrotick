@@ -310,8 +310,14 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('LocalReAlloc', 6, () => {
     const [handle, bytes, flags] = emu.readPascalArgs16([2, 2, 2]);
     if (!handle) return 0;
+    const LMEM_MODIFY = 0x80;
+    if (flags & LMEM_MODIFY) {
+      // LMEM_MODIFY: only change flags, don't reallocate
+      console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) MODIFY only`);
+      return handle;
+    }
     const oldSize = state.localSizes.get(handle) || 0;
-    if (bytes <= oldSize) {
+    if (bytes <= oldSize && oldSize > 0) {
       console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) shrink in-place`);
       state.localSizes.set(handle, bytes);
       return handle;
@@ -322,11 +328,13 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
     const oldAddr = dsBase + handle;
     const newAddr = dsBase + newHandle;
-    const copyLen = Math.min(oldSize, bytes);
+    // If oldSize is unknown (handle not tracked), copy the full requested size
+    // from the old location to preserve any pre-existing data (e.g. static/DLL data)
+    const copyLen = oldSize > 0 ? Math.min(oldSize, bytes) : bytes;
     for (let i = 0; i < copyLen; i++) {
       emu.memory.writeU8(newAddr + i, emu.memory.readU8(oldAddr + i));
     }
-    if ((flags & GMEM_ZEROINIT) && bytes > oldSize) {
+    if ((flags & GMEM_ZEROINIT) && bytes > oldSize && oldSize > 0) {
       for (let i = oldSize; i < bytes; i++) emu.memory.writeU8(newAddr + i, 0);
     }
     state.localSizes.set(newHandle, bytes);

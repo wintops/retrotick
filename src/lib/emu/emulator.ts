@@ -928,6 +928,16 @@ export class Emulator {
     this.heapPtr += aligned;
     for (let i = 0; i < aligned; i++) this.memory.writeU8(addr + i, 0);
     this.heapAllocSizes.set(addr, size);
+    // NE mode: register selectors so x86 code can use linear addr as far pointer (DX:AX)
+    if (this.isNE) {
+      const startSel = addr >>> 16;
+      const endSel = (addr + aligned - 1) >>> 16;
+      for (let sel = startSel; sel <= endSel; sel++) {
+        if (!this.cpu.segBases.has(sel)) {
+          this.cpu.segBases.set(sel, sel * 0x10000);
+        }
+      }
+    }
     return addr;
   }
 
@@ -997,7 +1007,8 @@ export class Emulator {
     const off = raw & 0xFFFF;
     const seg = (raw >>> 16) & 0xFFFF;
     if (!seg) return off;
-    return (this.cpu.segBases.get(seg) ?? (seg * 16)) + off;
+    // Use cpu.segBase which handles LDT-style selectors (AHSHIFT)
+    return this.cpu.segBase(seg) + off;
   }
 
   /** Read a far pointer arg from the 16-bit stack and resolve to linear address */

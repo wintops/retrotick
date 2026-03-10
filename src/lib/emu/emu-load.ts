@@ -236,6 +236,12 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     rebuildThunkPages(emu);
 
+    // Create main thread BEFORE DLL init so thread-delegated getters/setters
+    // (wndProcResult, wndProcDepth, etc.) work during callWndProc16
+    const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
+    emu.threads.push(mainThread);
+    emu.currentThread = mainThread;
+
     // Call NE DLL entry points (LibEntry → LibMain) to initialize DLLs
     // The standard LIBENTRY stub expects: CX=heapSize, DI=hInstance(=dataSegSelector),
     // DS=autoDataSeg, ES:SI=cmdLine. It calls LocalInit then LibMain.
@@ -272,11 +278,6 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
       emu.cpu.reg[7] = savedEDI;
       emu.cpu.reg[6] = savedESI;
     }
-
-    // Create a dummy thread for NE apps so thread-delegated getters/setters work
-    const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
-    emu.threads.push(mainThread);
-    emu.currentThread = mainThread;
 
     // NE (Win16) programs expect C: as the current drive
     emu.currentDrive = 'C';
