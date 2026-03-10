@@ -225,7 +225,7 @@ function renderControlOverlay(
     top: `${ctrl.y}px`,
     width: `${ctrl.width}px`,
     height: `${ctrl.height}px`,
-    zIndex: 10,
+    zIndex: 100, // above MDI children (z-index 15+) so toolbar/statusbar aren't covered
   };
 
   const postCommand = () => {
