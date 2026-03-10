@@ -681,7 +681,33 @@ export function registerLocale(emu: Emulator): void {
     return 1;
   });
 
- 
+// 补充 VirtualQueryEx 实现（kernel32 虚拟内存API系列）
+kernel32.register('VirtualQueryEx', 5, () => {
+  const hProcess = emu.readArg(0); // 模拟器中通常忽略进程句柄（单进程模拟）
+  const lpAddress = emu.readArg(1);
+  const lpBuffer = emu.readArg(2);
+  const dwLength = emu.readArg(3);
+  
+  // 仅处理有效的查询缓冲区（对应 MEMORY_BASIC_INFORMATION 结构体填充）
+  if (lpBuffer && dwLength >= 48) { // MEMORY_BASIC_INFORMATION 最小长度（32位）
+    // 填充核心字段（贴合Windows 32位下的结构体定义）
+    emu.memory.writeU32(lpBuffer + 0, lpAddress);          // BaseAddress
+    emu.memory.writeU32(lpBuffer + 4, lpAddress);          // AllocationBase
+    emu.memory.writeU32(lpBuffer + 8, 0x40);               // AllocationProtect (PAGE_EXECUTE_READWRITE)
+    emu.memory.writeU32(lpBuffer + 12, emu.heapSize(lpAddress) || 0x1000); // RegionSize（默认4K页）
+    emu.memory.writeU32(lpBuffer + 16, 0x1000);            // State (MEM_COMMIT)
+    emu.memory.writeU32(lpBuffer + 20, 0x40);              // Protect (PAGE_EXECUTE_READWRITE)
+    emu.memory.writeU32(lpBuffer + 24, 0x2000);            // Type (MEM_PRIVATE)
+    // 其余字段（如 AllocationBase 高位、分区信息等）模拟器场景可填0
+    for (let i = 28; i < 48; i += 4) {
+      emu.memory.writeU32(lpBuffer + i, 0);
+    }
+    return 48; // 返回填充的字节数
+  }
+  
+  return 0; // 缓冲区无效时返回0（符合Windows API行为）
+});
+
 const TRUE = 1;
 const FALSE = 0;
 const CAL_GREGORIAN = 1; // 公历（最常用）
