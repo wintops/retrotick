@@ -677,16 +677,18 @@ export function registerLocale(emu: Emulator): void {
     return result.length + 1;
   });
 
- 
+   kernel32.register('EnumCalendarInfoW', 4, () => {
+    return 1;
+  });
 
-// 1. 定义微软官方常量（必须查文档，禁止硬编码）
+ 
 const TRUE = 1;
 const FALSE = 0;
 const CAL_GREGORIAN = 1; // 公历（最常用）
 const CAL_ICALINTVALUE = 0; // 默认日历信息类型
 
 // 2. 注册 EnumCalendarInfoW API（参数个数=4，stdcall 调用约定）
-kernel32.register('EnumCalendarInfoW', 4, enumCalendarInfoW);
+kernel32.register('EnumCalendarInfoW0', 4, enumCalendarInfoW);
 
 /**
  * 实现 EnumCalendarInfoW 桩函数
