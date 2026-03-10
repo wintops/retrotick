@@ -1110,7 +1110,8 @@ function renderControlOverlay(
     );
   }
 
-  if (effectiveClass(ctrl) === 'MSCTLS_STATUSBAR32') {
+  const ec = effectiveClass(ctrl);
+  if (ec === 'MSCTLS_STATUSBAR32' || ec === 'MSCTLS_STATUSBAR') {
     const texts = ctrl.statusTexts || [];
     const SBARS_SIZEGRIP = 0x0100;
     const hasSizeGrip = !!(ctrl.style & SBARS_SIZEGRIP);

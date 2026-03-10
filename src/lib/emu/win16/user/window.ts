@@ -6,6 +6,39 @@ import type { Win16UserHelpers } from './index';
 // Win16 USER module — Window creation & properties
 // Ordinal mappings from Wine's user.exe16.spec
 
+// Fix CCS control (toolbar/statusbar) position at creation time.
+// The x86 COMMCTRL.DLL creates these at wrong positions, but
+// GetEffectiveClientRect reads them before WM_SIZE fires.
+const MIN_STATUSBAR_HEIGHT = 20;
+const WS_VISIBLE_BIT = 0x10000000;
+function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
+  const wnd = emu.handles.get<WindowInfo>(hwnd);
+  if (!wnd || !hWndParent) return;
+  const ucn = wnd.classInfo?.className?.toUpperCase();
+  if (ucn !== 'TOOLBARWINDOW' && ucn !== 'MSCTLS_STATUSBAR') return;
+  const parent = emu.handles.get<WindowInfo>(hWndParent);
+  if (!parent) return;
+  let parentCW: number, parentCH: number;
+  if (hWndParent === emu.mainWindow && emu.canvas) {
+    parentCW = emu.canvas.width; parentCH = emu.canvas.height;
+  } else {
+    const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+    parentCW = cs.cw; parentCH = cs.ch;
+  }
+  // CCS controls must be visible and have WS_VISIBLE in style bits
+  // (x86 code reads style bits directly to check visibility)
+  wnd.visible = true;
+  wnd.style |= WS_VISIBLE_BIT;
+  if (ucn === 'TOOLBARWINDOW') {
+    wnd.x = 0; wnd.y = 0;
+    wnd.width = parentCW;
+  } else {
+    if (wnd.height < MIN_STATUSBAR_HEIGHT) wnd.height = MIN_STATUSBAR_HEIGHT;
+    wnd.x = 0; wnd.y = parentCH - wnd.height;
+    wnd.width = parentCW;
+  }
+}
+
 // Build a Win16 CREATESTRUCT on the stack and return its linear address.
 // Win16 CREATESTRUCT layout (34 bytes):
 //   +0:  lpCreateParams (4, far ptr)
@@ -191,6 +224,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.postMessage(emu.mainWindow, 0x0005, 0, lParam);
     }
 
+    fixCcsPosition(emu, hwnd, hWndParent);
     return hwnd;
   }, 41);
 
@@ -202,11 +236,16 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) { console.log(`[WIN16] ShowWindow: wnd not found!`); return 0; }
 
+    const WS_VISIBLE = 0x10000000;
     const wasVisible = wnd.visible;
     wnd.visible = nCmdShow !== 0;
+    // Sync WS_VISIBLE style bit so x86 code reading style directly sees correct state
+    if (wnd.visible) wnd.style |= WS_VISIBLE;
+    else wnd.style &= ~WS_VISIBLE;
 
-    if (hWnd === emu.mainWindow && (wnd.style & 0x10000000) && nCmdShow === 0) {
+    if (hWnd === emu.mainWindow && (wnd.style & WS_VISIBLE) && nCmdShow === 0) {
       wnd.visible = true;
+      wnd.style |= WS_VISIBLE;
     }
 
     // When transitioning from hidden to visible, mark window as needing paint
@@ -526,8 +565,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       if (wnd.width !== cx || wnd.height !== cy) sizeChanged = true;
       wnd.width = cx; wnd.height = cy;
     }
-    if (uFlags & SWP_SHOWWINDOW) wnd.visible = true;
-    if (uFlags & SWP_HIDEWINDOW) wnd.visible = false;
+    const WS_VIS = 0x10000000;
+    if (uFlags & SWP_SHOWWINDOW) { wnd.visible = true; wnd.style |= WS_VIS; }
+    if (uFlags & SWP_HIDEWINDOW) { wnd.visible = false; wnd.style &= ~WS_VIS; }
 
     if (sizeChanged) {
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height, true);
@@ -595,8 +635,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         if (!wnd) continue;
         if (!(e.uFlags & SWP_NOMOVE)) { wnd.x = e.x; wnd.y = e.y; }
         if (!(e.uFlags & SWP_NOSIZE)) { wnd.width = e.cx; wnd.height = e.cy; }
-        if (e.uFlags & SWP_SHOWWINDOW) wnd.visible = true;
-        if (e.uFlags & SWP_HIDEWINDOW) wnd.visible = false;
+        if (e.uFlags & SWP_SHOWWINDOW) { wnd.visible = true; wnd.style |= 0x10000000; }
+        if (e.uFlags & SWP_HIDEWINDOW) { wnd.visible = false; wnd.style &= ~0x10000000; }
         wnd.needsPaint = true;
       }
       emu.handles.free(hWinPosInfo);
@@ -721,6 +761,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
     }
 
+    fixCcsPosition(emu, hwnd, hWndParent);
     return hwnd;
   }, 452);
 }

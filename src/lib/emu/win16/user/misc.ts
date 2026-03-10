@@ -1587,8 +1587,38 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // SetWindowPlacement(hWnd, lpwndpl) — 6 bytes
   user.register('SetWindowPlacement', 6, () => 1, 371);
 
-  // SubtractRect(lprcDst, lprcSrc1, lprcSrc2) — 12 bytes
-  user.register('SubtractRect', 12, () => 0, 373);
+  // SubtractRect(lprcDst:4, lprcSrc1:4, lprcSrc2:4) — 12 bytes
+  // Computes lprcDst = lprcSrc1 minus the intersection with lprcSrc2.
+  // Only works when the result is a single rectangle (one full edge overlap).
+  user.register('SubtractRect', 12, () => {
+    const [lprcDst, lprcSrc1, lprcSrc2] = emu.readPascalArgs16([4, 4, 4]);
+    if (!lprcDst || !lprcSrc1 || !lprcSrc2) return 0;
+    // Read Win16 RECTs (4 x INT16 = 8 bytes each)
+    const s1L = emu.memory.readI16(lprcSrc1), s1T = emu.memory.readI16(lprcSrc1 + 2);
+    const s1R = emu.memory.readI16(lprcSrc1 + 4), s1B = emu.memory.readI16(lprcSrc1 + 6);
+    const s2L = emu.memory.readI16(lprcSrc2), s2T = emu.memory.readI16(lprcSrc2 + 2);
+    const s2R = emu.memory.readI16(lprcSrc2 + 4), s2B = emu.memory.readI16(lprcSrc2 + 6);
+    // Start with src1
+    let dL = s1L, dT = s1T, dR = s1R, dB = s1B;
+    // Check if src2 intersects src1
+    if (s2L < s1R && s2R > s1L && s2T < s1B && s2B > s1T) {
+      // src2 spans full width of src1 — subtract from top or bottom
+      if (s2L <= s1L && s2R >= s1R) {
+        if (s2T <= s1T) dT = Math.min(s2B, s1B);      // subtract from top
+        else if (s2B >= s1B) dB = Math.max(s2T, s1T);  // subtract from bottom
+      }
+      // src2 spans full height of src1 — subtract from left or right
+      else if (s2T <= s1T && s2B >= s1B) {
+        if (s2L <= s1L) dL = Math.min(s2R, s1R);       // subtract from left
+        else if (s2R >= s1R) dR = Math.max(s2L, s1L);   // subtract from right
+      }
+    }
+    emu.memory.writeI16(lprcDst, dL);
+    emu.memory.writeI16(lprcDst + 2, dT);
+    emu.memory.writeI16(lprcDst + 4, dR);
+    emu.memory.writeI16(lprcDst + 6, dB);
+    return (dL !== dR && dT !== dB) ? 1 : 0;
+  }, 373);
 
   // UnregisterClass(lpClassName, hInstance) — 6 bytes
   user.register('UnregisterClass', 6, () => 1, 403);

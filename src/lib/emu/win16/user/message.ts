@@ -517,7 +517,42 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd?.wndProc) {
-      return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      // CCS controls (toolbar/statusbar): the x86 COMMCTRL.DLL WM_SIZE handler
+      // reads its own GetWindowRect position and passes it to SetWindowPos, but the
+      // controls are created at (-100,-100) and the DLL never overrides this for
+      // CCS_TOP/CCS_BOTTOM. Fix the position after the x86 wndProc returns.
+      const WM_SIZE = 0x0005;
+      if (message === WM_SIZE && wnd.parent) {
+        const ucn = wnd.classInfo?.className?.toUpperCase();
+        if (ucn === 'TOOLBARWINDOW' || ucn === 'MSCTLS_STATUSBAR') {
+          const parent = emu.handles.get<WindowInfo>(wnd.parent);
+          if (parent) {
+            let parentCW: number, parentCH: number;
+            if (wnd.parent === emu.mainWindow && emu.canvas) {
+              parentCW = emu.canvas.width;
+              parentCH = emu.canvas.height;
+            } else {
+              const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+              parentCW = cs.cw; parentCH = cs.ch;
+            }
+            if (ucn === 'TOOLBARWINDOW') {
+              // CCS_TOP: dock to top of parent, full width
+              wnd.x = 0; wnd.y = 0;
+              wnd.width = parentCW;
+              // height was set by the x86 wndProc via SetWindowPos
+            } else {
+              // Statusbar: dock to bottom of parent, full width
+              const MIN_SB = 20;
+              const sbHeight = wnd.height >= MIN_SB ? wnd.height : MIN_SB;
+              wnd.x = 0; wnd.y = parentCH - sbHeight;
+              wnd.width = parentCW;
+              wnd.height = sbHeight;
+            }
+          }
+        }
+      }
+      return result;
     }
     // Handle messages for built-in EDIT controls (no wndProc, backed by HTML overlay)
     const cn = wnd?.classInfo?.className;
@@ -729,6 +764,46 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     // Handle messages for built-in LISTBOX controls
     if (wnd && cn && cn.toUpperCase() === 'LISTBOX') {
       return handleListBoxMessage16(emu, wnd, message, wParam, lParam);
+    }
+
+    // Handle messages for status bar controls (MSCTLS_STATUSBAR / MSCTLS_STATUSBAR32)
+    const ucn = cn?.toUpperCase();
+    if (wnd && ucn && (ucn === 'MSCTLS_STATUSBAR32' || ucn === 'MSCTLS_STATUSBAR')) {
+      const WM_SIZE = 0x0005;
+      const SB_SETTEXT  = 0x0401; // Win16: WM_USER+1 (ANSI)
+      const SB_SETPARTS = 0x0404; // Win16: WM_USER+4
+      const SB_SIMPLE   = 0x0409; // Win16: WM_USER+9
+      if (message === WM_SIZE) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const { cw, ch } = getClientSize(parentWnd.style, parentWnd.hMenu !== 0, parentWnd.width, parentWnd.height, true);
+          const statusH = wnd.height || 20;
+          wnd.x = 0;
+          wnd.y = ch - statusH;
+          wnd.width = cw;
+        }
+        return 0;
+      }
+      if (message === SB_SETPARTS) {
+        wnd.statusParts = [];
+        const addr = emu.resolveFarPtr(lParam);
+        for (let i = 0; i < wParam; i++) {
+          wnd.statusParts.push(emu.memory.readI16(addr + i * 2));
+        }
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === SB_SETTEXT) {
+        const part = wParam & 0xFF;
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        const addr = emu.resolveFarPtr(lParam);
+        wnd.statusTexts[part] = addr ? emu.memory.readCString(addr) : '';
+        emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === SB_SIMPLE) return 1;
+      if (message >= 0x0400 && message < 0x0500) return 0;
     }
 
     // Handle WM_MDICREATE for MDICLIENT windows
