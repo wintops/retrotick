@@ -296,13 +296,27 @@ function renderMdiChildOverlay(
     emu.notifyControlOverlays();
   };
 
+  // Clip MDI child to MDICLIENT bounds so it doesn't overlap toolbar/statusbar/drivebar
+  const clipStyle: Record<string, string | number | undefined> = {
+    position: 'absolute',
+    left: `${ctrl.x}px`,
+    top: `${ctrl.y}px`,
+    zIndex: zIndex ?? 15,
+  };
+  if (ctrl.mdiClientRect) {
+    const cr = ctrl.mdiClientRect;
+    // Compute inset values: distance from each edge of the MDI child to the MDICLIENT boundary
+    const clipTop = Math.max(0, cr.y - ctrl.y);
+    const clipLeft = Math.max(0, cr.x - ctrl.x);
+    const clipBottom = Math.max(0, (ctrl.y + ctrl.height) - (cr.y + cr.h));
+    const clipRight = Math.max(0, (ctrl.x + ctrl.width) - (cr.x + cr.w));
+    if (clipTop > 0 || clipLeft > 0 || clipBottom > 0 || clipRight > 0) {
+      clipStyle.clipPath = `inset(${clipTop}px ${clipRight}px ${clipBottom}px ${clipLeft}px)`;
+    }
+  }
+
   return (
-    <div key={ctrl.childHwnd} style={{
-      position: 'absolute',
-      left: `${ctrl.x}px`,
-      top: `${ctrl.y}px`,
-      zIndex: zIndex ?? 15,
-    }}
+    <div key={ctrl.childHwnd} style={clipStyle}
     onPointerDown={activateMdiChild}
     >
       <Window

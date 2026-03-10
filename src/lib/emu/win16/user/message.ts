@@ -516,6 +516,26 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   user.register('SendMessage', 10, () => {
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
+    // Intercept statusbar messages BEFORE x86 wndProc to capture text for DOM overlay
+    if (wnd?.wndProc) {
+      const ucnPre = wnd.classInfo?.className?.toUpperCase();
+      if (ucnPre === 'MSCTLS_STATUSBAR' || ucnPre === 'MSCTLS_STATUSBAR32') {
+        const SB_SETTEXT = 0x0401, SB_SETPARTS = 0x0404;
+        if (message === SB_SETTEXT) {
+          const part = wParam & 0xFF;
+          if (!wnd.statusTexts) wnd.statusTexts = [];
+          const addr = emu.resolveFarPtr(lParam);
+          wnd.statusTexts[part] = addr ? emu.memory.readCString(addr) : '';
+        } else if (message === SB_SETPARTS) {
+          wnd.statusParts = [];
+          const addr = emu.resolveFarPtr(lParam);
+          for (let i = 0; i < wParam; i++) {
+            wnd.statusParts.push(emu.memory.readI16(addr + i * 2));
+          }
+          if (!wnd.statusTexts) wnd.statusTexts = [];
+        }
+      }
+    }
     if (wnd?.wndProc) {
       const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
       // CCS controls (toolbar/statusbar): the x86 COMMCTRL.DLL WM_SIZE handler

@@ -101,6 +101,8 @@ export interface ControlOverlay {
   isMdiMinimized?: boolean;
   /** Children overlays nested inside this MDI child window */
   mdiChildren?: ControlOverlay[];
+  /** MDICLIENT clip rect for MDI children (absolute canvas coords) */
+  mdiClientRect?: { x: number; y: number; w: number; h: number };
 }
 
 // Detect fullwidth characters (CJK, fullwidth forms, etc.) that occupy 2 console columns

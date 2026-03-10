@@ -114,6 +114,10 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
       }
       if (child.maximized) overlay.isMdiMaximized = true;
       if (child.minimized) overlay.isMdiMinimized = true;
+      // Pass MDICLIENT clip rect so MDI children don't overlap toolbar/statusbar
+      if (mdiClient) {
+        overlay.mdiClientRect = { x: ox + mdiClient.x, y: oy + mdiClient.y, w: mdiClient.width, h: mdiClient.height };
+      }
       mdiChildMap.set(childHwnd, overlay);
       overlays.push(overlay);
     } else if (mdiParentHwnd) {
