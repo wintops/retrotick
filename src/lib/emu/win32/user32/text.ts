@@ -608,4 +608,6 @@ export function registerText(emu: Emulator): void {
   user32.register('TabbedTextOutW', 8, () => (8 << 16) | 8);
 
   user32.register('GrayStringW', 9, () => 1);
+  
+   user32.register('CharToOemW', 2, () => 1);
 }
