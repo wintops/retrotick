@@ -683,6 +683,7 @@ export function registerLocale(emu: Emulator): void {
 
 // 补充 VirtualQueryEx 实现（kernel32 虚拟内存API系列）
 kernel32.register('VirtualQueryEx', 5, () => {
+ return 0; 
   const hProcess = emu.readArg(0); // 模拟器中通常忽略进程句柄（单进程模拟）
   const lpAddress = emu.readArg(1);
   const lpBuffer = emu.readArg(2);
