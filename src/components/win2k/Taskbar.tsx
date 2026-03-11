@@ -115,7 +115,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
               items={[
                 { id: 1, text: t().welcome, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 5, text: t().regionalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 4, text: t().githubProject, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+               // { id: 4, text: t().githubProject, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 3, text: t().resetToDefault, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 2, text: t().shutDown, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
