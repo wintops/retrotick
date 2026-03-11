@@ -25,6 +25,12 @@ function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
     const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
     parentCW = cs.cw; parentCH = cs.ch;
   }
+  // Store the offset between original and fixed position.
+  // The x86 COMMCTRL code reads position from Win16's internal WND struct
+  // (which we don't expose in memory), so it positions children relative to
+  // the original (-100,-100) coordinates. We'll apply this offset in MoveWindow.
+  const origX = wnd.x;
+  const origY = wnd.y;
   // CCS controls must be visible and have WS_VISIBLE in style bits
   // (x86 code reads style bits directly to check visibility)
   wnd.visible = true;
@@ -36,6 +42,13 @@ function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
     if (wnd.height < MIN_STATUSBAR_HEIGHT) wnd.height = MIN_STATUSBAR_HEIGHT;
     wnd.x = 0; wnd.y = parentCH - wnd.height;
     wnd.width = parentCW;
+  }
+  // Store the delta so MoveWindow/SetWindowPos can adjust children
+  const dx = wnd.x - origX;
+  const dy = wnd.y - origY;
+  if (dx !== 0 || dy !== 0) {
+    (wnd as any)._ccsChildOffsetX = dx;
+    (wnd as any)._ccsChildOffsetY = dy;
   }
 }
 
@@ -222,6 +235,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
     }
 
+    // Fix CCS_TOP/CCS_BOTTOM position AFTER WM_CREATE.
+    // The x86 code reads position from Win16's internal WND struct (which we don't
+    // expose), so it uses the original (-100,-100). We fix the toolbar position AND
+    // adjust any children that were positioned relative to the original coordinates.
+    fixCcsPosition(emu, hwnd, hWndParent);
+
     if (hWndParent === emu.mainWindow && emu.mainWindow && emu.canvas && emu.ne) {
       const dsBase = emu.cpu.segBase(emu.ne.dataSegSelector);
       emu.memory.writeU16(dsBase + 0x240, 0);
@@ -230,7 +249,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.postMessage(emu.mainWindow, 0x0005, 0, lParam);
     }
 
-    fixCcsPosition(emu, hwnd, hWndParent);
     return hwnd;
   }, 41);
 
@@ -381,7 +399,19 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const [hWnd, x, y, w, height, bRepaint] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
-      wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
+      let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      // If parent is a CCS control (e.g. ToolbarWindow), adjust y for the position
+      // offset. The x86 COMMCTRL code reads the toolbar's y from the internal WND struct
+      // (which still has the original -100), so child y values are off by the delta.
+      // x is not adjusted — the x86 code computes x relative to the client area.
+      if (wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const oy = (parentWnd as any)._ccsChildOffsetY;
+          if (oy !== undefined) { my += oy; }
+        }
+      }
+      wnd.x = mx; wnd.y = my;
       const sizeChanged = wnd.width !== w || wnd.height !== height;
       wnd.width = w; wnd.height = height;
       if (sizeChanged) {
@@ -614,7 +644,22 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 258: MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints) — 10 bytes (2+2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('MapWindowPoints', 10, () => 0, 258);
+  user.register('MapWindowPoints', 10, () => {
+    const [hWndFrom, hWndTo, lpPoints, cPoints] = emu.readPascalArgs16([2, 2, 4, 2]);
+    if (!lpPoints || cPoints === 0) return 0;
+    const from = h.clientOrigin(hWndFrom);
+    const to = h.clientOrigin(hWndTo);
+    const dx = from.x - to.x;
+    const dy = from.y - to.y;
+    for (let i = 0; i < cPoints; i++) {
+      const addr = lpPoints + i * 4; // Win16 POINT = 2 x I16 = 4 bytes
+      const px = emu.memory.readI16(addr);
+      const py = emu.memory.readI16(addr + 2);
+      emu.memory.writeU16(addr, (px + dx) & 0xFFFF);
+      emu.memory.writeU16(addr + 2, (py + dy) & 0xFFFF);
+    }
+    return ((dx & 0xFFFF) | ((dy & 0xFFFF) << 16)) >>> 0;
+  }, 258);
 
   // Ordinal 259: BeginDeferWindowPos(nNumWindows) → HDWP
   user.register('BeginDeferWindowPos', 2, () => {
@@ -778,6 +823,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     fixCcsPosition(emu, hwnd, hWndParent);
+
     return hwnd;
   }, 452);
 }

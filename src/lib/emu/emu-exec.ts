@@ -570,8 +570,6 @@ export function emuTick(emu: Emulator): void {
       const key = `${thunk.dll}:${thunk.name}`;
       const handler = emu.apiDefs.get(key)?.handler;
 
-      const origESP = emu.cpu.reg[4] + thunk.stackBytes + 4;
-
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
           // Check if this is a legitimate WNDPROC_RETURN or a stale value on the stack.
@@ -685,7 +683,7 @@ export function emuTick(emu: Emulator): void {
         const before: string[] = [];
         for (let j = -16; j < 0; j++) before.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
         const at: string[] = [];
-        for (let j = 0; j < 16; j++) at.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
+        for (let j = 0; j < 16; j++) at.push(emu.memory.readU8((newEip + j) >>> 0).toString(16).padStart(2, '0'));
         const bt: string[] = [];
         let bp = emu.cpu.reg[5] >>> 0;
         for (let f = 0; f < 10 && bp > 0x10000 && bp < 0xFFF00000; f++) {
@@ -694,15 +692,31 @@ export function emuTick(emu: Emulator): void {
           bt.push(`  [${f}] EBP=0x${bp.toString(16)} ret=0x${retAddr.toString(16)}`);
           bp = prevBp;
         }
+        // 16-bit stack backtrace (BP chain within the stack segment)
+        const bt16: string[] = [];
+        if (emu.isNE) {
+          const ssBase = emu.cpu.segBase(emu.cpu.ss);
+          let bp16 = emu.cpu.reg[5] & 0xFFFF;
+          for (let f = 0; f < 15 && bp16 > 0 && bp16 < 0xFFF0; f++) {
+            const retIP = emu.memory.readU16(ssBase + bp16 + 2);
+            const retCS = emu.memory.readU16(ssBase + bp16 + 4);
+            const prevBP16 = emu.memory.readU16(ssBase + bp16);
+            const retLinear = (emu.cpu.segBases.get(retCS) ?? (retCS * 16)) + retIP;
+            bt16.push(`  [${f}] BP=0x${bp16.toString(16)} ret=${retCS.toString(16)}:${retIP.toString(16)} (linear=0x${retLinear.toString(16)})`);
+            bp16 = prevBP16;
+          }
+        }
         console.error(
           `[WILD EIP] jumped to 0x${newEip.toString(16)} from 0x${prevEip.toString(16)}\n` +
-          `  bytes before: [${before.join(' ')}]\n` +
-          `  bytes at:     [${at.join(' ')}]\n` +
+          `  CS=0x${emu.cpu.cs.toString(16)} SS=0x${emu.cpu.ss.toString(16)}\n` +
+          `  bytes before (at prev EIP): [${before.join(' ')}]\n` +
+          `  bytes at (at new EIP):      [${at.join(' ')}]\n` +
           `  EAX=0x${(emu.cpu.reg[0] >>> 0).toString(16)} ECX=0x${(emu.cpu.reg[1] >>> 0).toString(16)} EDX=0x${(emu.cpu.reg[2] >>> 0).toString(16)} EBX=0x${(emu.cpu.reg[3] >>> 0).toString(16)}\n` +
           `  ESP=0x${(emu.cpu.reg[4] >>> 0).toString(16)} EBP=0x${(emu.cpu.reg[5] >>> 0).toString(16)} ESI=0x${(emu.cpu.reg[6] >>> 0).toString(16)} EDI=0x${(emu.cpu.reg[7] >>> 0).toString(16)}\n` +
-          `  stack top 12 dwords:\n` +
-          `    ${[0,4,8,12,16,20,24,28,32,36,40,44].map(o => '0x' + emu.memory.readU32((emu.cpu.reg[4] + o) >>> 0).toString(16)).join(' ')}\n` +
-          `  EBP backtrace:\n${bt.join('\n')}`
+          `  stack top 16 words:\n` +
+          `    ${Array.from({length: 16}, (_, i) => '0x' + emu.memory.readU16(((emu.cpu.reg[4] >>> 0) + i * 2) >>> 0).toString(16).padStart(4, '0')).join(' ')}\n` +
+          `  EBP backtrace (32-bit):\n${bt.join('\n')}\n` +
+          `  BP backtrace (16-bit):\n${bt16.join('\n')}`
         );
         emu.haltReason = 'access violation';
         emu.halted = true;

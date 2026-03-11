@@ -1211,8 +1211,16 @@ export class Emulator {
         const childHwnd = parent.childList[i];
         const child = this.handles.get<WindowInfo>(childHwnd);
         if (!child || !child.visible) continue;
+        // CBS_DROPDOWN/CBS_DROPDOWNLIST combobox: when closed, only the edit
+        // portion (~20px) is visible; the full height includes the dropdown list.
+        let hitH = child.height;
+        const CBS_DROPDOWN = 0x0002, CBS_DROPDOWNLIST = 0x0003;
+        if (child.classInfo?.className?.toUpperCase() === 'COMBOBOX' &&
+            (child.style & 0xF) >= CBS_DROPDOWN) {
+          hitH = Math.min(hitH, 24); // edit portion height
+        }
         if (cx >= child.x && cy >= child.y &&
-            cx < child.x + child.width && cy < child.y + child.height) {
+            cx < child.x + child.width && cy < child.y + hitH) {
           return findChild(childHwnd, cx - child.x, cy - child.y);
         }
       }

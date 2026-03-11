@@ -90,10 +90,30 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 22);
 
   // Ordinal 28: ClientToScreen(hWnd, lpPoint_ptr) — 6 bytes
-  user.register('ClientToScreen', 6, () => 0, 28);
+  user.register('ClientToScreen', 6, () => {
+    const [hWnd, lpPoint] = emu.readPascalArgs16([2, 4]);
+    if (lpPoint) {
+      const origin = h.clientOrigin(hWnd);
+      const px = emu.memory.readI16(lpPoint);
+      const py = emu.memory.readI16(lpPoint + 2);
+      emu.memory.writeU16(lpPoint, (px + origin.x) & 0xFFFF);
+      emu.memory.writeU16(lpPoint + 2, (py + origin.y) & 0xFFFF);
+    }
+    return 1;
+  }, 28);
 
   // Ordinal 29: ScreenToClient(hWnd, lpPoint_ptr) — 6 bytes
-  user.register('ScreenToClient', 6, () => 0, 29);
+  user.register('ScreenToClient', 6, () => {
+    const [hWnd, lpPoint] = emu.readPascalArgs16([2, 4]);
+    if (lpPoint) {
+      const origin = h.clientOrigin(hWnd);
+      const px = emu.memory.readI16(lpPoint);
+      const py = emu.memory.readI16(lpPoint + 2);
+      emu.memory.writeU16(lpPoint, (px - origin.x) & 0xFFFF);
+      emu.memory.writeU16(lpPoint + 2, (py - origin.y) & 0xFFFF);
+    }
+    return 1;
+  }, 29);
 
   // Ordinal 31: IsIconic(hWnd) — 2 bytes
   user.register('IsIconic', 2, () => 0, 31);
@@ -1116,15 +1136,16 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
       return 0;
     }
     if (uMsg === WM_SIZE) {
-      // Forward WM_SIZE to MDICLIENT if present
+      // Forward WM_SIZE to MDICLIENT if present.
+      // Use postMessage instead of callWndProc16 to avoid stack corruption:
+      // DefFrameProc runs inside x86 code (via thunk), and a nested callWndProc16
+      // can yield in the browser, leaving uncleaned stack data that causes WILD EIP.
       if (_hWndMDIClient) {
         const mdiWnd = emu.handles.get<WindowInfo>(_hWndMDIClient);
         if (mdiWnd) {
           mdiWnd.width = lParam & 0xFFFF;
           mdiWnd.height = (lParam >>> 16) & 0xFFFF;
-          if (mdiWnd.wndProc) {
-            emu.callWndProc16(mdiWnd.wndProc, _hWndMDIClient, WM_SIZE, wParam, lParam);
-          }
+          emu.postMessage(_hWndMDIClient, WM_SIZE, wParam, lParam);
         }
       }
       return 0;

@@ -537,11 +537,9 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       }
     }
     if (wnd?.wndProc) {
-      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
-      // CCS controls (toolbar/statusbar): the x86 COMMCTRL.DLL WM_SIZE handler
-      // reads its own GetWindowRect position and passes it to SetWindowPos, but the
-      // controls are created at (-100,-100) and the DLL never overrides this for
-      // CCS_TOP/CCS_BOTTOM. Fix the position after the x86 wndProc returns.
+      // CCS controls (toolbar/statusbar): reposition BEFORE calling the x86 wndProc
+      // so that GetWindowRect returns the correct position during WM_SIZE processing.
+      // The controls start at (-100,-100) and rely on WM_SIZE to dock them.
       const WM_SIZE = 0x0005;
       if (message === WM_SIZE && wnd.parent) {
         const ucn = wnd.classInfo?.className?.toUpperCase();
@@ -560,10 +558,6 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               // CCS_TOP: dock to top of parent, full width
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
-              // COMMCTRL x86 code may compute height from multi-state bitmap
-              // (e.g. WINFILE bitmap 100 is 208x55 with 3 rows of 15px buttons).
-              // Cap to standard Win3.1 toolbar height of 27px.
-              if (wnd.height > 30) wnd.height = 27;
             } else {
               // Statusbar: dock to bottom of parent, full width
               const MIN_SB = 20;
@@ -571,6 +565,37 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               wnd.x = 0; wnd.y = parentCH - sbHeight;
               wnd.width = parentCW;
               wnd.height = sbHeight;
+            }
+          }
+        }
+      }
+      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      // CCS controls: re-fix position AFTER the wndProc in case x86 code overrode it
+      // via SetWindowPos. Keep the height the x86 code set, but enforce x/y/width.
+      if (message === WM_SIZE && wnd.parent) {
+        const ucn = wnd.classInfo?.className?.toUpperCase();
+        if (ucn === 'TOOLBARWINDOW' || ucn === 'MSCTLS_STATUSBAR') {
+          const parent = emu.handles.get<WindowInfo>(wnd.parent);
+          if (parent) {
+            let parentCW: number, parentCH: number;
+            if (wnd.parent === emu.mainWindow && emu.canvas) {
+              parentCW = emu.canvas.width;
+              parentCH = emu.canvas.height;
+            } else {
+              const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+              parentCW = cs.cw; parentCH = cs.ch;
+            }
+            if (ucn === 'TOOLBARWINDOW') {
+              wnd.x = 0; wnd.y = 0;
+              wnd.width = parentCW;
+              // Cap toolbar height: x86 COMMCTRL uses full bitmap height (55px)
+              // instead of one button-state row (~18px). Real Win3.1 toolbar = ~27px.
+              if (wnd.height > 30) wnd.height = 27;
+            } else {
+              const MIN_SB = 20;
+              if (wnd.height < MIN_SB) wnd.height = MIN_SB;
+              wnd.x = 0; wnd.y = parentCH - wnd.height;
+              wnd.width = parentCW;
             }
           }
         }

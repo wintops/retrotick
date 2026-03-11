@@ -1,5 +1,6 @@
 import type { Emulator } from '../../emulator';
 import type { MenuItem } from '../../../pe/types';
+import type { WindowInfo } from '../../win32/user32/types';
 import { registerWin16UserWindow } from './window';
 import { registerWin16UserMessage } from './message';
 import { registerWin16UserPaint } from './paint';
@@ -31,6 +32,7 @@ export interface Win16UserHelpers {
   resolveFarPtr: ResolveFarPtr;
   readRect: ReadRect;
   writeRect: WriteRect;
+  clientOrigin: (hwnd: number) => { x: number; y: number };
 }
 
 export function registerWin16User(emu: Emulator): void {
@@ -67,7 +69,22 @@ export function registerWin16User(emu: Emulator): void {
     return (emu.cpu.segBases.get(seg) ?? (seg * 16)) + off;
   };
 
-  const helpers: Win16UserHelpers = { readFarPtr, resolveFarPtr, readRect, writeRect };
+  // Compute screen coordinates of a window's client-area origin.
+  // For child windows: walks parent chain accumulating positions.
+  // Uses parent link (not just WS_CHILD flag) since some controls
+  // like ToolbarWindow are children but lack WS_CHILD.
+  const clientOrigin = (hwnd: number): { x: number; y: number } => {
+    const wnd = hwnd ? emu.handles.get<WindowInfo>(hwnd) : null;
+    if (!wnd) return { x: 0, y: 0 };
+    if (hwnd === emu.mainWindow) return { x: 0, y: 0 };
+    if (wnd.parent) {
+      const po = clientOrigin(wnd.parent);
+      return { x: po.x + (wnd.x || 0), y: po.y + (wnd.y || 0) };
+    }
+    return { x: wnd.x || 0, y: wnd.y || 0 };
+  };
+
+  const helpers: Win16UserHelpers = { readFarPtr, resolveFarPtr, readRect, writeRect, clientOrigin };
 
   registerWin16UserWindow(emu, user, helpers);
   registerWin16UserMessage(emu, user, helpers);

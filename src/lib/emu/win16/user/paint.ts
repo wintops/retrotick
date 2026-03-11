@@ -12,7 +12,8 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   user.register('GetWindowRect', 6, () => {
     const [hWnd, lpRect] = emu.readPascalArgs16([2, 4]);
     if (lpRect) {
-      const wnd = emu.handles.get<WindowInfo>(hWnd || emu.mainWindow);
+      const targetHwnd = hWnd || emu.mainWindow;
+      const wnd = emu.handles.get<WindowInfo>(targetHwnd);
       if (wnd) {
         // Convert to screen coordinates by walking parent chain (same as Win32)
         const WS_CHILD = 0x40000000;

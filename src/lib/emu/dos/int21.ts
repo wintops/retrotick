@@ -19,10 +19,6 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
 const ZF = 0x040;
 
-// Debug: circular trace buffer for INT 21h calls
-const _int21Trace: string[] = [];
-const _INT21_TRACE_MAX = 1000;
-let _errorTraceDumped = false;
 
 /** Return from child to parent after EXEC. Returns true if handled (child was running). */
 function dosExecReturn(cpu: CPU, emu: Emulator, exitCode: number): boolean {
@@ -57,12 +53,6 @@ function dosExecReturn(cpu: CPU, emu: Emulator, exitCode: number): boolean {
 export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   const al = cpu.reg[EAX] & 0xFF;
-  // Trace all INT 21h calls
-  const csBase = (cpu.cs << 4) >>> 0;
-  const ip = ((cpu.eip - 2) >>> 0) - csBase;
-  _int21Trace.push(`AH=${ah.toString(16).padStart(2,'0')} AX=${(cpu.reg[EAX]&0xFFFF).toString(16)} BX=${(cpu.reg[EBX]&0xFFFF).toString(16)} CX=${(cpu.reg[ECX]&0xFFFF).toString(16)} DX=${(cpu.reg[EDX]&0xFFFF).toString(16)} CS:IP=${cpu.cs.toString(16)}:${ip.toString(16)} DS=${cpu.ds.toString(16)} steps=${emu.cpuSteps}`);
-  if (_int21Trace.length > _INT21_TRACE_MAX) _int21Trace.shift();
-  if (ah === 0x00 || ah === 0x4C) console.warn(`[INT 21h] AH=0x${ah.toString(16).padStart(2,'0')} AL=0x${al.toString(16).padStart(2,'0')} at EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} DS=0x${cpu.ds.toString(16)} SS:SP=0x${cpu.ss.toString(16)}:0x${(cpu.reg[4]&0xFFFF).toString(16)}`);
   switch (ah) {
     case 0x00: // Old-style terminate (same as INT 20h)
       if (dosExecReturn(cpu, emu, 0)) break;
@@ -102,78 +92,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x06: { // Direct console I/O
       const dl = cpu.reg[EDX] & 0xFF;
-      // Debug: dump stack on first error message print (char 'E' for "Error")
-      if (dl === 0x45 && !_errorTraceDumped && emu.cpuSteps > 50000000) {
-        _errorTraceDumped = true;
-        const sp = cpu.getReg16(4); // SP
-        const ssBase = (cpu.ss << 4) >>> 0;
-        console.warn(`[INT21-06] First 'E' char — dumping stack at SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)}`);
-        const words: string[] = [];
-        for (let i = 0; i < 32; i++) {
-          const w = cpu.mem.readU16((ssBase + ((sp + i * 2) & 0xFFFF)) >>> 0);
-          words.push(w.toString(16).padStart(4, '0'));
-        }
-        console.warn(`[INT21-06] Stack: ${words.join(' ')}`);
-        // Dump code at the INT 0 handler and nearby
-        const mainBase = 0x20430;
-        for (const label of ['3700', '3710', '3720', '3730']) {
-          const off = parseInt(label, 16);
-          const b: string[] = [];
-          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(mainBase + off + c).toString(16).padStart(2, '0'));
-          console.warn(`[INT21-06] 2043:${label}: ${b.join(' ')}`);
-        }
-        // Also dump the stack overflow handler area
-        for (const label of ['1600', '1610', '1620']) {
-          const off = parseInt(label, 16);
-          const b: string[] = [];
-          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(mainBase + off + c).toString(16).padStart(2, '0'));
-          console.warn(`[INT21-06] 2043:${label}: ${b.join(' ')}`);
-        }
-        // Current DS:[1357] (stack limit)
-        const dsBase2 = (cpu.ds << 4) >>> 0;
-        console.warn(`[INT21-06] DS:1357 (stack limit) = 0x${cpu.mem.readU16(dsBase2 + 0x1357).toString(16)}`);
-        // Dump the game data structure at DS:3B6 (used by the script interpreter)
-        console.warn(`[INT21-06] Data structure at DS:3B6:`);
-        for (let i = 0; i < 16; i += 2) {
-          console.warn(`  [3B6+${i.toString(16)}] = [${(0x3B6+i).toString(16)}] = 0x${cpu.mem.readU16((dsBase2+0x3B6+i)>>>0).toString(16)}`);
-        }
-        // Check what ES:0 points to (where 0x1011 was read from)
-        const esVal3b8 = cpu.mem.readU16((dsBase2+0x3B8)>>>0);
-        const esBase3 = (esVal3b8 << 4) >>> 0;
-        console.warn(`[INT21-06] Segment from DS:3B8 = 0x${esVal3b8.toString(16)}, linear=0x${esBase3.toString(16)}`);
-        const esData: string[] = [];
-        for (let i = 0; i < 32; i++) esData.push(cpu.mem.readU8((esBase3+i)>>>0).toString(16).padStart(2,'0'));
-        console.warn(`[INT21-06] Data at seg:0: ${esData.join(' ')}`);
-        // The corrupted value location: DS:34BE
-        console.warn(`[INT21-06] DS:34BE = 0x${cpu.mem.readU16((dsBase2+0x34BE)>>>0).toString(16)}`);
-        console.warn(`[INT21-06] DS:34C0 = 0x${cpu.mem.readU16((dsBase2+0x34C0)>>>0).toString(16)}`);
-        console.warn(`[INT21-06] DS:34C2 = 0x${cpu.mem.readU16((dsBase2+0x34C2)>>>0).toString(16)}`);
-        console.warn(`[INT21-06] DS:34C4 = 0x${cpu.mem.readU16((dsBase2+0x34C4)>>>0).toString(16)}`);
-        // Also dump DS:3C0 (the BX offset source)
-        console.warn(`[INT21-06] DS:3C0 = 0x${cpu.mem.readU16((dsBase2+0x3C0)>>>0).toString(16)}`);
-        // Dump code at error address 10B6:2840 (linear 0x133A0)
-        const errLinear = 0x10B6 * 16 + 0x2840;
-        console.warn(`[INT21-06] Code at 10B6:2840 (linear 0x${errLinear.toString(16)}):`);
-        for (let row = -4; row < 4; row++) {
-          const off = errLinear + row * 16;
-          const b: string[] = [];
-          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(off + c).toString(16).padStart(2, '0'));
-          console.warn(`  ${off.toString(16).padStart(5, '0')}: ${b.join(' ')}${row === 0 ? ' <-- ERROR' : ''}`);
-        }
-        // Walk BP chain — also show potential far call CS values
-        let bp = cpu.getReg16(5); // BP
-        console.warn(`[INT21-06] BP chain: BP=${bp.toString(16)}`);
-        for (let depth = 0; depth < 10 && bp > 0 && bp < 0xFFFE; depth++) {
-          const retIP = cpu.mem.readU16((ssBase + ((bp + 2) & 0xFFFF)) >>> 0);
-          const maybeCS = cpu.mem.readU16((ssBase + ((bp + 4) & 0xFFFF)) >>> 0);
-          const prevBP = cpu.mem.readU16((ssBase + (bp & 0xFFFF)) >>> 0);
-          // Dump 8 words starting from BP
-          const ws: string[] = [];
-          for (let i = 0; i < 8; i++) ws.push(cpu.mem.readU16((ssBase + ((bp + i*2) & 0xFFFF)) >>> 0).toString(16).padStart(4, '0'));
-          console.warn(`  [${depth}] BP=0x${bp.toString(16)} => ${ws.join(' ')}`);
-          bp = prevBP;
-        }
-      }
       if (dl === 0xFF) {
         // Input: check for keystroke
         if (emu.dosKeyBuffer.length > 0) {
@@ -498,21 +416,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4C: { // Terminate with return code
       const retCode = al;
       if (dosExecReturn(cpu, emu, retCode)) break;
-      const ssBase = (cpu.ss << 4) >>> 0;
-      const sp = cpu.getReg16(4); // ESP & 0xFFFF
-      console.warn(`[INT21h-4C] Terminate with code=${retCode} at CS:IP=${cpu.cs.toString(16)}:${((cpu.eip - (cpu.cs << 4)) >>> 0).toString(16)} SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)}`);
-      console.warn(`[INT21h-4C] AX=0x${(cpu.reg[EAX]>>>0).toString(16)} BX=0x${(cpu.reg[EBX]>>>0).toString(16)} CX=0x${(cpu.reg[ECX]>>>0).toString(16)} DX=0x${(cpu.reg[EDX]>>>0).toString(16)}`);
-      console.warn(`[INT21h-4C] SI=0x${(cpu.reg[ESI]>>>0).toString(16)} DI=0x${(cpu.reg[EDI]>>>0).toString(16)} BP=0x${(cpu.reg[5]>>>0).toString(16)} DS=0x${cpu.ds.toString(16)} ES=0x${cpu.es.toString(16)}`);
-      // Dump stack
-      const stackDump: string[] = [];
-      for (let s = 0; s < 20; s++) {
-        const addr = ssBase + ((sp + s * 2) & 0xFFFF);
-        stackDump.push(cpu.mem.readU16(addr).toString(16).padStart(4, '0'));
-      }
-      console.warn(`[INT21h-4C] Stack: ${stackDump.join(' ')}`);
-      // Dump INT 21h trace
-      console.warn(`[INT21h-4C] === Last ${_int21Trace.length} INT 21h calls ===`);
-      for (const t of _int21Trace) console.warn(`  ${t}`);
       emu.exitedNormally = true;
       emu.halted = true;
       cpu.halted = true;
