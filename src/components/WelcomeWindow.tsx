@@ -102,40 +102,18 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
         >
         <div style={{ background: '#D4D0C8', padding: '10px 12px' }}>
           <div style={{ fontSize: '16px', fontFamily: 'Tahoma, sans-serif', fontWeight: 'bold', marginBottom: '4px', lineHeight: '1.4', color: '#000', textShadow: '1px 1px 0 #FFF, -1px -1px 0 #808080' }}>
-            {t().welcomeHeading}
+           WinTops
           </div>
           <div style={{ font: FONT, marginBottom: '4px', lineHeight: '1.4' }}>
-            {t().welcomeIntro}
+            Trader
           </div>
-          <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '6px 0 5px' }} />
-          <div style={{ display: 'flex', gap: '12px' }}>
-            {GROUPS.map(group => (
-              <div key={group.labelKey} style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: FONT, fontWeight: 'bold', marginBottom: '2px' }}>{t()[group.labelKey]}</div>
-                {group.items.map(ex => {
-                  const st = status.get(ex.name);
-                  return (
-                    <div key={ex.name} style={{ font: FONT, height: '17px', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
-                      <span>{ex.description}</span>
-                      {st === 'loading' && <span style={{ color: '#808080', marginLeft: '3px' }}>...</span>}
-                      {st === 'done' && <span style={{ color: '#008000', marginLeft: '3px' }}>{'\u2713'}</span>}
-                      {st === 'error' && <span style={{ color: '#C00000', marginLeft: '3px' }}>{t().failed}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+           
           <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '6px 0 5px' }} />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ font: FONT_SMALL, color: '#808080', lineHeight: '1.3', flex: 1, marginRight: '12px' }}>
-              {t().welcomeDisclaimer}
+            2026
             </div>
-            <div style={{ width: '100px', height: '23px', flexShrink: 0 }} onClick={downloading || allDone ? undefined : downloadAll}>
-              <Button fontCSS={FONT} isDefault disabled={downloading || allDone}>
-                {downloading ? t().adding : allDone ? t().allAdded : t().addAll}
-              </Button>
-            </div>
+          
           </div>
         </div>
         </Window>

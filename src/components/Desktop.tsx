@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { parsePE, parseCOM, extractIcons } from '../lib/pe';
+import { parsePE, extractIcons } from '../lib/pe';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { getRootItems, addFile, addFolder, deleteFile, deleteFolder, moveFile, renameEntry, isFolder, displayName, type StoredFile, getAllFiles, readDroppedItems } from '../lib/file-store';
@@ -33,9 +33,6 @@ function extractFirstIconUrl(data: ArrayBuffer): string | null {
 }
 
 function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peInfo?: PEInfo } {
-  if (name?.toLowerCase().endsWith('.com')) {
-    return { ok: true, peInfo: parseCOM(data) };
-  }
   try {
     const peInfo = parsePE(data);
     if (peInfo.isMZ) return { ok: true, peInfo };
@@ -82,15 +79,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
   }, []);
 
   useEffect(() => {
-    loadFiles().then(() => {
-      const params = new URLSearchParams(window.location.search);
-      const autoOpen = params.get('open');
-      if (autoOpen) {
-        // Remove the param so it doesn't re-trigger on HMR
-        window.history.replaceState({}, '', window.location.pathname);
-        handleOpen(autoOpen, false);
-      }
-    });
+    loadFiles();
     const onRefresh = () => { loadFiles(); };
     window.addEventListener('desktop-files-changed', onRefresh);
     return () => window.removeEventListener('desktop-files-changed', onRefresh);
@@ -264,7 +253,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
             {t().rightClickHint}
           </div>
           <a
-            href="https://github.com/lqs/retrotick"
+            href="https:// "
             target="_blank"
             style={{
               display: 'inline-flex',
@@ -282,7 +271,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
               whiteSpace: 'nowrap',
             }}
           >
-            Star on GitHub
+            Star
           </a>
         </div>
       </div>

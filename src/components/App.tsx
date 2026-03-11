@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
+import { useState, useCallback, useRef } from 'preact/hooks';
 import {
   parsePE, extractBitmaps, extractIcons, extractCursors, extractMenus,
   extractDialogs, extractDelphiForms, extractAccelerators, extractAvi,
@@ -87,7 +87,7 @@ export function App() {
   const [windowIcons, setWindowIcons] = useState<Map<number, string | null>>(new Map());
   const [appLangs, setAppLangs] = useState<Map<number, string | null>>(new Map());
   const [minimizedApps, setMinimizedApps] = useState<Set<number>>(new Set());
-  const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem('welcome-dismissed'));
+  const [showWelcome, setShowWelcome] = useState(false);//() => !localStorage.getItem('welcome-dismissed'));
   const [showRegionalSettings, setShowRegionalSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
   const welcomeId = useRef(-1);
@@ -96,36 +96,6 @@ export function App() {
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
   const { createUrl } = useBlobUrls();
-  const audioContextRef = useRef<AudioContext | null>(null);
-
-  /** Get or create the shared AudioContext. */
-  const ensureAudioContext = useCallback(() => {
-    let ctx = audioContextRef.current;
-    if (!ctx) {
-      ctx = new AudioContext();
-      audioContextRef.current = ctx;
-    }
-    if (ctx.state === 'suspended') ctx.resume();
-    return ctx;
-  }, []);
-
-  // Create AudioContext on first user gesture (click/keydown/pointerdown)
-  useEffect(() => {
-    const handler = () => {
-      ensureAudioContext();
-      document.removeEventListener('click', handler);
-      document.removeEventListener('keydown', handler);
-      document.removeEventListener('pointerdown', handler);
-    };
-    document.addEventListener('click', handler);
-    document.addEventListener('keydown', handler);
-    document.addEventListener('pointerdown', handler);
-    return () => {
-      document.removeEventListener('click', handler);
-      document.removeEventListener('keydown', handler);
-      document.removeEventListener('pointerdown', handler);
-    };
-  }, [ensureAudioContext]);
 
   const focusApp = useCallback((id: number | null) => {
     if (id !== null) {
@@ -141,8 +111,6 @@ export function App() {
   }, []);
 
   const handleRunExe = useCallback((arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles?: Map<string, ArrayBuffer>, exeName: string = 'unknown', commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => {
-    // Create/resume AudioContext during this user gesture (double-click on EXE)
-    ensureAudioContext();
     const id = nextAppId.current++;
     const langId = detectPELanguageId(peInfo.resources);
     const htmlLang = langToHtmlLang(langId);
@@ -150,7 +118,7 @@ export function App() {
     setAppLangs(prev => new Map(prev).set(id, htmlLang));
     setLoadingAppIds(prev => new Set(prev).add(id));
     focusApp(id);
-  }, [focusApp, ensureAudioContext]);
+  }, [focusApp]);
 
   const handleViewResources = useCallback(async (arrayBuffer: ArrayBuffer, fileName?: string) => {
     try {
@@ -324,7 +292,6 @@ export function App() {
             commandLine={app.commandLine}
             onSetupEmulator={app.onSetupEmulator}
             processRegistry={processRegistry}
-            audioContext={audioContextRef.current}
             onStop={() => handleStopApp(app.id)}
             onFocus={() => handleFocusApp(app.id)}
             onReady={() => handleAppReady(app.id)}
@@ -414,14 +381,14 @@ export function App() {
         })}
         onShutDown={() => setConfirmDialog({
           text: t().confirmShutDown,
-          onYes: () => { setConfirmDialog(null); window.location.href = 'https://github.com/lqs/retrotick'; },
+          onYes: () => { setConfirmDialog(null); window.location.href = ' '; },
         })}
       />
       {/* Confirm dialog */}
       {confirmDialog && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 99999 }}>
           <MessageBox
-            caption="RetroTick"
+            caption="Win"
             text={confirmDialog.text}
             type={MB_YESNO | MB_ICONQUESTION}
             focused
