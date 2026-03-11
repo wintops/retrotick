@@ -287,11 +287,14 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('LocalInit', 6, () => {
     const [segment, start, end] = emu.readPascalArgs16([2, 2, 2]);
     const base = emu.cpu.segBases.get(segment) ?? (segment * 16);
+    // When start=0, the heap must begin AFTER initialized static data in the segment
+    // to avoid clobbering global variables loaded from the NE file.
+    const staticEnd = emu.segStaticEnd.get(segment) || 0;
+    const effectiveStart = (start === 0 && staticEnd > 0) ? staticEnd : start;
     // Reserve 4 bytes at heap start for the heap header — real Windows local heap
     // stores management info there, so the first allocation offset is never 0
     // (callers treat offset 0 as NULL/failure).
-    const heapStart = start + 4;
-    console.log(`[KERNEL16] LocalInit(seg=0x${segment.toString(16)}, start=0x${start.toString(16)}, end=0x${end.toString(16)}) base=0x${base.toString(16)}`);
+    const heapStart = Math.max(effectiveStart, 4) + 4;
     emu.segLocalHeaps.set(segment, { ptr: base + heapStart, end: base + end });
     return 1;
   }, 4);

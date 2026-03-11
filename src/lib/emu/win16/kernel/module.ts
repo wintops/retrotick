@@ -48,8 +48,38 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
     return 0;
   }, 49);
 
-  // --- Ordinal 50: GetProcAddress(hModule, lpProcName_str) — 6 bytes (word+str) ---
-  kernel.register('GetProcAddress', 6, () => 0, 50);
+  // --- Ordinal 50: GetProcAddress(hModule, lpProcName_str) — 6 bytes (word+dword) ---
+  kernel.register('GetProcAddress', 6, () => {
+    const [hModule, lpProcName] = emu.readPascalArgs16([2, 4]);
+    // lpProcName can be a far pointer to a string OR MAKEINTRESOURCE (high word = 0 → ordinal)
+    const seg = (lpProcName >>> 16) & 0xFFFF;
+    const off = lpProcName & 0xFFFF;
+    let name = '';
+    let ordinal = 0;
+    if (seg === 0) {
+      // Integer ordinal
+      ordinal = off;
+    } else {
+      const linear = emu.resolveFarPtr(lpProcName);
+      name = emu.memory.readCString(linear);
+    }
+    // Look up in loaded NE DLLs
+    if (emu.ne) {
+      for (const seg2 of emu.ne.segments) {
+        // Check if this segment belongs to the module with handle hModule
+      }
+      // Search entry points for the ordinal/name
+      if (ordinal > 0) {
+        for (const [addr, info] of emu.ne.apiMap) {
+          if (info.ordinal === ordinal) {
+            // This is a thunk address, return it as a far pointer
+            return addr;
+          }
+        }
+      }
+    }
+    return 0;
+  }, 50);
 
   // --- Ordinal 51: MakeProcInstance(lpProc_segptr, hInstance) — 6 bytes (segptr+word) ---
   kernel.register('MakeProcInstance', 6, () => {

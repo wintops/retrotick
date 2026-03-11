@@ -2,6 +2,7 @@ import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
 import { findMenuItemById } from './index';
 import type { Win16UserHelpers } from './index';
+import { extractMenus } from '../../../pe/extract-menu';
 
 // Win16 USER module — Menu operations
 
@@ -11,7 +12,20 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   user.register('LoadMenu', 6, () => {
     const [hInstance, lpMenuName] = emu.readPascalArgs16([2, 4]);
-    // console.log(`[WIN16] LoadMenu hInst=0x${hInstance.toString(16)} menuName=0x${lpMenuName.toString(16)}`);
+    // Extract menu resource ID from lpMenuName (MAKEINTRESOURCE or string)
+    const seg = (lpMenuName >>> 16) & 0xFFFF;
+    const menuId = seg === 0 ? (lpMenuName & 0xFFFF) : 0;
+    // Populate emu.menuItems from NE resources if not yet done
+    if (!emu.menuItems && emu.peInfo && emu._arrayBuffer) {
+      const menus = extractMenus(emu.peInfo, emu._arrayBuffer);
+      if (menuId > 0) {
+        const match = menus.find(m => m.id === menuId);
+        if (match) emu.menuItems = match.menu.items;
+      }
+      if (!emu.menuItems && menus.length > 0) {
+        emu.menuItems = menus[0].menu.items;
+      }
+    }
     return 1;
   }, 150);
 

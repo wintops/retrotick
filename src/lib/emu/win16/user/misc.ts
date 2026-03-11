@@ -1,6 +1,7 @@
 import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
 import type { Win16UserHelpers } from './index';
+import { findMenuItemById } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
 import { handleListBoxMessage16 } from './message';
 
@@ -995,7 +996,22 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetUpdateRgn', 6, () => 1); // NULLREGION
 
   // Ordinal 250: GetMenuState(hMenu, uId, uFlags) — 6 bytes
-  user.register('GetMenuState', 6, () => 0xFFFFFFFF, 250); // -1 = menu item doesn't exist
+  user.register('GetMenuState', 6, () => {
+    const [_hMenu, uId, uFlags] = emu.readPascalArgs16([2, 2, 2]);
+    if (!emu.menuItems) return 0xFFFF;
+    const MF_BYPOSITION = 0x400;
+    const MF_GRAYED = 0x1;
+    const MF_CHECKED = 0x8;
+    const MF_POPUP = 0x10;
+    if (uFlags & MF_BYPOSITION) return 0xFFFF; // not implemented
+    const item = findMenuItemById(emu.menuItems, uId);
+    if (!item) return 0xFFFF;
+    let state = 0; // MF_ENABLED
+    if (item.isGrayed) state |= MF_GRAYED;
+    if (item.isChecked) state |= MF_CHECKED;
+    if (item.children && item.children.length > 0) state |= MF_POPUP;
+    return state;
+  }, 250);
 
   // Ordinal 264: GetMenuItemID(hMenu, nPos) — 4 bytes
   user.register('GetMenuItemID', 4, () => 0xFFFF, 264); // -1

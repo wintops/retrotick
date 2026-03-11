@@ -54,8 +54,7 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
     const off = lpBitmapName & 0xFFFF;
     if (seg === 0) {
       // Integer resource ID
-      const hBmp = emu.loadBitmapResource(off);
-      return hBmp || off || 1;
+      return emu.loadBitmapResource(off) || off || 1;
     } else {
       // Far pointer to string name
       const linear = emu.resolveFarPtr(lpBitmapName);

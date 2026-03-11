@@ -24,13 +24,13 @@ export function registerKernelProfile(kernel: Win16Module, emu: Emulator, _state
 
   // --- Ordinal 57: GetProfileInt(str str s_word) — 10 bytes ---
   kernel.register('GetProfileInt', 10, () => {
-    const [lpAppName, lpKeyName, nDefault] = emu.readPascalArgs16([4, 4, 2]);
+    const [_lpAppName, _lpKeyName, nDefault] = emu.readPascalArgs16([4, 4, 2]);
     return nDefault;
   }, 57);
 
   // --- Ordinal 58: GetProfileString(str str str ptr word) — 18 bytes ---
   kernel.register('GetProfileString', 18, () => {
-    const [lpAppName, lpKeyName, lpDefault, lpRetBuf, nSize] = emu.readPascalArgs16([4, 4, 4, 4, 2]);
+    const [_lpAppName, _lpKeyName, lpDefault, lpRetBuf, nSize] = emu.readPascalArgs16([4, 4, 4, 4, 2]);
     return copyDefault(lpDefault, lpRetBuf, nSize);
   }, 58);
 
@@ -39,13 +39,13 @@ export function registerKernelProfile(kernel: Win16Module, emu: Emulator, _state
 
   // --- Ordinal 127: GetPrivateProfileInt(str str s_word str) — 14 bytes ---
   kernel.register('GetPrivateProfileInt', 14, () => {
-    const [lpAppName, lpKeyName, nDefault] = emu.readPascalArgs16([4, 4, 2, 4]);
+    const [_lpAppName, _lpKeyName, nDefault, _lpFileName] = emu.readPascalArgs16([4, 4, 2, 4]);
     return nDefault;
   }, 127);
 
   // --- Ordinal 128: GetPrivateProfileString(str str str ptr word str) — 22 bytes ---
   kernel.register('GetPrivateProfileString', 22, () => {
-    const [lpAppName, lpKeyName, lpDefault, lpRetBuf, nSize, lpFileName] = emu.readPascalArgs16([4, 4, 4, 4, 2, 4]);
+    const [_lpAppName, _lpKeyName, lpDefault, lpRetBuf, nSize, _lpFileName] = emu.readPascalArgs16([4, 4, 4, 4, 2, 4]);
     return copyDefault(lpDefault, lpRetBuf, nSize);
   }, 128);
 

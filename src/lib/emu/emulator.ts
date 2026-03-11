@@ -603,6 +603,9 @@ export class Emulator {
   // Per-segment local heaps (selector → {ptr, end})
   segLocalHeaps = new Map<number, { ptr: number; end: number }>();
 
+  // Per-segment static data end offsets (selector → end of initialized data)
+  segStaticEnd = new Map<number, number>();
+
   // NE DLL resources (for LoadBitmap etc. to search across DLLs)
   neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
 
