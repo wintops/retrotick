@@ -69,7 +69,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
         const child = emu.handles.get<WindowInfo>(childHwnd);
         if (child && lpString) {
           child.title = emu.memory.readCString(lpString);
-          console.log(`[WIN16] SetDlgItemText(dlg=0x${hDlg.toString(16)}, id=${nIDDlgItem}, "${child.title}")`);
+          // console.log(`[WIN16] SetDlgItemText(dlg=0x${hDlg.toString(16)}, id=${nIDDlgItem}, "${child.title}")`);
         }
       }
     }
@@ -323,10 +323,10 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
     return 0;
   }
 
-  console.log(`[WIN16] DialogBox template=${res.name ?? res.id} title="${dlg.title}" ${dlg.cx}x${dlg.cy} controls=${dlg.controls.length}`);
-  for (const c of dlg.controls) {
-    console.log(`  [DLG] id=${c.id} class="${c.className}" text="${c.text}" style=0x${c.style.toString(16)} ${c.x},${c.y} ${c.width}x${c.height}`);
-  }
+  // console.log(`[WIN16] DialogBox template=${res.name ?? res.id} title="${dlg.title}" ${dlg.cx}x${dlg.cy} controls=${dlg.controls.length}`);
+  // for (const c of dlg.controls) {
+  //   console.log(`  [DLG] id=${c.id} class="${c.className}" text="${c.text}" style=0x${c.style.toString(16)} ${c.x},${c.y} ${c.width}x${c.height}`);
+  // }
 
   // Scale from dialog units to pixels (approximate: 1 DLU ≈ 1.5px horizontal, 1.75px vertical)
   const scaleX = 1.5, scaleY = 1.75;

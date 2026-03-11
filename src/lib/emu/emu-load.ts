@@ -191,6 +191,11 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.virtualBase = heapStart + 0x01000000;
     emu.virtualPtr = emu.virtualBase;
 
+    // Map heap segment so x86 code can access heap data via FAR pointers
+    // (e.g., LockResource returns linear addr that x86 code uses as seg:off)
+    const heapSel = heapStart >>> 16;
+    emu.cpu.segBases.set(heapSel, heapStart);
+
     // Register Win16 API handlers
     registerWin16Kernel(emu);
     registerWin16User(emu);

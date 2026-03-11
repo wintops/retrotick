@@ -2,6 +2,7 @@ import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
 import type { Win16UserHelpers } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
+import { getClientSize } from '../../win32/user32/_helpers';
 
 // Win16 USER module — Message loop & dispatch
 
@@ -328,6 +329,26 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   user.register('GetMessage', 10, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax] = emu.readPascalArgs16([4, 2, 2, 2]);
+    // Synthesize WM_SIZE from pending resize (set by applyCanvasToEmu during drag).
+    // Checked before the queue so the latest size is always used, and WM_PAINT
+    // can follow in the same tick (no queue flooding).
+    if (emu._pendingResizeLParam !== null && emu.mainWindow) {
+      const lParam = emu._pendingResizeLParam;
+      emu._pendingResizeLParam = null;
+      // Drain any queued WM_SIZE for mainWindow to prevent duplicates
+      const q = emu.messageQueue;
+      for (let i = q.length - 1; i >= 0; i--) {
+        if (q[i].hwnd === emu.mainWindow && q[i].message === 0x0005) {
+          q.splice(i, 1);
+        }
+      }
+      emu.memory.writeU16(lpMsg, emu.mainWindow & 0xFFFF);
+      emu.memory.writeU16(lpMsg + 2, 0x0005); // WM_SIZE
+      emu.memory.writeU16(lpMsg + 4, 0);
+      emu.memory.writeU32(lpMsg + 6, lParam);
+      emu.memory.writeU32(lpMsg + 10, Date.now() & 0xFFFFFFFF);
+      return 1;
+    }
     if (emu.messageQueue.length > 0) {
       const msg = emu.messageQueue.shift()!;
       emu.memory.writeU16(lpMsg, msg.hwnd);
@@ -339,7 +360,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     }
     // Synthesize WM_PAINT for windows that need repainting
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-      if (wnd && wnd.needsPaint && wnd.wndProc) {
+      if (!wnd || !wnd.needsPaint) continue;
+      if (wnd.wndProc) {
         if (wnd.needsErase) {
           wnd.needsErase = false;
           const hdc = emu.getWindowDC(handle);
@@ -356,6 +378,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         emu.memory.writeU32(lpMsg + 6, 0);
         emu.memory.writeU32(lpMsg + 10, Date.now() & 0xFFFFFFFF);
         return 1;
+      }
+      // Built-in windows (no wndProc) with a class brush: erase background directly
+      if (wnd.needsErase && wnd.classInfo.hbrBackground) {
+        wnd.needsErase = false;
+        wnd.needsPaint = false;
+        const hdc = emu.getWindowDC(handle);
+        const dc = emu.getDC(hdc);
+        if (dc) {
+          const brush = emu.getBrush(wnd.classInfo.hbrBackground);
+          if (brush && !brush.isNull) {
+            const r = brush.color & 0xFF, g = (brush.color >> 8) & 0xFF, b = (brush.color >> 16) & 0xFF;
+            dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+            dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+            emu.syncDCToCanvas(hdc);
+          }
+        }
+      } else {
+        wnd.needsPaint = false;
       }
     }
     // No messages — wait for one
@@ -393,7 +433,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     // Check for synthesized WM_PAINT
     if (emu.messageQueue.length === 0 && emu.wndProcDepth === 0) {
       for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-        if (wnd && wnd.needsPaint && wnd.wndProc) {
+        if (!wnd || !wnd.needsPaint) continue;
+        if (wnd.wndProc) {
           const hasFilter = wMsgFilterMin !== 0 || wMsgFilterMax !== 0;
           const WM_PAINT = 0x000F;
           if (!hasFilter || (WM_PAINT >= wMsgFilterMin && WM_PAINT <= wMsgFilterMax)) {
@@ -407,6 +448,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
             wnd.needsPaint = false;
             return 1;
           }
+        }
+        // Built-in windows (no wndProc): erase background directly
+        if (wnd.needsErase && wnd.classInfo.hbrBackground) {
+          wnd.needsErase = false;
+          wnd.needsPaint = false;
+          const hdc = emu.getWindowDC(handle);
+          const dc = emu.getDC(hdc);
+          if (dc) {
+            const brush = emu.getBrush(wnd.classInfo.hbrBackground);
+            if (brush && !brush.isNull) {
+              const r = brush.color & 0xFF, g = (brush.color >> 8) & 0xFF, b = (brush.color >> 16) & 0xFF;
+              dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+              dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+              emu.syncDCToCanvas(hdc);
+            }
+          }
+        } else {
+          wnd.needsPaint = false;
         }
       }
     }
@@ -709,7 +768,14 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const WS_CHILD = 0x40000000;
         const WS_VISIBLE = 0x10000000;
         const WS_CLIPSIBLINGS = 0x04000000;
-        const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+        // MDI children implicitly get caption/frame styles (Windows 3.1 default)
+        const WS_CAPTION = 0x00C00000;
+        const WS_SYSMENU = 0x00080000;
+        const WS_THICKFRAME = 0x00040000;
+        const WS_MINIMIZEBOX = 0x00020000;
+        const WS_MAXIMIZEBOX = 0x00010000;
+        const mdiDefaultStyle = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+        const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | mdiDefaultStyle;
 
         // Auto-size to MDIClient area when dimensions are 0 or CW_USEDEFAULT
         const clientW = wnd.width || (emu.canvas?.width ?? 320);
@@ -731,7 +797,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
           children: new Map(),
         });
-        { const w = emu.handles.get<WindowInfo>(childHwnd); if (w) w.hwnd = childHwnd; }
+        { const w = emu.handles.get<WindowInfo>(childHwnd); if (w) { w.hwnd = childHwnd; w.needsPaint = true; w.needsErase = true; } }
 
         // Register child in parent's childList
         if (!wnd.childList) wnd.childList = [];
@@ -766,12 +832,17 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, csFarPtr);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
 
-          // Send WM_SIZE so child knows its dimensions
+          // Send WM_SIZE with client area dimensions
           const WM_SIZE = 0x0005;
-          const sizeLParam = ((childWnd.height & 0xFFFF) << 16) | (childWnd.width & 0xFFFF);
+          const { cw: sizeW, ch: sizeH } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, true);
+          const sizeLParam = ((sizeH & 0xFFFF) << 16) | (sizeW & 0xFFFF);
           emu.callWndProc16(classInfo.wndProc, childHwnd, WM_SIZE, 0, sizeLParam);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
         }
+
+        // Invalidate mainWindow so next WM_PAINT cycle picks up the new MDI child
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd) { mainWnd.needsPaint = true; }
 
         console.log(`[WIN16] WM_MDICREATE → created hwnd=0x${childHwnd.toString(16)}`);
         return childHwnd;
@@ -787,11 +858,104 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       const WM_MDISETMENU = 0x0230;
       if (message === WM_MDIACTIVATE) {
         (wnd as any).mdiActiveChild = wParam;
+        // Move to end of childList for z-ordering (top = last)
+        if (wnd.childList) {
+          const idx = wnd.childList.indexOf(wParam);
+          if (idx >= 0) {
+            wnd.childList.splice(idx, 1);
+            wnd.childList.push(wParam);
+          }
+        }
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd) mainWnd.needsPaint = true;
+        emu.notifyControlOverlays();
         return 0;
       }
-      if (message === WM_MDIDESTROY || message === WM_MDITILE ||
-          message === WM_MDICASCADE || message === WM_MDIICONARRANGE ||
-          message === WM_MDISETMENU) {
+      if (message === WM_MDIDESTROY) {
+        // Destroy the MDI child window
+        const childToDestroy = wParam;
+        if (wnd.childList) {
+          const idx = wnd.childList.indexOf(childToDestroy);
+          if (idx >= 0) wnd.childList.splice(idx, 1);
+        }
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd) mainWnd.needsPaint = true;
+        return 0;
+      }
+      if (message === WM_MDITILE) {
+        // Tile MDI children horizontally or vertically
+        if (wnd.childList && wnd.childList.length > 0) {
+          const visibleChildren = wnd.childList.filter(h => {
+            const c = emu.handles.get<WindowInfo>(h);
+            return c && c.visible;
+          });
+          const count = visibleChildren.length;
+          if (count > 0) {
+            const areaW = wnd.width || (emu.canvas?.width ?? 640);
+            const areaH = wnd.height || (emu.canvas?.height ?? 480);
+            const MDITILE_VERTICAL = 0x0000;
+            const isVertical = (wParam & 0x0001) === MDITILE_VERTICAL;
+            const cols = isVertical ? Math.ceil(Math.sqrt(count)) : 1;
+            const rows = Math.ceil(count / cols);
+            const tileW = Math.floor(areaW / cols);
+            const tileH = Math.floor(areaH / rows);
+            for (let i = 0; i < count; i++) {
+              const child = emu.handles.get<WindowInfo>(visibleChildren[i]);
+              if (!child) continue;
+              const col = i % cols;
+              const row = Math.floor(i / cols);
+              child.x = col * tileW;
+              child.y = row * tileH;
+              child.width = tileW;
+              child.height = tileH;
+              child.needsPaint = true;
+              if (child.wndProc) {
+                const { cw: tw, ch: th } = getClientSize(child.style, false, child.width, child.height, true);
+                const lp = ((th & 0xFFFF) << 16) | (tw & 0xFFFF);
+                emu.callWndProc16(child.wndProc, visibleChildren[i], 0x0005, 0, lp); // WM_SIZE
+              }
+            }
+            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+            if (mainWnd) mainWnd.needsPaint = true;
+          }
+        }
+        return 0;
+      }
+      if (message === WM_MDICASCADE) {
+        // Cascade MDI children with offset
+        if (wnd.childList && wnd.childList.length > 0) {
+          const visibleChildren = wnd.childList.filter(h => {
+            const c = emu.handles.get<WindowInfo>(h);
+            return c && c.visible;
+          });
+          const count = visibleChildren.length;
+          if (count > 0) {
+            const areaW = wnd.width || (emu.canvas?.width ?? 640);
+            const areaH = wnd.height || (emu.canvas?.height ?? 480);
+            const cascadeOffset = 20;
+            const childW = Math.max(100, areaW - cascadeOffset * (count - 1));
+            const childH = Math.max(80, areaH - cascadeOffset * (count - 1));
+            for (let i = 0; i < count; i++) {
+              const child = emu.handles.get<WindowInfo>(visibleChildren[i]);
+              if (!child) continue;
+              child.x = i * cascadeOffset;
+              child.y = i * cascadeOffset;
+              child.width = childW;
+              child.height = childH;
+              child.needsPaint = true;
+              if (child.wndProc) {
+                const { cw: cw2, ch: ch2 } = getClientSize(child.style, false, child.width, child.height, true);
+                const lp = ((ch2 & 0xFFFF) << 16) | (cw2 & 0xFFFF);
+                emu.callWndProc16(child.wndProc, visibleChildren[i], 0x0005, 0, lp); // WM_SIZE
+              }
+            }
+            const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+            if (mainWnd) mainWnd.needsPaint = true;
+          }
+        }
+        return 0;
+      }
+      if (message === WM_MDIICONARRANGE || message === WM_MDISETMENU) {
         return 0;
       }
     }

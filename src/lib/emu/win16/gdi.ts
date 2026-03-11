@@ -156,7 +156,7 @@ export function registerWin16Gdi(emu: Emulator): void {
     const ctx = canvas.getContext('2d')!;
     const defBmpCanvas = new OffscreenCanvas(1, 1);
     const defBmpCtx = defBmpCanvas.getContext('2d')!;
-    const defBmp: BitmapInfo = { width: 1, height: 1, canvas: defBmpCanvas, ctx: defBmpCtx };
+    const defBmp: BitmapInfo = { width: 1, height: 1, canvas: defBmpCanvas, ctx: defBmpCtx, monochrome: true };
     const defBmpHandle = emu.handles.alloc('bitmap', defBmp);
     const dc: DCInfo = {
       canvas, ctx, hwnd: 0,
@@ -759,20 +759,58 @@ export function registerWin16Gdi(emu: Emulator): void {
 
     if (w <= 0 || h <= 0) return 1;
 
+    const srcBmp = emu.handles.get<BitmapInfo>(srcDC.selectedBitmap);
+    const dstBmp = emu.handles.get<BitmapInfo>(dstDC.selectedBitmap);
+    const srcMono = !!srcBmp?.monochrome;
+    const dstMono = !!dstBmp?.monochrome;
+
+    // Get source pixels with mono↔color conversion applied
+    const getConvertedSrcData = (): ImageData => {
+      const raw = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+      const px = raw.data;
+      if (srcMono && !dstMono) {
+        // Mono→color: black(0)→textColor, white(255)→bkColor of dest DC
+        const bk = dstDC.bkColor, tx = dstDC.textColor;
+        const bkR = bk & 0xFF, bkG = (bk >> 8) & 0xFF, bkB = (bk >> 16) & 0xFF;
+        const txR = tx & 0xFF, txG = (tx >> 8) & 0xFF, txB = (tx >> 16) & 0xFF;
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i] + px[i + 1] + px[i + 2] < 128 * 3) {
+            px[i] = txR; px[i + 1] = txG; px[i + 2] = txB;
+          } else {
+            px[i] = bkR; px[i + 1] = bkG; px[i + 2] = bkB;
+          }
+          px[i + 3] = 255;
+        }
+      } else if (!srcMono && dstMono) {
+        // Color→mono: pixels matching srcDC.bkColor → white(255), else → black(0)
+        const bk = srcDC.bkColor;
+        const bkR = bk & 0xFF, bkG = (bk >> 8) & 0xFF, bkB = (bk >> 16) & 0xFF;
+        for (let i = 0; i < px.length; i += 4) {
+          const match = px[i] === bkR && px[i + 1] === bkG && px[i + 2] === bkB;
+          px[i] = px[i + 1] = px[i + 2] = match ? 255 : 0;
+          px[i + 3] = 255;
+        }
+      }
+      return raw;
+    };
+
     if (rop === SRCCOPY16) {
-      dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
+      if (srcMono || dstMono) {
+        dstDC.ctx.putImageData(getConvertedSrcData(), xDst, yDst);
+      } else {
+        dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
+      }
     } else if (rop === NOTSRCCOPY16) {
-      dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
-      const imgData = dstDC.ctx.getImageData(xDst, yDst, w, h);
-      const px = imgData.data;
+      const srcData = getConvertedSrcData();
+      const px = srcData.data;
       for (let i = 0; i < px.length; i += 4) {
         px[i] = 255 - px[i];
         px[i+1] = 255 - px[i+1];
         px[i+2] = 255 - px[i+2];
       }
-      dstDC.ctx.putImageData(imgData, xDst, yDst);
+      dstDC.ctx.putImageData(srcData, xDst, yDst);
     } else if (rop === SRCPAINT16) {
-      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+      const srcData = getConvertedSrcData();
       const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] |= srcData.data[i];
@@ -781,7 +819,7 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
     } else if (rop === SRCAND16) {
-      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+      const srcData = getConvertedSrcData();
       const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] &= srcData.data[i];
@@ -790,7 +828,7 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
     } else if (rop === SRCINVERT16) {
-      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+      const srcData = getConvertedSrcData();
       const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] ^= srcData.data[i];
@@ -1002,7 +1040,8 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
       ctx.putImageData(imgData, 0, 0);
     }
-    const bmp: BitmapInfo = { width: bw, height: bh, canvas, ctx };
+    const monochrome = (nPlanes === 1 && nBitCount === 1);
+    const bmp: BitmapInfo = { width: bw, height: bh, canvas, ctx, monochrome };
     return emu.handles.alloc('bitmap', bmp);
   }, 48);
 
@@ -2126,6 +2165,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('CreateDIBitmap', 20, () => {
     const [hdc, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage] =
       emu.readPascalArgs16([2, 4, 4, 4, 4, 2]);
+
     let w = 1, h = 1;
     if (lpbmih) {
       w = emu.memory.readU32(lpbmih + 4) || 1;

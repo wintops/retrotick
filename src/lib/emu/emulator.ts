@@ -91,6 +91,16 @@ export interface ControlOverlay {
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
   bgColor?: string;
+  /** True if this is an MDI child window (should render with title bar/frame) */
+  isMdiChild?: boolean;
+  /** True if this MDI child is the active (focused) one */
+  isMdiActive?: boolean;
+  /** True if this MDI child is maximized */
+  isMdiMaximized?: boolean;
+  /** True if this MDI child is minimized */
+  isMdiMinimized?: boolean;
+  /** Children overlays nested inside this MDI child window */
+  mdiChildren?: ControlOverlay[];
 }
 
 // Detect fullwidth characters (CJK, fullwidth forms, etc.) that occupy 2 console columns
@@ -616,6 +626,11 @@ export class Emulator {
   } | null = null;
 
   drawItemStructAddr = 0;
+
+  /** Pending resize lParam for the main window (set by applyCanvasToEmu, consumed by GetMessage).
+   *  This avoids WM_SIZE queue flooding during rapid resize drags and guarantees
+   *  WM_SIZE + WM_PAINT are delivered in the same tick. */
+  _pendingResizeLParam: number | null = null;
 
 
   // Screen dirty flag — set by GDI draw ops that write to screen DC,
@@ -1158,9 +1173,37 @@ export class Emulator {
       const child = this.handles.get<WindowInfo>(childHwnd);
       if (!child || !child.visible || !child.wndProc) continue;
       child.needsPaint = true;
-      this.callWndProc(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      if (this.isNE) {
+        this.callWndProc16(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      } else {
+        this.callWndProc(child.wndProc, childHwnd, WM_PAINT, 0, 0);
+      }
       child.needsPaint = false;
     }
+  }
+  /** Hit-test: find the deepest visible child window at (x,y) in the main window's client area.
+   *  Returns { hwnd, x, y } with coordinates relative to the found window's client area. */
+  windowFromPoint(px: number, py: number): { hwnd: number; x: number; y: number } {
+    const main = this.mainWindow;
+    if (!main) return { hwnd: 0, x: px, y: py };
+
+    const findChild = (parentHwnd: number, cx: number, cy: number): { hwnd: number; x: number; y: number } => {
+      const parent = this.handles.get<WindowInfo>(parentHwnd);
+      if (!parent?.childList) return { hwnd: parentHwnd, x: cx, y: cy };
+      // Walk children in reverse (last = topmost in z-order)
+      for (let i = parent.childList.length - 1; i >= 0; i--) {
+        const childHwnd = parent.childList[i];
+        const child = this.handles.get<WindowInfo>(childHwnd);
+        if (!child || !child.visible) continue;
+        if (cx >= child.x && cy >= child.y &&
+            cx < child.x + child.width && cy < child.y + child.height) {
+          return findChild(childHwnd, cx - child.x, cy - child.y);
+        }
+      }
+      return { hwnd: parentHwnd, x: cx, y: cy };
+    };
+
+    return findChild(main, px, py);
   }
   notifyControlOverlays(): void { _notifyControlOverlays(this); }
   syncDCToCanvas(hdc: number): void { _syncDCToCanvas(this, hdc); }

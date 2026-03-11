@@ -28,9 +28,11 @@ export function registerRegisterClass(emu: Emulator): void {
   // Register built-in Windows control classes
   const builtinClasses = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MDICLIENT', '#32770', 'msctls_hotkey32', 'msctls_trackbar32', 'msctls_progress32', 'msctls_statusbar32', 'msctls_updown32', 'tooltips_class32', 'SysTabControl32', 'SysListView32', 'SysTreeView32', 'SysHeader32', 'SysAnimate32', 'SysLink', 'ToolbarWindow32', 'ReBarWindow32', 'RichEdit20W', 'RICHEDIT20W', 'RichEdit20A', 'RICHEDIT'];
   for (const name of builtinClasses) {
+    const COLOR_APPWORKSPACE_BRUSH = 13; // COLOR_APPWORKSPACE (12) + 1
     const cls: WndClassInfo = {
       style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: name === '#32770' ? 30 : 0,
-      hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0,
+      hInstance: 0, hIcon: 0, hCursor: 0,
+      hbrBackground: name === 'MDICLIENT' ? COLOR_APPWORKSPACE_BRUSH : 0,
       menuName: 0, className: name,
     };
     windowClasses.set(name, cls);

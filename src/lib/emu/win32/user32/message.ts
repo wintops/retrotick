@@ -21,7 +21,8 @@ export function registerMessage(emu: Emulator): void {
   const synthesizePaint = (): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
     // Check all windows for needsPaint flag
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-      if (wnd && wnd.needsPaint && wnd.wndProc) {
+      if (!wnd || !wnd.needsPaint) continue;
+      if (wnd.wndProc) {
         if (wnd.needsErase) {
           wnd.needsErase = false;
           return { hwnd: handle, message: WM_ERASEBKGND, wParam: emu.getWindowDC(handle), lParam: 0 };
@@ -29,6 +30,24 @@ export function registerMessage(emu: Emulator): void {
         // Clear needsPaint here to prevent infinite WM_PAINT if WndProc doesn't call BeginPaint
         wnd.needsPaint = false;
         return { hwnd: handle, message: WM_PAINT, wParam: 0, lParam: 0 };
+      }
+      // Built-in windows (no wndProc) with a class brush: erase background directly
+      if (wnd.needsErase && wnd.classInfo.hbrBackground) {
+        wnd.needsErase = false;
+        wnd.needsPaint = false;
+        const hdc = emu.getWindowDC(handle);
+        const dc = emu.getDC(hdc);
+        if (dc) {
+          const brush = emu.getBrush(wnd.classInfo.hbrBackground);
+          if (brush && !brush.isNull) {
+            const r = brush.color & 0xFF, g = (brush.color >> 8) & 0xFF, b = (brush.color >> 16) & 0xFF;
+            dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+            dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+            emu.syncDCToCanvas(hdc);
+          }
+        }
+      } else {
+        wnd.needsPaint = false;
       }
     }
     return null;
@@ -168,7 +187,7 @@ export function registerMessage(emu: Emulator): void {
 
     // Check if any window needs repainting (synthesizable WM_PAINT)
     for (const [, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-      if (wnd && wnd.needsPaint && wnd.wndProc) {
+      if (wnd && wnd.needsPaint && (wnd.wndProc || (wnd.needsErase && wnd.classInfo.hbrBackground))) {
         return nCount;
       }
     }
@@ -405,6 +424,15 @@ export function registerMessage(emu: Emulator): void {
 
       if (message === WM_MDIACTIVATE) {
         (wnd as any).mdiActiveChild = wParam;
+        // Move to end of childList for z-ordering
+        if (wnd.childList) {
+          const idx = wnd.childList.indexOf(wParam);
+          if (idx >= 0) {
+            wnd.childList.splice(idx, 1);
+            wnd.childList.push(wParam);
+          }
+        }
+        emu.notifyControlOverlays();
         return 0;
       }
 

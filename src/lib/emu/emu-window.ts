@@ -5,7 +5,7 @@ import { OPAQUE, SYS_COLORS, COLOR_BTNFACE } from './win32/types';
 import { decodeDib } from '../pe/decode-dib';
 import { rvaToFileOffset } from '../pe/read';
 import { renderChildControls } from './emu-render';
-import { getClientSize } from './win32/user32/_helpers';
+import { getClientSize, getNonClientMetrics } from './win32/user32/_helpers';
 import { emuFindResourceEntryForModule } from './emu-load';
 
 // Track DCs that have canvas state saved (child window translate)
@@ -61,6 +61,13 @@ export function promoteToMainWindow(emu: Emulator, hwnd: number, wnd: WindowInfo
 
 export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
   if (!emu.canvas) return;
+  // Preserve existing content across resize (canvas.width= clears it)
+  const oldW = emu.canvas.width;
+  const oldH = emu.canvas.height;
+  let saved: ImageData | null = null;
+  if (oldW > 0 && oldH > 0 && emu.canvasCtx) {
+    try { saved = emu.canvasCtx.getImageData(0, 0, oldW, oldH); } catch {}
+  }
   emu.canvas.width = cw;
   emu.canvas.height = ch;
   if (emu.canvas.style) {
@@ -69,6 +76,10 @@ export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
   }
   emu.canvasCtx = emu.canvas.getContext('2d')!;
   emu.canvasCtx.imageSmoothingEnabled = false;
+  // Restore preserved content (new area stays transparent → DOM background shows through)
+  if (saved) {
+    emu.canvasCtx.putImageData(saved, 0, 0);
+  }
   // Update existing cached DC to use the new context (don't free — programs may cache the handle)
   const oldDC = emu.windowDCs.get(emu.mainWindow);
   if (oldDC) {
@@ -78,7 +89,6 @@ export function setupCanvasSize(emu: Emulator, cw: number, ch: number): void {
       dc.ctx = emu.canvasCtx;
     }
   }
-  console.log(`[WND] Canvas resized to ${cw}x${ch}`);
 }
 
 // Check if hwnd is a descendant of the main window
@@ -99,7 +109,16 @@ function getWindowOrigin(emu: Emulator, hwnd: number): { x: number; y: number } 
     x += cur.x || 0;
     y += cur.y || 0;
     if (!cur.parent) break;
-    cur = emu.handles.get<WindowInfo>(cur.parent);
+    const parent = emu.handles.get<WindowInfo>(cur.parent);
+    // Add non-client offset for parents with caption/frame (e.g. MDI children)
+    // Child windows are positioned relative to the parent's client area, so we need
+    // to offset by the parent's non-client area (border + caption)
+    if (parent && parent.hwnd !== emu.mainWindow) {
+      const { bw, captionH } = getNonClientMetrics(parent.style, !!parent.hMenu, emu.isNE);
+      x += bw;
+      y += bw + captionH;
+    }
+    cur = parent;
   }
   return { x, y };
 }
@@ -417,7 +436,7 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
       const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
       const hBitmap = emu.handles.alloc('bitmap', bmp);
       emu.bitmapCache.set(resourceId, hBitmap);
-      console.log(`[NE] Loaded bitmap resource ${resourceId}: ${width}x${height} → handle ${hBitmap}`);
+      // console.log(`[NE] Loaded bitmap resource ${resourceId}: ${width}x${height} → handle ${hBitmap}`);
       return hBitmap;
     } catch (e: unknown) {
       console.warn(`Failed to load NE bitmap resource ${resourceId}: ${e instanceof Error ? e.message : String(e)}`);

@@ -42,6 +42,8 @@ export interface WindowInfo {
   painting?: boolean;
   minimized?: boolean;
   maximized?: boolean;
+  _preMaxRect?: { x: number; y: number; w: number; h: number };
+  _preMinRect?: { x: number; y: number; w: number; h: number };
   checked?: number;   // BST_UNCHECKED=0, BST_CHECKED=1, BST_INDETERMINATE=2
   hFont?: number;     // font handle set via WM_SETFONT
   props?: Map<string, number>;  // window properties (SetProp/GetProp)
@@ -88,6 +90,8 @@ export interface WindowInfo {
   editModified?: boolean; // EM_SETMODIFY / EM_GETMODIFY
   editBufferHandle?: number; // EM_GETHANDLE local heap handle
   ownerThreadId?: number; // thread that created this window
+  /** Nesting counter to limit recursive WM_SIZE during MoveWindow/SetWindowPos */
+  _wmSizeNest?: number;
   /** Per-control canvas for custom drawing (overlay companion canvas) */
   domCanvas?: HTMLCanvasElement;
   /** DOM input/textarea element for EDIT controls (clipboard operations) */

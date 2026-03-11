@@ -2,6 +2,7 @@ import type { Emulator, ControlOverlay } from './emulator';
 import type { WindowInfo } from './win32/user32/index';
 import type { BrushInfo } from './win32/gdi32/types';
 import { renderButton, renderStatic, renderEdit } from './emu-render-controls';
+import { getNonClientMetrics } from './win32/user32/_helpers';
 
 const WM_CTLCOLORSTATIC = 0x0138;
 
@@ -48,7 +49,7 @@ export function fillTextBitmap(
 export function notifyControlOverlays(emu: Emulator): void {
   const wnd = emu.handles.get<WindowInfo>(emu.mainWindow);
   if (!wnd?.childList || !emu.onControlsChanged) return;
-  const allChildren: { hwnd: number; info: WindowInfo; ox: number; oy: number }[] = [];
+  const allChildren: CollectedChild[] = [];
   collectChildren(emu, wnd, 0, 0, allChildren);
   const overlays = buildOverlays(emu, allChildren);
   if (overlays.length > 0) {
@@ -58,13 +59,18 @@ export function notifyControlOverlays(emu: Emulator): void {
 
 const DOM_CLASSES = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MSCTLS_TRACKBAR32', 'MSCTLS_PROGRESS32', 'MSCTLS_HOTKEY32', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT', 'SYSTABCONTROL32', 'SYSLISTVIEW32', 'MSCTLS_STATUSBAR32', 'SYSTREEVIEW32'];
 
-function buildOverlays(emu: Emulator, allChildren: { hwnd: number; info: WindowInfo; ox: number; oy: number }[]): ControlOverlay[] {
+function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOverlay[] {
   const overlays: ControlOverlay[] = [];
-  for (const { hwnd: childHwnd, info: child, ox, oy } of allChildren) {
+  const mdiChildMap = new Map<number, ControlOverlay>();
+
+  for (const { hwnd: childHwnd, info: child, ox, oy, isMdiChild, mdiParentHwnd } of allChildren) {
     const controlId = child.controlId ?? 0;
     const cn = child.classInfo.className.toUpperCase();
     if (cn === '#32770') continue;
-    if (child.wndProc && !DOM_CLASSES.includes(cn) && !child.classInfo.baseClassName) continue;
+    // MDI children bypass the custom-wndProc filter (they need a DOM overlay for title bar/frame)
+    if (!isMdiChild) {
+      if (child.wndProc && !DOM_CLASSES.includes(cn) && !child.classInfo.baseClassName) continue;
+    }
     const overlay: ControlOverlay = {
       controlId, childHwnd,
       className: cn,
@@ -97,21 +103,80 @@ function buildOverlays(emu: Emulator, allChildren: { hwnd: number; info: WindowI
     if (child.statusTexts) overlay.statusTexts = child.statusTexts;
     if (child.tabItems) overlay.tabItems = child.tabItems;
     if (child.tabSelectedIndex !== undefined) overlay.tabSelectedIndex = child.tabSelectedIndex;
-    overlays.push(overlay);
+
+    if (isMdiChild) {
+      overlay.isMdiChild = true;
+      overlay.mdiChildren = [];
+      // Check if this MDI child is the active one
+      const mdiClient = emu.handles.get<WindowInfo>(child.parent);
+      if (mdiClient && (mdiClient as any).mdiActiveChild === childHwnd) {
+        overlay.isMdiActive = true;
+      }
+      if (child.maximized) overlay.isMdiMaximized = true;
+      if (child.minimized) overlay.isMdiMinimized = true;
+      mdiChildMap.set(childHwnd, overlay);
+      overlays.push(overlay);
+    } else if (mdiParentHwnd) {
+      // Nest inside MDI parent with position relative to the client area
+      const parentOverlay = mdiChildMap.get(mdiParentHwnd);
+      if (parentOverlay) {
+        const { bw, captionH } = getNonClientMetrics(parentOverlay.style, false, emu.isNE);
+        overlay.x = overlay.x - parentOverlay.x - bw;
+        overlay.y = overlay.y - parentOverlay.y - bw - captionH;
+        parentOverlay.mdiChildren!.push(overlay);
+      } else {
+        overlays.push(overlay);
+      }
+    } else {
+      overlays.push(overlay);
+    }
   }
   return overlays;
 }
 
+interface CollectedChild {
+  hwnd: number;
+  info: WindowInfo;
+  ox: number;
+  oy: number;
+  isMdiChild?: boolean;
+  mdiParentHwnd?: number;
+}
+
 /** Recursively collect all visible children from a window and its child dialogs */
-function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offsetY: number, out: { hwnd: number; info: WindowInfo; ox: number; oy: number }[]): void {
+function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offsetY: number, out: CollectedChild[], mdiParentHwnd?: number): void {
   if (!wnd.childList) return;
   for (const childHwnd of wnd.childList) {
     const child = emu.handles.get<WindowInfo>(childHwnd);
-    if (!child || !child.visible) continue;
-    out.push({ hwnd: childHwnd, info: child, ox: offsetX, oy: offsetY });
+    if (!child) continue;
+    // MDICLIENT: always recurse into it (structural container for MDI children)
+    const cn = child.classInfo?.className?.toUpperCase();
+    if (cn === 'MDICLIENT') {
+      if (child.childList && child.childList.length > 0) {
+        // MDICLIENT's direct children are MDI child windows
+        for (const mdiChildHwnd of child.childList) {
+          const mdiChild = emu.handles.get<WindowInfo>(mdiChildHwnd);
+          if (!mdiChild) continue;
+          // Include minimized MDI children (they render as small title bars)
+          if (!mdiChild.visible && !mdiChild.minimized) continue;
+          out.push({ hwnd: mdiChildHwnd, info: mdiChild, ox: offsetX + child.x, oy: offsetY + child.y, isMdiChild: true });
+          // Recurse into MDI child's children (skip if minimized — no client area visible)
+          if (!mdiChild.minimized && mdiChild.childList && mdiChild.childList.length > 0) {
+            const { bw, captionH } = getNonClientMetrics(mdiChild.style, !!mdiChild.hMenu, emu.isNE);
+            collectChildren(emu, mdiChild,
+              offsetX + child.x + mdiChild.x + bw,
+              offsetY + child.y + mdiChild.y + bw + captionH,
+              out, mdiChildHwnd);
+          }
+        }
+      }
+      continue;
+    }
+    if (!child.visible) continue;
+    out.push({ hwnd: childHwnd, info: child, ox: offsetX, oy: offsetY, mdiParentHwnd });
     // Recurse into child dialogs (e.g. tab pages) that have their own children
     if (child.childList && child.childList.length > 0) {
-      collectChildren(emu, child, offsetX + child.x, offsetY + child.y, out);
+      collectChildren(emu, child, offsetX + child.x, offsetY + child.y, out, mdiParentHwnd);
     }
   }
 }
@@ -122,8 +187,11 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
   const ctx = emu.canvasCtx;
   if (!ctx) return;
 
-  const allChildren: { hwnd: number; info: WindowInfo; ox: number; oy: number }[] = [];
+  const allChildren: CollectedChild[] = [];
   collectChildren(emu, wnd, 0, 0, allChildren);
+
+  if (false) { // DIAG: enable for debugging render cycles
+  }
 
   // Notify overlays synchronously BEFORE custom draw so Preact renders
   // CompanionCanvas elements and sets wnd.domCanvas via ref callbacks.
@@ -156,9 +224,9 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
       if (emu.isNE) {
-        emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (16-bit)
+        emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win16 PASCAL)
       } else {
-        emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT
+        emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win32 stdcall)
       }
       child.needsPaint = false;
     }

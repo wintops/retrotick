@@ -77,10 +77,11 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
 
   // --- Ordinal 136: GetDriveType(nDrive) — 2 bytes (word) ---
   // Win16 return values: 0=unknown, 1=does not exist, 2=removable, 3=fixed, 4=remote
+  // WINFILE checks type==0 to skip non-existent drives, so return 0 (not 1)
   kernel.register('GetDriveType', 2, () => {
     const nDrive = emu.readPascalArgs16([2])[0]; // 0=A, 1=B, 2=C, ...
-    if (nDrive === 2) return 3; // C: = DRIVE_FIXED
-    return 1; // does not exist
+    if (nDrive >= 2 && nDrive <= 4) return 3; // C:, D:, E: = DRIVE_FIXED
+    return 0; // non-existent
   }, 136);
 
   // --- Ordinal 167: GetExpWinVer(word) — 2 bytes ---

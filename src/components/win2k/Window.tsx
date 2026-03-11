@@ -84,6 +84,8 @@ interface WindowProps {
   onBlockedClick?: () => void;
   /** Increment to trigger a title bar flash animation (like Windows 2000 FlashWindow) */
   flashTrigger?: number;
+  /** Background color for the client area (default: inherited from frame) */
+  clientBg?: string;
   lang?: string;
   children?: ComponentChildren;
 }
@@ -93,7 +95,7 @@ export function Window({
   focused = true, maximized, minimized,
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
-  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, lang, children,
+  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
   const hasThickFrame = !!(wStyle & WS_THICKFRAME);
@@ -225,7 +227,7 @@ export function Window({
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}
-            {(wStyle & WS_MAXIMIZEBOX) ? capBtnSvg(maximized ? svgRestore : svgMax, maximized ? 'top 0px left 2px' : 'top 1px left 2px', onMaximize) : null}
+            {(wStyle & WS_MAXIMIZEBOX) ? capBtnSvg((maximized || minimized) ? svgRestore : svgMax, (maximized || minimized) ? 'top 0px left 2px' : 'top 1px left 2px', onMaximize) : null}
             {((wStyle & WS_MINIMIZEBOX) || (wStyle & WS_MAXIMIZEBOX)) ? <span style={{ width: '2px' }} /> : null}
             {(wStyle & WS_SYSMENU) ? capBtnSvg(svgClose, 'top 2px left 3px', onClose) : null}
           </span>
@@ -243,6 +245,7 @@ export function Window({
           marginTop: hasCaption ? '1px' : '0',
           display: minimized ? 'none' : 'block',
           lineHeight: 1,
+          ...(clientBg ? { background: clientBg } : {}),
         }}>
           {children}
         </div>
