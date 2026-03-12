@@ -37,6 +37,23 @@ export function buildThunkTable(emu: Emulator): void {
     'WINMM.DLL': {
       2: 'PlaySoundA',
     },
+    'WS2_32.DLL': {
+      1: 'accept', 2: 'bind', 3: 'closesocket', 4: 'connect',
+      5: 'getpeername', 6: 'getsockname', 7: 'getsockopt',
+      8: 'htonl', 9: 'htons', 10: 'ioctlsocket',
+      11: 'inet_addr', 12: 'inet_ntoa', 13: 'listen',
+      14: 'ntohl', 15: 'ntohs', 16: 'recv', 17: 'recvfrom',
+      18: 'select', 19: 'send', 20: 'sendto', 21: 'setsockopt',
+      22: 'shutdown', 23: 'socket',
+      51: 'gethostbyaddr', 52: 'gethostbyname',
+      53: 'getprotobyname', 54: 'getprotobynumber',
+      55: 'getservbyname', 56: 'getservbyport', 57: 'gethostname',
+      101: 'WSAStartup', 102: 'WSACleanup', 103: 'WSASetLastError',
+      104: 'WSAGetLastError', 105: 'WSAIsBlocking',
+      108: 'WSACancelBlockingCall',
+      111: 'WSAAsyncGetProtoByName', 113: 'WSAAsyncGetHostByName',
+      115: 'WSACancelAsyncRequest', 116: 'WSAAsyncSelect',
+    },
     'OLEAUT32.DLL': {
       2: 'SysAllocString', 3: 'SysReAllocString', 4: 'SysAllocStringLen',
       5: 'SysReAllocStringLen', 6: 'SysFreeString', 7: 'SysStringLen',

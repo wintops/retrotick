@@ -172,4 +172,7 @@ export function registerShell32(emu: Emulator): void {
 
   // ord_680 = IsUserAnAdmin — 0 args
   shell32.register('ord_680', 0, () => 1); // yes, admin
+
+  shell32.register('FindExecutableA', 3, () => 31); // SE_ERR_NOASSOC (failure)
+  shell32.register('SHFree', 1, () => 0);
 }

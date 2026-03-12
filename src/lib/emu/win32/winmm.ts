@@ -453,6 +453,36 @@ export function registerWinmm(emu: Emulator): void {
   // timeEndPeriod(uPeriod) → MMRESULT
   winmm.register('timeEndPeriod', 1, () => 0);
 
+  // timeSetEvent(uDelay, uResolution, lpTimeProc, dwUser, fuEvent) → timerID
+  const TIME_ONESHOT = 0x0000;
+  const TIME_PERIODIC = 0x0001;
+  let nextTimerId = 1;
+  winmm.register('timeSetEvent', 5, () => {
+    const uDelay = emu.readArg(0);
+    const _uResolution = emu.readArg(1);
+    const lpTimeProc = emu.readArg(2);
+    const dwUser = emu.readArg(3);
+    const fuEvent = emu.readArg(4);
+    const id = nextTimerId++;
+    const periodic = (fuEvent & TIME_PERIODIC) !== 0;
+    emu._mmTimers.set(id, {
+      callback: lpTimeProc,
+      dwUser,
+      delay: Math.max(uDelay, 1),
+      periodic,
+      nextFire: Date.now() + uDelay,
+    });
+    console.log(`[WINMM] timeSetEvent id=${id} delay=${uDelay} periodic=${periodic} callback=0x${lpTimeProc.toString(16)}`);
+    return id;
+  });
+
+  // timeKillEvent(uTimerID) → MMRESULT
+  winmm.register('timeKillEvent', 1, () => {
+    const id = emu.readArg(0);
+    emu._mmTimers.delete(id);
+    return 0;
+  });
+
   // MCI — stub: return 0 (success, no-op)
   winmm.register('mciSendCommandA', 4, () => 0);
   winmm.register('mciSendCommandW', 4, () => 0);

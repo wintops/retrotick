@@ -38,15 +38,15 @@ export function emuResume(emu: Emulator): void {
   }
 }
 
-export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
-  if (!wndProc || wndProc === 0) return 0;
-  // Skip WndProc calls to addresses outside image and thunk ranges (garbage/unimplemented pointers)
+/** Call a stdcall callback with N args. Used by callWndProc (4 args) and multimedia timers (5 args). */
+function callStdcall(emu: Emulator, addr: number, args: number[]): number | undefined {
+  if (!addr) return 0;
   if (!emu.isNE && emu.pe) {
-    const isThunk = emu.thunkToApi.has(wndProc);
-    let inImage = wndProc >= emu.pe.imageBase && wndProc < emu.pe.imageBase + emu.pe.sizeOfImage;
+    const isThunk = emu.thunkToApi.has(addr);
+    let inImage = addr >= emu.pe.imageBase && addr < emu.pe.imageBase + emu.pe.sizeOfImage;
     if (!inImage) {
       for (const mod of emu.loadedModules.values()) {
-        if (mod.sizeOfImage && wndProc >= mod.imageBase && wndProc < mod.imageBase + mod.sizeOfImage) {
+        if (mod.sizeOfImage && addr >= mod.imageBase && addr < mod.imageBase + mod.sizeOfImage) {
           inImage = true;
           break;
         }
@@ -64,16 +64,13 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
   const savedEDI = emu.cpu.reg[7];
   const savedEBP = emu.cpu.reg[5];
 
-  // Set up stack for WndProc call
-  emu.cpu.push32(lParam);
-  emu.cpu.push32(wParam);
-  emu.cpu.push32(message);
-  emu.cpu.push32(hwnd);
+  // Push args right-to-left (stdcall)
+  for (let i = args.length - 1; i >= 0; i--) emu.cpu.push32(args[i]);
   emu.cpu.push32(WNDPROC_RETURN_THUNK);
   const wndProcRetThunkAddr = emu.cpu.reg[4] >>> 0; // remember where the thunk was pushed
-  emu.cpu.eip = wndProc;
+  emu.cpu.eip = addr;
 
-  // Run a local step loop until the wndproc returns or goes async.
+  // Run a local step loop until the callback returns or goes async.
   // This reuses the frame stack so that WNDPROC_RETURN in emuTick
   // can also handle completion if we yield to async.
   const frame = {
@@ -152,7 +149,7 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
   }
 
   if (steps >= MAX_STEPS) {
-    console.warn(`WndProc exceeded max steps for msg 0x${message.toString(16)}, EIP=0x${(emu.cpu.eip >>> 0).toString(16)}`);
+    console.warn(`callStdcall exceeded max steps, EIP=0x${(emu.cpu.eip >>> 0).toString(16)}`);
   }
 
   // Zero out the stale WNDPROC_RETURN_THUNK from stack memory to prevent
@@ -166,6 +163,15 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
   emu.cpu.reg[7] = savedEDI;
 
   return emu.wndProcResult;
+}
+
+export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
+  return callStdcall(emu, wndProc, [hwnd, message, wParam, lParam]);
+}
+
+export function emuCallTimerProc(emu: Emulator, callback: number, timerId: number, dwUser: number): number | undefined {
+  // void CALLBACK TimeProc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2)
+  return callStdcall(emu, callback, [timerId, 0 /* TIME_CALLBACK */, dwUser, 0, 0]);
 }
 
 export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
@@ -423,6 +429,28 @@ export function emuTick(emu: Emulator): void {
     // If still halted, fall through to bottom where next tick is scheduled
   }
 
+  // Dispatch multimedia timers (timeSetEvent)
+  if (emu._mmTimers.size > 0 && !emu.isDOS) {
+    const now = Date.now();
+    for (const [id, t] of emu._mmTimers) {
+      if (now >= t.nextFire) {
+        // Save CPU state — callStdcall leaves EIP at the return thunk
+        const savedEIP = emu.cpu.eip;
+        const savedESP = emu.cpu.reg[4];
+        emuCallTimerProc(emu, t.callback, id, t.dwUser);
+        // Restore CPU state after callback
+        emu.cpu.eip = savedEIP;
+        emu.cpu.reg[4] = savedESP;
+        if (t.periodic) {
+          t.nextFire = now + t.delay;
+        } else {
+          emu._mmTimers.delete(id);
+        }
+        if (emu.halted || emu.waitingForMessage) break;
+      }
+    }
+  }
+
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
       const ip16 = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
@@ -577,6 +605,10 @@ export function emuTick(emu: Emulator): void {
       const handler = emu.apiDefs.get(key)?.handler;
 
       const origESP = emu.cpu.reg[4] + thunk.stackBytes + 4;
+
+      if (emu.traceApi && key !== 'SYSTEM:WNDPROC_RETURN') {
+        console.log(`[API] ${key}`);
+      }
 
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {

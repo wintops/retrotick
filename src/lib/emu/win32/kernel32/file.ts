@@ -226,6 +226,29 @@ export function registerFile(emu: Emulator): void {
     return 0;
   });
 
+  // _lwrite(hFile, lpBuffer, uBytes)
+  kernel32.register('_lwrite', 3, () => {
+    const hFile = emu.readArg(0);
+    const lpBuffer = emu.readArg(1);
+    const uBytes = emu.readArg(2);
+    const file = emu.handles.get<OpenFile>(hFile);
+    if (!file) return HFILE_ERROR;
+    if (file.data === null) file.data = new Uint8Array(0);
+    const needed = file.pos + uBytes;
+    if (needed > file.data.length) {
+      const newData = new Uint8Array(needed);
+      newData.set(file.data);
+      file.data = newData;
+    }
+    for (let i = 0; i < uBytes; i++) {
+      file.data[file.pos + i] = emu.memory.readU8(lpBuffer + i);
+    }
+    file.pos += uBytes;
+    if (file.pos > file.size) file.size = file.pos;
+    file.modified = true;
+    return uBytes;
+  });
+
   // _llseek(hFile, lOffset, iOrigin)
   kernel32.register('_llseek', 3, () => {
     const hFile = emu.readArg(0);
@@ -978,16 +1001,19 @@ export function registerFile(emu: Emulator): void {
     return 1;
   });
 
-  kernel32.register('GetDiskFreeSpaceExW', 4, () => {
+  const getDiskFreeSpaceExImpl = () => {
     const _lpDir = emu.readArg(0);
     const lpFreeBytesAvailable = emu.readArg(1);
     const lpTotalBytes = emu.readArg(2);
     const lpTotalFreeBytes = emu.readArg(3);
+    // Report 1GB free, 10GB total
     if (lpFreeBytesAvailable) { emu.memory.writeU32(lpFreeBytesAvailable, 0x40000000); emu.memory.writeU32(lpFreeBytesAvailable + 4, 0); }
     if (lpTotalBytes) { emu.memory.writeU32(lpTotalBytes, 0x80000000); emu.memory.writeU32(lpTotalBytes + 4, 2); }
     if (lpTotalFreeBytes) { emu.memory.writeU32(lpTotalFreeBytes, 0x40000000); emu.memory.writeU32(lpTotalFreeBytes + 4, 0); }
     return 1;
-  });
+  };
+  kernel32.register('GetDiskFreeSpaceExW', 4, getDiskFreeSpaceExImpl);
+  kernel32.register('GetDiskFreeSpaceExA', 4, getDiskFreeSpaceExImpl);
 
   kernel32.register('DeviceIoControl', 8, () => 0);
 

@@ -77,7 +77,12 @@ export function registerAdvapi32(emu: Emulator): void {
     const resultPtr = emu.readArg(4);
     const s = store();
     if (s) {
-      const h = s.openKey(hKey, subKey);
+      let h = s.openKey(hKey, subKey);
+      if (h === null) {
+        // Auto-create missing keys so programs that probe the registry don't abort
+        const r = s.createKey(hKey, subKey);
+        h = r ? r.handle : null;
+      }
       if (h !== null) {
         if (resultPtr) emu.memory.writeU32(resultPtr, h);
         return ERROR_SUCCESS;
@@ -95,7 +100,11 @@ export function registerAdvapi32(emu: Emulator): void {
     const resultPtr = emu.readArg(2);
     const s = store();
     if (s) {
-      const h = s.openKey(hKey, subKey);
+      let h = s.openKey(hKey, subKey);
+      if (h === null) {
+        const r = s.createKey(hKey, subKey);
+        h = r ? r.handle : null;
+      }
       if (h !== null) {
         if (resultPtr) emu.memory.writeU32(resultPtr, h);
         return ERROR_SUCCESS;
@@ -277,7 +286,11 @@ export function registerAdvapi32(emu: Emulator): void {
     const resultPtr = emu.readArg(2);
     const s = store();
     if (s) {
-      const h = s.openKey(hKey, subKey);
+      let h = s.openKey(hKey, subKey);
+      if (h === null) {
+        const r = s.createKey(hKey, subKey);
+        h = r ? r.handle : null;
+      }
       if (h !== null) {
         if (resultPtr) emu.memory.writeU32(resultPtr, h);
         return ERROR_SUCCESS;
@@ -295,7 +308,11 @@ export function registerAdvapi32(emu: Emulator): void {
     const resultPtr = emu.readArg(4);
     const s = store();
     if (s) {
-      const h = s.openKey(hKey, subKey);
+      let h = s.openKey(hKey, subKey);
+      if (h === null) {
+        const r = s.createKey(hKey, subKey);
+        h = r ? r.handle : null;
+      }
       if (h !== null) {
         if (resultPtr) emu.memory.writeU32(resultPtr, h);
         return ERROR_SUCCESS;
@@ -381,6 +398,24 @@ export function registerAdvapi32(emu: Emulator): void {
       s.setValue(hKey, valueName, type, data);
       console.log(`[REG] RegSetValueExW(${hkeyName(hKey)}, "${valueName}", ${fmtType(type)}, ${fmtData(type, data)})`);
     }
+    return ERROR_SUCCESS;
+  });
+
+  // --- RegQueryInfoKeyA ---
+  advapi32.register('RegQueryInfoKeyA', 12, () => {
+    // Just report "0 subkeys, 0 values" — enough for programs that enumerate
+    const lpcSubKeys = emu.readArg(3);
+    const lpcMaxSubKeyLen = emu.readArg(4);
+    const lpcMaxClassLen = emu.readArg(5);
+    const lpcValues = emu.readArg(6);
+    const lpcMaxValueNameLen = emu.readArg(7);
+    const lpcMaxValueLen = emu.readArg(8);
+    if (lpcSubKeys) emu.memory.writeU32(lpcSubKeys, 0);
+    if (lpcMaxSubKeyLen) emu.memory.writeU32(lpcMaxSubKeyLen, 0);
+    if (lpcMaxClassLen) emu.memory.writeU32(lpcMaxClassLen, 0);
+    if (lpcValues) emu.memory.writeU32(lpcValues, 0);
+    if (lpcMaxValueNameLen) emu.memory.writeU32(lpcMaxValueNameLen, 0);
+    if (lpcMaxValueLen) emu.memory.writeU32(lpcMaxValueLen, 0);
     return ERROR_SUCCESS;
   });
 

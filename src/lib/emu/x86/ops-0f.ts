@@ -103,6 +103,13 @@ export function exec0F(
       break;
     }
 
+    // LAR r, r/m16 — Load Access Rights (always fails in real mode: clear ZF)
+    case 0x02: {
+      const d = cpu.decodeModRM(opSize);
+      cpu.setFlags(cpu.getFlags() & ~ZF);
+      break;
+    }
+
     // NOP (0F 1F /0 — multi-byte NOP)
     case 0x1F: {
       cpu.decodeModRM(opSize);

@@ -464,6 +464,7 @@ export class Emulator {
   // State
   running = false;
   halted = false;
+  traceApi = false;
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
@@ -572,6 +573,8 @@ export class Emulator {
   configuredLcid = 0x0409; // Set from regional settings at load time
   windowDCs = new Map<number, number>();
   private timers = new Map<string, number>();
+  /** Multimedia timers (timeSetEvent) — callback invoked during tick */
+  _mmTimers = new Map<number, { callback: number; dwUser: number; delay: number; periodic: boolean; nextFire: number }>();
 
   // CBT hooks (WH_CBT = 5)
   cbtHooks: { lpfn: number; hMod: number }[] = [];
