@@ -627,6 +627,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       };
       emu.onCrash = (eip: string, description: string) => { setCrashInfo({ eip, description }); onReady?.(); };
       emu.onExit = () => {
+        emu.destroyAudio();
         if (emu.isConsole) {
           // Keep window open so user can see output, show a message box like cmd.exe
           const finishedTitle = `Finished - ${emu.consoleTitle || exeBaseName}`;
@@ -764,6 +765,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         if (processRegistry && emuRef.current.pid) {
           processRegistry.unregister(emuRef.current.pid);
         }
+        emuRef.current.destroyAudio();
         emuRef.current.stop();
         emuRef.current = null;
       }

@@ -410,7 +410,9 @@ export function emuTick(emu: Emulator): void {
     const pitReload = emu._pitCounters[0] || 0x10000;
     const timerIntervalMs = (pitReload / 1193182) * 1000;
     if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-      emu._dosLastTimerTick = now;
+      emu._dosLastTimerTick += timerIntervalMs;
+      // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
+      if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
       emu._pendingHwInts.push(0x08);
       emu._dosHalted = false;
     }
@@ -458,8 +460,12 @@ export function emuTick(emu: Emulator): void {
       const pitReload = emu._pitCounters[0] || 0x10000;
       const timerIntervalMs = (pitReload / 1193182) * 1000; // PIT frequency → ms
       if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-        emu._dosLastTimerTick = now;
-        if (!emu._pendingHwInts.includes(0x08)) emu._pendingHwInts.push(0x08);
+        if (!emu._pendingHwInts.includes(0x08)) {
+          emu._dosLastTimerTick += timerIntervalMs;
+          // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
+          if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+          emu._pendingHwInts.push(0x08);
+        }
         emu._dosHalted = false; // wake from HLT
       }
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)

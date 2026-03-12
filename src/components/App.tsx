@@ -308,6 +308,11 @@ export function App() {
     }] : []),
   ];
 
+  useEffect(() => {
+    const focused = allApps.find(a => a.id === focusedAppId);
+    document.title = focused ? `${focused.title} - RetroTick` : 'RetroTick';
+  }, [focusedAppId, windowTitles, allApps]);
+
   return (
     <div class="w-full h-screen" style={{ display: 'flex', flexDirection: 'column', cursor: loadingAppIds.size > 0 ? 'progress' : undefined }}>
       <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>

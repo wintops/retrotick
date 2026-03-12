@@ -646,6 +646,22 @@ export class Emulator {
   audioContext?: AudioContext;
   dosAudio = new DosAudio();
 
+  /** Stop all playing audio and release audio resources. */
+  destroyAudio(): void {
+    // DOS audio: OPL2 worklet + PC speaker + SB DMA
+    this.dosAudio.destroy();
+    // Win32 waveOut: stop all active AudioBufferSourceNodes
+    for (const [, device] of this.handles.findByType<{ nodes?: AudioBufferSourceNode[] }>('waveout')) {
+      if (device.nodes) {
+        for (const node of device.nodes) {
+          try { node.stop(); } catch { /* already stopped */ }
+          node.disconnect();
+        }
+        device.nodes.length = 0;
+      }
+    }
+  }
+
   // Generic common dialog request — UI renders the appropriate dialog
   onShowCommonDialog?: (req: CommonDialogRequest) => void;
 

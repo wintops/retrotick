@@ -3,7 +3,7 @@
  *
  * Ties together OPL2 (AdLib FM), Sound Blaster DSP + DMA, and PC Speaker.
  * Routes I/O port reads/writes to the appropriate subsystem, manages the
- * AudioWorklet for real-time audio output, and handles PCM mixing.
+ * AudioWorklet for real-time stereo audio output, and handles PCM mixing.
  */
 
 import { OPL2 } from './opl2';
@@ -25,7 +25,7 @@ export class DosAudio {
   private ctx: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private started = false;
-  /** Shared ring buffer for passing OPL2 samples to the AudioWorklet. */
+  /** Shared ring buffer for passing interleaved stereo samples to the AudioWorklet. */
   private sharedBuf: Float32Array | null = null;
   private writePos = 0;
   private fillTimer = 0;
@@ -61,51 +61,58 @@ export class DosAudio {
     this.opl2.onTimerIRQ = () => this.onSBIRQ();
     this.speaker = new PCSpeaker(audioContext);
 
-    // Use SharedArrayBuffer if available for lock-free audio, otherwise fall back
-    // to a message-based approach with regular ArrayBuffer.
+    // Ring buffer stores interleaved stereo frames (L, R, L, R, ...).
+    // RING_SIZE = number of stereo frames. Buffer = RING_SIZE * 2 floats.
     const RING_SIZE = 8192;
     const useShared = typeof SharedArrayBuffer !== 'undefined';
     const ringBuf = useShared
-      ? new SharedArrayBuffer(RING_SIZE * 4 + 8) // samples + writePos + readPos
+      ? new SharedArrayBuffer(RING_SIZE * 2 * 4 + 8) // stereo samples + writePos + readPos
       : null;
 
-    // AudioWorklet processor code — injected via Blob URL
+    // AudioWorklet processor code — stereo output
     const processorCode = `
 class OPLProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.ring = null;
     this.readPos = 0;
-    this.pendingSamples = [];
+    this.pendingL = [];
+    this.pendingR = [];
     const shared = options.processorOptions?.sharedBuffer;
     if (shared) {
-      this.ring = new Float32Array(shared, 0, ${RING_SIZE});
-      this.pointers = new Int32Array(shared, ${RING_SIZE * 4}, 2);
+      this.ring = new Float32Array(shared, 0, ${RING_SIZE * 2});
+      this.pointers = new Int32Array(shared, ${RING_SIZE * 2 * 4}, 2);
     } else {
       this.port.onmessage = (e) => {
-        if (e.data.samples) {
-          this.pendingSamples.push(...e.data.samples);
+        if (e.data.samplesL) {
+          this.pendingL.push(...e.data.samplesL);
+          this.pendingR.push(...e.data.samplesR);
         }
       };
     }
   }
   process(inputs, outputs) {
-    const out = outputs[0][0];
-    if (!out) return true;
+    const outL = outputs[0][0];
+    const outR = outputs[0][1];
+    if (!outL || !outR) return true;
     if (this.ring) {
       const wp = Atomics.load(this.pointers, 0);
-      for (let i = 0; i < out.length; i++) {
+      for (let i = 0; i < outL.length; i++) {
         if (this.readPos !== wp) {
-          out[i] = this.ring[this.readPos % ${RING_SIZE}];
+          const idx = (this.readPos % ${RING_SIZE}) * 2;
+          outL[i] = this.ring[idx];
+          outR[i] = this.ring[idx + 1];
           this.readPos++;
         } else {
-          out[i] = 0;
+          outL[i] = 0;
+          outR[i] = 0;
         }
       }
       Atomics.store(this.pointers, 1, this.readPos);
     } else {
-      for (let i = 0; i < out.length; i++) {
-        out[i] = this.pendingSamples.length > 0 ? this.pendingSamples.shift() : 0;
+      for (let i = 0; i < outL.length; i++) {
+        outL[i] = this.pendingL.length > 0 ? this.pendingL.shift() : 0;
+        outR[i] = this.pendingR.length > 0 ? this.pendingR.shift() : 0;
       }
     }
     return true;
@@ -123,7 +130,7 @@ if (!globalThis._oplRegistered) {
       URL.revokeObjectURL(url);
       if (!this.ctx) return;
       const node = new AudioWorkletNode(this.ctx, 'opl-processor', {
-        outputChannelCount: [1],
+        outputChannelCount: [2],
         processorOptions: { sharedBuffer: ringBuf },
       });
       node.connect(this.ctx.destination);
@@ -135,8 +142,8 @@ if (!globalThis._oplRegistered) {
       const sampleRate = audioContext.sampleRate;
       let lastFillTime = performance.now();
       if (ringBuf) {
-        this.sharedBuf = new Float32Array(ringBuf, 0, RING_SIZE);
-        const pointers = new Int32Array(ringBuf, RING_SIZE * 4, 2);
+        this.sharedBuf = new Float32Array(ringBuf, 0, RING_SIZE * 2);
+        const pointers = new Int32Array(ringBuf, RING_SIZE * 2 * 4, 2);
         const fill = () => {
           if (!this.ctx) return;
           const now = performance.now();
@@ -151,11 +158,14 @@ if (!globalThis._oplRegistered) {
           const count = Math.min(samplesToGen, available);
           if (count <= 0) return;
 
-          const tmpBuf = new Float32Array(count);
-          this.opl2.generateSamples(tmpBuf, count);
-          this.mixPCM(tmpBuf, count);
+          const tmpL = new Float32Array(count);
+          const tmpR = new Float32Array(count);
+          this.opl2.generateSamples(tmpL, tmpR, count);
+          this.mixPCMStereo(tmpL, tmpR, count);
           for (let i = 0; i < count; i++) {
-            this.sharedBuf![((wp + i) % RING_SIZE)] = tmpBuf[i];
+            const idx = ((wp + i) % RING_SIZE) * 2;
+            this.sharedBuf![idx] = tmpL[i];
+            this.sharedBuf![idx + 1] = tmpR[i];
           }
           this.writePos = wp + count;
           Atomics.store(pointers, 0, this.writePos);
@@ -171,10 +181,14 @@ if (!globalThis._oplRegistered) {
           const samplesToGen = Math.min(Math.floor(elapsed * sampleRate), 2048);
           if (samplesToGen <= 0) return;
 
-          const tmpBuf = new Float32Array(samplesToGen);
-          this.opl2.generateSamples(tmpBuf, samplesToGen);
-          this.mixPCM(tmpBuf, samplesToGen);
-          this.workletNode.port.postMessage({ samples: Array.from(tmpBuf) });
+          const tmpL = new Float32Array(samplesToGen);
+          const tmpR = new Float32Array(samplesToGen);
+          this.opl2.generateSamples(tmpL, tmpR, samplesToGen);
+          this.mixPCMStereo(tmpL, tmpR, samplesToGen);
+          this.workletNode.port.postMessage({
+            samplesL: Array.from(tmpL),
+            samplesR: Array.from(tmpR),
+          });
           lastFillTime = now;
         };
         this.fillTimer = setInterval(fill, FILL_INTERVAL_MS) as unknown as number;
@@ -192,15 +206,13 @@ if (!globalThis._oplRegistered) {
     if (port === 0x389 || port === 0x229) return 0; // data read not meaningful
 
     // Sound Blaster DSP ports (base 0x220)
-    if (port === 0x22A) return this.sbDsp.readData();    // Read data
+    if (port === 0x22A) return this.sbDsp.readData();
     if (port === 0x22E) {
-      // Reading status port also acknowledges SB IRQ
       if (this.sbDsp.irqPending) this.sbDsp.ackIRQ();
       return this.sbDsp.readStatus();
     }
-    if (port === 0x22C) return 0x00; // Write status — always ready (bit 7 = 0)
+    if (port === 0x22C) return 0x00;
 
-    // DMA controller ports (channels 0-3)
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);
     if (port === 0x02) return this.dma.readAddr(1);
@@ -269,9 +281,9 @@ if (!globalThis._oplRegistered) {
     this.opl2.tickTimers();
   }
 
-  /** Mix SB PCM samples into the output buffer (additive, resampled). */
+  /** Mix SB PCM samples into stereo output buffers (additive, resampled, centered). */
   private pcmAccum = 0;
-  private mixPCM(buf: Float32Array, length: number): void {
+  private mixPCMStereo(bufL: Float32Array, bufR: Float32Array, length: number): void {
     const dsp = this.sbDsp;
     const avail = (dsp.pcmWritePos - dsp.pcmReadPos) & 0xFFFF;
     if (avail === 0) return;
@@ -285,7 +297,9 @@ if (!globalThis._oplRegistered) {
         dsp.pcmReadPos = (dsp.pcmReadPos + 1) & 0xFFFF;
       }
       if (((dsp.pcmWritePos - dsp.pcmReadPos) & 0xFFFF) > 0) {
-        buf[i] += dsp.pcmRing[dsp.pcmReadPos & 0xFFFF] * 0.5;
+        const s = dsp.pcmRing[dsp.pcmReadPos & 0xFFFF] * 0.5;
+        bufL[i] += s;
+        bufR[i] += s;
       }
     }
   }
