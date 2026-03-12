@@ -910,9 +910,10 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const mdiDefaultStyle = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
         const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | mdiDefaultStyle;
 
-        // Auto-size to MDIClient area when dimensions are 0 or CW_USEDEFAULT
-        const clientW = wnd.width || (emu.canvas?.width ?? 320);
-        const clientH = wnd.height || (emu.canvas?.height ?? 200);
+        // Auto-size to MDIClient's CLIENT area (not window area — MDICLIENT has WS_BORDER)
+        const { cw: mdiCW, ch: mdiCH } = getClientSize(wnd.style, false, wnd.width, wnd.height, true);
+        const clientW = mdiCW || (emu.canvas?.width ?? 320);
+        const clientH = mdiCH || (emu.canvas?.height ?? 200);
         const childHwnd = emu.handles.alloc('window', {
           classInfo: classInfo || { className: mdiClassName, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
           title: mdiTitle,

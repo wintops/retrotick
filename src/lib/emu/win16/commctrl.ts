@@ -83,30 +83,56 @@ export function registerWin16Commctrl(emu: Emulator): void {
   cc.register('ShowHideMenuCtl', 8, () => 0, 14);
 
   // Ordinal 15: GetEffectiveClientRect(hWnd:2, lpRect:4, lpInfo:4) — 10 bytes
-  // Subtracts toolbar/statusbar height from client rect
+  // Wine algorithm: GetClientRect, then for each control ID in lpInfo,
+  // subtract visible child window rects (mapped to client coordinates).
+  // lpInfo format: pairs of (BOOL visible, UINT id), terminated by id==0.
+  // The function skips the first pair, then processes remaining pairs.
   cc.register('GetEffectiveClientRect', 10, () => {
-    const [hWnd, lpRect, _lpInfo] = emu.readPascalArgs16([2, 4, 4]);
+    const [hWnd, lpRect, lpInfo] = emu.readPascalArgs16([2, 4, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd && lpRect) {
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height, true);
-      let top = 0, bottom = ch;
-      // Subtract visible toolbar/statusbar children
-      if (wnd.childList) {
-        for (const childHwnd of wnd.childList) {
-          const child = emu.handles.get<WindowInfo>(childHwnd);
-          if (!child || !child.visible) continue;
-          const cn = child.classInfo?.className?.toUpperCase();
-          if (cn === 'TOOLBARWINDOW' || cn === 'TOOLBARWINDOW32') {
-            top = Math.max(top, child.y + child.height);
-          }
-          if (cn === 'MSCTLS_STATUSBAR32' || cn === 'MSCTLS_STATUSBAR') {
-            bottom = Math.min(bottom, child.y);
+      // Start with full client rect
+      let left = 0, top = 0, right = cw, bottom = ch;
+
+      if (lpInfo) {
+        // Walk the lpInfo array: skip first 2 WORDs, then read pairs
+        let ptr = lpInfo;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          ptr += 4; // skip 2 WORDs (visible flag + padding)
+          const checkVal = emu.memory.readU16(ptr);
+          if (checkVal === 0) break; // terminator
+          ptr += 2;
+          const controlId = emu.memory.readU16(ptr);
+          ptr += 2;
+          // Find child by control ID (same as GetDlgItem)
+          const childHwnd = wnd.children?.get(controlId) ?? 0;
+          if (childHwnd) {
+            const child = emu.handles.get<WindowInfo>(childHwnd);
+            const WS_VISIBLE = 0x10000000;
+            if (child && (child.style & WS_VISIBLE)) {
+              // Child coords are already parent-client-relative
+              const cl = child.x, ct = child.y;
+              const cr = cl + child.width, cb = ct + child.height;
+              // SubtractRect: remove child rect from effective rect
+              if (cl <= left && cr >= right) {
+                // Child spans full width — subtract from top or bottom
+                if (ct <= top) top = Math.max(top, cb);
+                else if (cb >= bottom) bottom = Math.min(bottom, ct);
+              } else if (ct <= top && cb >= bottom) {
+                // Child spans full height — subtract from left or right
+                if (cl <= left) left = Math.max(left, cr);
+                else if (cr >= right) right = Math.min(right, cl);
+              }
+            }
           }
         }
       }
-      emu.memory.writeU16(lpRect, 0);                      // left
+
+      emu.memory.writeU16(lpRect, left & 0xFFFF);          // left
       emu.memory.writeU16(lpRect + 2, top & 0xFFFF);       // top
-      emu.memory.writeU16(lpRect + 4, cw & 0xFFFF);        // right
+      emu.memory.writeU16(lpRect + 4, right & 0xFFFF);     // right
       emu.memory.writeU16(lpRect + 6, bottom & 0xFFFF);    // bottom
     }
     return 0;

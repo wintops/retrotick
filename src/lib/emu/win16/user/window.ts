@@ -782,6 +782,11 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     const classInfo = emu.windowClasses.get(className.toUpperCase());
+    // If no menu handle but class has a menuName, flag that a menu exists
+    let effectiveMenu = hMenu;
+    if (!effectiveMenu && classInfo?.menuName) {
+      effectiveMenu = 1;
+    }
     // Sign-extend 16-bit values for positions (can be negative)
     const sx = (x << 16 >> 16);  // signed x
     const sy = (y << 16 >> 16);  // signed y
@@ -799,7 +804,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       y: sx === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
       height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
-      hMenu,
+      hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
       rawWndProc: classInfo?.rawWndProc || 0,

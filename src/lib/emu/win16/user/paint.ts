@@ -15,24 +15,24 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
       const targetHwnd = hWnd || emu.mainWindow;
       const wnd = emu.handles.get<WindowInfo>(targetHwnd);
       if (wnd) {
-        // Convert to screen coordinates by walking parent chain (same as Win32)
-        const WS_CHILD = 0x40000000;
+        // Convert to screen coordinates by walking parent chain.
+        // Use wnd.parent (not WS_CHILD flag) because some controls
+        // like ToolbarWindow are children but lack WS_CHILD style.
         let sx = wnd.x || 0, sy = wnd.y || 0;
-        if (wnd.style & WS_CHILD) {
-          let cur = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
-          while (cur) {
-            if (cur.style & WS_CHILD) {
-              sx += cur.x || 0;
-              sy += cur.y || 0;
-            } else {
-              // Top-level parent: add screen position + client area offset
-              const { bw, captionH, menuH } = getNonClientMetrics(cur.style, cur.hMenu !== 0, true);
-              sx += (cur.x || 0) + bw;
-              sy += (cur.y || 0) + bw + captionH + menuH;
-              break;
-            }
-            cur = cur.parent ? emu.handles.get<WindowInfo>(cur.parent) : null;
+        let cur = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
+        while (cur) {
+          if (cur.parent) {
+            // Intermediate parent: add its client-relative position
+            sx += cur.x || 0;
+            sy += cur.y || 0;
+          } else {
+            // Top-level parent: add screen position + client area offset
+            const { bw, captionH, menuH } = getNonClientMetrics(cur.style, cur.hMenu !== 0, true);
+            sx += (cur.x || 0) + bw;
+            sy += (cur.y || 0) + bw + captionH + menuH;
+            break;
           }
+          cur = cur.parent ? emu.handles.get<WindowInfo>(cur.parent) : null;
         }
         h.writeRect(lpRect, sx, sy, sx + wnd.width, sy + wnd.height);
       } else {
