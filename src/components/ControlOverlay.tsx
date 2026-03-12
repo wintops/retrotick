@@ -86,7 +86,7 @@ export function renderControlOverlay(
     top: `${ctrl.y}px`,
     width: `${ctrl.width}px`,
     height: `${ctrl.height}px`,
-    zIndex: 10,
+    zIndex: 100, // above MDI children (z-index 15+) so toolbar/statusbar aren't covered
   };
 
   const postCommand = () => {
@@ -970,7 +970,8 @@ export function renderControlOverlay(
     );
   }
 
-  if (effectiveClass(ctrl) === 'MSCTLS_STATUSBAR32') {
+  const ec = effectiveClass(ctrl);
+  if (ec === 'MSCTLS_STATUSBAR32' || ec === 'MSCTLS_STATUSBAR') {
     const texts = ctrl.statusTexts || [];
     const SBARS_SIZEGRIP = 0x0100;
     const hasSizeGrip = !!(ctrl.style & SBARS_SIZEGRIP);

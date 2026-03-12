@@ -9,7 +9,6 @@ import type { Win16UserHelpers } from './index';
 // Fix CCS control (toolbar/statusbar) position at creation time.
 // The x86 COMMCTRL.DLL creates these at wrong positions, but
 // GetEffectiveClientRect reads them before WM_SIZE fires.
-const MIN_STATUSBAR_HEIGHT = 20;
 const WS_VISIBLE_BIT = 0x10000000;
 function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
   const wnd = emu.handles.get<WindowInfo>(hwnd);
@@ -39,7 +38,6 @@ function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
     wnd.x = 0; wnd.y = 0;
     wnd.width = parentCW;
   } else {
-    if (wnd.height < MIN_STATUSBAR_HEIGHT) wnd.height = MIN_STATUSBAR_HEIGHT;
     wnd.x = 0; wnd.y = parentCH - wnd.height;
     wnd.width = parentCW;
   }

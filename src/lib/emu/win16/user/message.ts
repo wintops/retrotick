@@ -559,8 +559,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
             } else {
-              // Statusbar: dock to bottom of parent, full width, fixed height
-              wnd.height = 20;
+              // Statusbar: dock to bottom of parent, full width
+              // Don't override height — let x86 code compute it
               wnd.x = 0; wnd.y = parentCH - wnd.height;
               wnd.width = parentCW;
             }
@@ -590,9 +590,20 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               // instead of one button-state row (~18px). Real Win3.1 toolbar = ~27px.
               if (wnd.height > 30) wnd.height = 27;
             } else {
-              // Statusbar: enforce height 20px (x86 code computes wrong height
-              // because it reads position from internal WND struct we don't expose)
-              wnd.height = 20;
+              // Statusbar: the x86 COMMCTRL computes height using GetWindowRect
+              // instead of GetClientRect(parent) / internal WND struct rcClient.
+              // This causes a feedback loop (height grows: 10→26→39) because
+              // SetWindowPos applies new sizes that GetWindowRect reflects back.
+              // Recompute correct height using Wine's formula:
+              //   max(tmHeight + margin + 2*SM_CYBORDER, minHeight) + verticalBorder
+              // tmHeight=13 (default font), margin=2 (no internal leading),
+              // SM_CYBORDER=1, verticalBorder≈2 (3D sunken border)
+              const SM_CYBORDER = 1;
+              const tmHeight = 13; // default system font
+              const margin = 2;    // tmInternalLeading == 0 → default 2
+              const verticalBorder = 2;
+              const correctHeight = tmHeight + margin + 2 * SM_CYBORDER + verticalBorder;
+              wnd.height = correctHeight;
               wnd.x = 0; wnd.y = parentCH - wnd.height;
               wnd.width = parentCW;
             }
