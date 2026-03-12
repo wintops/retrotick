@@ -559,12 +559,10 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
             } else {
-              // Statusbar: dock to bottom of parent, full width
-              const MIN_SB = 20;
-              const sbHeight = wnd.height >= MIN_SB ? wnd.height : MIN_SB;
-              wnd.x = 0; wnd.y = parentCH - sbHeight;
+              // Statusbar: dock to bottom of parent, full width, fixed height
+              wnd.height = 20;
+              wnd.x = 0; wnd.y = parentCH - wnd.height;
               wnd.width = parentCW;
-              wnd.height = sbHeight;
             }
           }
         }
@@ -592,8 +590,9 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               // instead of one button-state row (~18px). Real Win3.1 toolbar = ~27px.
               if (wnd.height > 30) wnd.height = 27;
             } else {
-              const MIN_SB = 20;
-              if (wnd.height < MIN_SB) wnd.height = MIN_SB;
+              // Statusbar: enforce height 20px (x86 code computes wrong height
+              // because it reads position from internal WND struct we don't expose)
+              wnd.height = 20;
               wnd.x = 0; wnd.y = parentCH - wnd.height;
               wnd.width = parentCW;
             }

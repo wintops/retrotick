@@ -43,12 +43,25 @@ function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
     wnd.x = 0; wnd.y = parentCH - wnd.height;
     wnd.width = parentCW;
   }
-  // Store the delta so MoveWindow/SetWindowPos can adjust children
+  // Compute the delta and apply it to existing children.
+  // Children created during WM_CREATE were positioned using coordinates based on
+  // the original CCS position (e.g. GetWindowRect returning (-100,-100)).
+  // Now that we've moved the CCS window, adjust children by the same delta
+  // and clamp to y>=0 so nothing extends above the toolbar.
   const dx = wnd.x - origX;
   const dy = wnd.y - origY;
   if (dx !== 0 || dy !== 0) {
     (wnd as any)._ccsChildOffsetX = dx;
     (wnd as any)._ccsChildOffsetY = dy;
+    if (wnd.childList) {
+      for (const childHwnd of wnd.childList) {
+        const child = emu.handles.get<WindowInfo>(childHwnd);
+        if (child) {
+          child.x += dx;
+          child.y = Math.max(0, child.y + dy);
+        }
+      }
+    }
   }
 }
 
@@ -400,15 +413,16 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       let mx = (x << 16 >> 16), my = (y << 16 >> 16);
-      // If parent is a CCS control (e.g. ToolbarWindow), adjust y for the position
-      // offset. The x86 COMMCTRL code reads the toolbar's y from the internal WND struct
-      // (which still has the original -100), so child y values are off by the delta.
-      // x is not adjusted — the x86 code computes x relative to the client area.
+      // If parent is a CCS control, adjust coordinates: the x86 COMMCTRL code
+      // computes positions using GetWindowRect which returns screen coords based on
+      // the old CCS position (-100,-100). Apply the stored delta.
       if (wnd.parent) {
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
+          const ox = (parentWnd as any)._ccsChildOffsetX;
           const oy = (parentWnd as any)._ccsChildOffsetY;
-          if (oy !== undefined) { my += oy; }
+          if (ox !== undefined) mx += ox;
+          if (oy !== undefined) my = Math.max(0, my + oy);
         }
       }
       wnd.x = mx; wnd.y = my;
@@ -597,7 +611,17 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     let sizeChanged = false;
 
     if (!(uFlags & SWP_NOMOVE)) {
-      wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
+      let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      if (wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const ox = (parentWnd as any)._ccsChildOffsetX;
+          const oy = (parentWnd as any)._ccsChildOffsetY;
+          if (ox !== undefined) mx += ox;
+          if (oy !== undefined) my = Math.max(0, my + oy);
+        }
+      }
+      wnd.x = mx; wnd.y = my;
     }
     if (!(uFlags & SWP_NOSIZE)) {
       if (wnd.width !== cx || wnd.height !== cy) sizeChanged = true;
