@@ -40,19 +40,38 @@ const LB16_ERR = -1;
 export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
   if (!wnd.lbItems) { wnd.lbItems = []; wnd.lbItemData = []; }
 
+  // Owner-draw without LBS_HASSTRINGS: items are DWORD data, not strings
+  const LBS_OWNERDRAWFIXED = 0x0010;
+  const LBS_OWNERDRAWVARIABLE = 0x0020;
+  const LBS_HASSTRINGS = 0x0040;
+  const style = wnd.style ?? 0;
+  const isOwnerDrawNoStrings = ((style & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) !== 0)
+    && ((style & LBS_HASSTRINGS) === 0);
+
   if (message === LB16_ADDSTRING) {
-    const addr = emu.resolveFarPtr(lParam);
-    const text = addr ? emu.memory.readCString(addr) : '';
-    wnd.lbItems.push(text);
-    wnd.lbItemData!.push(0);
+    if (isOwnerDrawNoStrings) {
+      // lParam IS the data value, not a string pointer
+      wnd.lbItems.push('');
+      wnd.lbItemData!.push(lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.lbItems.push(text);
+      wnd.lbItemData!.push(0);
+    }
     return wnd.lbItems.length - 1;
   }
   if (message === LB16_INSERTSTRING) {
-    const addr = emu.resolveFarPtr(lParam);
-    const text = addr ? emu.memory.readCString(addr) : '';
     const idx = wParam === 0xFFFF || wParam >= wnd.lbItems.length ? wnd.lbItems.length : wParam;
-    wnd.lbItems.splice(idx, 0, text);
-    wnd.lbItemData!.splice(idx, 0, 0);
+    if (isOwnerDrawNoStrings) {
+      wnd.lbItems.splice(idx, 0, '');
+      wnd.lbItemData!.splice(idx, 0, lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.lbItems.splice(idx, 0, text);
+      wnd.lbItemData!.splice(idx, 0, 0);
+    }
     return idx;
   }
   if (message === LB16_DELETESTRING) {
@@ -74,8 +93,13 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
   }
   if (message === LB16_GETTEXT) {
     if (wParam >= wnd.lbItems.length) return LB16_ERR;
-    const text = wnd.lbItems[wParam];
     const addr = emu.resolveFarPtr(lParam);
+    if (isOwnerDrawNoStrings) {
+      // Write DWORD item data (4 bytes)
+      if (addr) emu.memory.writeU32(addr, wnd.lbItemData![wParam] ?? 0);
+      return 4;
+    }
+    const text = wnd.lbItems[wParam];
     if (addr) {
       for (let i = 0; i < text.length; i++) emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
       emu.memory.writeU8(addr + text.length, 0);
@@ -84,6 +108,7 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
   }
   if (message === LB16_GETTEXTLEN) {
     if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    if (isOwnerDrawNoStrings) return 4; // sizeof(DWORD)
     return wnd.lbItems[wParam].length;
   }
   if (message === LB16_SETITEMDATA) {
@@ -937,16 +962,23 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         if (!wnd.childList) wnd.childList = [];
         wnd.childList.push(childHwnd);
 
-        // Track active MDI child on the MDIClient
+        // Track active MDI child on the MDIClient; remember the old one
+        const prevActiveChild = (wnd as any).mdiActiveChild || 0;
         (wnd as any).mdiActiveChild = childHwnd;
 
         // Send WM_CREATE to child if it has a wndProc
         if (classInfo?.wndProc) {
           const savedSP = emu.cpu.reg[4] & 0xFFFF;
-          // Build a minimal Win16 CREATESTRUCT on the heap for WM_CREATE lParam
+          // Build CREATESTRUCT on the stack (SS == DS in Win16 DGROUP).
+          // Must NOT use allocHeap — heap addresses are outside the DS segment,
+          // so converting to DS:offset far pointer would give a bogus pointer.
           // CREATESTRUCT16: lpCreateParams(4), hInstance(2), hMenu(2), hWndParent(2),
           //   cy(2), cx(2), y(2), x(2), style(4), lpszName(4), lpszClass(4), dwExStyle(4)
-          const csAddr = emu.allocHeap(34);
+          const sp = emu.cpu.reg[4] & 0xFFFF;
+          const csOffset = (sp - 36) & 0xFFFF; // 34 bytes + 2 alignment
+          emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | csOffset;
+          const dsBase = emu.cpu.segBase(emu.cpu.ss); // SS == DS in DGROUP
+          const csAddr = dsBase + csOffset;
           emu.memory.writeU32(csAddr + 0, mdiLParam);     // lpCreateParams = MDICREATESTRUCT.lParam
           emu.memory.writeU16(csAddr + 4, hOwner);         // hInstance
           emu.memory.writeU16(csAddr + 6, 0);              // hMenu
@@ -960,10 +992,12 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           emu.memory.writeU32(csAddr + 22, szTitlePtr);    // lpszName
           emu.memory.writeU32(csAddr + 26, szClassPtr);    // lpszClass
           emu.memory.writeU32(csAddr + 30, 0);             // dwExStyle
-          // Convert to far pointer (DS:offset)
-          const csOff = csAddr - (emu.cpu.segBases.get(emu.cpu.ds) ?? 0);
-          const csFarPtr = ((emu.cpu.ds & 0xFFFF) << 16) | (csOff & 0xFFFF);
-          emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, csFarPtr);
+          // Far pointer: DS:offset (SS == DS in DGROUP)
+          const csFarPtr = ((emu.cpu.ds & 0xFFFF) << 16) | (csOffset & 0xFFFF);
+          const WM_NCCREATE = 0x0081;
+          const WM_CREATE = 0x0001;
+          emu.callWndProc16(classInfo.wndProc, childHwnd, WM_NCCREATE, 0, csFarPtr);
+          emu.callWndProc16(classInfo.wndProc, childHwnd, WM_CREATE, 0, csFarPtr);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
 
           // Send WM_SIZE with client area dimensions
@@ -972,6 +1006,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           const sizeLParam = ((sizeH & 0xFFFF) << 16) | (sizeW & 0xFFFF);
           emu.callWndProc16(classInfo.wndProc, childHwnd, WM_SIZE, 0, sizeLParam);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
+        }
+
+        // Send WM_MDIACTIVATE to old and new children (Win16 format):
+        //   wParam = TRUE if activating, FALSE if deactivating
+        //   lParam = MAKELONG(hwndActivating, hwndDeactivating)
+        const WM_MDIACTIVATE_MSG = 0x0222;
+        const activateLParam = ((prevActiveChild & 0xFFFF) << 16) | (childHwnd & 0xFFFF);
+        if (prevActiveChild) {
+          const prevWnd = emu.handles.get<WindowInfo>(prevActiveChild);
+          if (prevWnd?.wndProc) {
+            emu.callWndProc16(prevWnd.wndProc, prevActiveChild, WM_MDIACTIVATE_MSG, 0, activateLParam);
+          }
+        }
+        {
+          const newWnd = emu.handles.get<WindowInfo>(childHwnd);
+          if (newWnd?.wndProc) {
+            emu.callWndProc16(newWnd.wndProc, childHwnd, WM_MDIACTIVATE_MSG, 1, activateLParam);
+          }
         }
 
         // Invalidate mainWindow so next WM_PAINT cycle picks up the new MDI child
@@ -991,13 +1043,29 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       const WM_MDIICONARRANGE = 0x0228;
       const WM_MDISETMENU = 0x0230;
       if (message === WM_MDIACTIVATE) {
-        (wnd as any).mdiActiveChild = wParam;
+        const prevActive = (wnd as any).mdiActiveChild || 0;
+        const newActive = wParam & 0xFFFF;
+        (wnd as any).mdiActiveChild = newActive;
         // Move to end of childList for z-ordering (top = last)
         if (wnd.childList) {
-          const idx = wnd.childList.indexOf(wParam);
+          const idx = wnd.childList.indexOf(newActive);
           if (idx >= 0) {
             wnd.childList.splice(idx, 1);
-            wnd.childList.push(wParam);
+            wnd.childList.push(newActive);
+          }
+        }
+        // Forward WM_MDIACTIVATE to old and new children (Win16 format)
+        const actLParam = ((prevActive & 0xFFFF) << 16) | (newActive & 0xFFFF);
+        if (prevActive && prevActive !== newActive) {
+          const prevWnd = emu.handles.get<WindowInfo>(prevActive);
+          if (prevWnd?.wndProc) {
+            emu.callWndProc16(prevWnd.wndProc, prevActive, WM_MDIACTIVATE, 0, actLParam);
+          }
+        }
+        if (newActive) {
+          const newWnd = emu.handles.get<WindowInfo>(newActive);
+          if (newWnd?.wndProc) {
+            emu.callWndProc16(newWnd.wndProc, newActive, WM_MDIACTIVATE, 1, actLParam);
           }
         }
         const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);

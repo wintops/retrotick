@@ -25,7 +25,6 @@ export function emuCompleteThunk16(emu: Emulator, retVal: number, stackBytes: nu
     const sp = (emu.cpu.reg[4] & 0xFFFF) + stackBytes;
     emu.cpu.reg[4] = (emu.cpu.reg[4] & ~0xFFFF) | (sp & 0xFFFF);
   }
-  // Return to caller
   emu.cpu.cs = cs;
   emu.cpu.eip = (emu.cpu.segBase(cs)) + ip;
 }
@@ -197,17 +196,31 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
   emu.cpu.push16(WNDPROC_RETURN_SELECTOR);
   emu.cpu.push16(WNDPROC_RETURN_OFFSET);
 
-  // Set CS:IP to wndProc
+  // Set CS:IP to wndProc (linear address → SEG:OFFSET lookup)
+  let segFound = false;
   if (wndProc > 0xFFFF) {
     for (const [sel, base] of emu.cpu.segBases) {
       if (wndProc >= base && wndProc < base + 0x10000) {
         emu.cpu.cs = sel;
         emu.cpu.eip = wndProc;
+        segFound = true;
         break;
       }
     }
   } else {
     emu.cpu.eip = (emu.cpu.segBase(emu.cpu.cs)) + wndProc;
+    segFound = true;
+  }
+  if (!segFound) {
+    // No segment contains this address — can't execute, bail out
+    console.warn(`[MSG16] callWndProc16: no segment for wndProc=0x${wndProc.toString(16)} msg=0x${message.toString(16)} hwnd=0x${hwnd.toString(16)}`);
+    emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    emu.cpu.reg[3] = savedEBX;
+    emu.cpu.reg[5] = savedEBP;
+    emu.cpu.reg[6] = savedESI;
+    emu.cpu.reg[7] = savedEDI;
+    emu.wndProcDepth--;
+    return 0;
   }
 
   const frame = {
@@ -219,13 +232,19 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  const MAX_STEPS = 200000000;
+  // Only the outermost callWndProc16 may yield to the browser.
+  // Nested calls (from thunk handlers like WM_MDICREATE) must run to
+  // completion because their JS callers can't handle an undefined return.
+  const canYield = targetDepth === 0;
+  // Use a lower step limit for nested calls to avoid long UI freezes
+  // when a nested WndProc enters an infinite loop.
+  const MAX_STEPS = canYield ? 200_000_000 : 50_000_000;
   const YIELD_MS = 40;
   const startTime = performance.now();
 
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted && steps < MAX_STEPS) {
     // Yield to browser periodically so the UI stays responsive
-    if ((steps & 0xFFF) === 0 && steps > 0 && performance.now() - startTime > YIELD_MS) {
+    if (canYield && (steps & 0xFFF) === 0 && steps > 0 && performance.now() - startTime > YIELD_MS) {
       // Push frame so the tick loop continues executing this wndproc
       emu._wndProcFrames.push(frame);
       emu._wndProcSetupPending = true;
@@ -236,6 +255,7 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
     if (thunk) {
       const key = `${thunk.dll}:${thunk.name}`;
+      emu.diagThunk(`[d=${emu.wndProcDepth}] ${key}`);
       const handler = emu.apiDefs.get(key)?.handler;
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
@@ -291,12 +311,14 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
   }
 
   if (steps >= MAX_STEPS) {
-    console.warn(`[MSG16] WndProc exceeded max steps for msg 0x${message.toString(16)} EIP=0x${(emu.cpu.eip >>> 0).toString(16)} CS=${emu.cpu.cs}`);
-    emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    console.warn(`[MSG16] WndProc exceeded max steps for msg 0x${message.toString(16)} EIP=0x${(emu.cpu.eip >>> 0).toString(16)} CS=${emu.cpu.cs} hwnd=0x${hwnd.toString(16)} wndProc=0x${wndProc.toString(16)} depth=${emu.wndProcDepth}\n  THUNK TRACE:\n${emu.diagThunkDump()}`);
     emu.wndProcDepth = targetDepth;
   }
 
-  // Synchronous return — restore callee-saved registers
+  // Synchronous return — always restore SP and callee-saved registers.
+  // SP restoration is critical: even if the WndProc completed normally
+  // (RETF cleaned up args), we force SP back to guarantee no leak.
+  emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
   emu.cpu.reg[3] = savedEBX;
   emu.cpu.reg[5] = savedEBP;
   emu.cpu.reg[6] = savedESI;
@@ -568,6 +590,7 @@ export function emuTick(emu: Emulator): void {
       stepCount += 999; // thunks represent significant work (~1000 real instructions)
       emu._lastThunkTick = emu._tickCount;
       const key = `${thunk.dll}:${thunk.name}`;
+      emu.diagThunk(key);
       const handler = emu.apiDefs.get(key)?.handler;
 
       if (handler) {
@@ -716,7 +739,8 @@ export function emuTick(emu: Emulator): void {
           `  stack top 16 words:\n` +
           `    ${Array.from({length: 16}, (_, i) => '0x' + emu.memory.readU16(((emu.cpu.reg[4] >>> 0) + i * 2) >>> 0).toString(16).padStart(4, '0')).join(' ')}\n` +
           `  EBP backtrace (32-bit):\n${bt.join('\n')}\n` +
-          `  BP backtrace (16-bit):\n${bt16.join('\n')}`
+          `  BP backtrace (16-bit):\n${bt16.join('\n')}\n` +
+          `  THUNK TRACE (last ${emu._diagThunkSize}):\n${emu.diagThunkDump()}`
         );
         emu.haltReason = 'access violation';
         emu.halted = true;

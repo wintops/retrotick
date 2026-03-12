@@ -760,24 +760,39 @@ export function registerMessage(emu: Emulator): void {
       const LB_SETCOUNT      = 0x01A7;
       const LB_INITSTORAGE   = 0x01A8;
       const LBS_MULTIPLESEL  = 0x0008;
+      const LBS_OWNERDRAWFIXED32 = 0x0010;
+      const LBS_OWNERDRAWVARIABLE32 = 0x0020;
+      const LBS_HASSTRINGS32 = 0x0040;
       const LBS_EXTENDEDSEL  = 0x0800;
       const LB_ERR = -1;
 
       if (!wnd.lbItems) { wnd.lbItems = []; wnd.lbItemData = []; }
       const isMultiSel = !!(wnd.style & (LBS_MULTIPLESEL | LBS_EXTENDEDSEL));
       if (isMultiSel && !wnd.lbSelectedIndices) wnd.lbSelectedIndices = new Set();
+      const isOwnerDrawNoStrings32 = ((wnd.style & (LBS_OWNERDRAWFIXED32 | LBS_OWNERDRAWVARIABLE32)) !== 0)
+        && ((wnd.style & LBS_HASSTRINGS32) === 0);
 
       if (message === LB_ADDSTRING) {
-        const text = lParam ? emu.memory.readCString(lParam) : '';
-        wnd.lbItems!.push(text);
-        wnd.lbItemData!.push(0);
+        if (isOwnerDrawNoStrings32) {
+          wnd.lbItems!.push('');
+          wnd.lbItemData!.push(lParam);
+        } else {
+          const text = lParam ? emu.memory.readCString(lParam) : '';
+          wnd.lbItems!.push(text);
+          wnd.lbItemData!.push(0);
+        }
         return wnd.lbItems!.length - 1;
       }
       if (message === LB_INSERTSTRING) {
         const idx = wParam === -1 || wParam >= wnd.lbItems!.length ? wnd.lbItems!.length : wParam;
-        const text = lParam ? emu.memory.readCString(lParam) : '';
-        wnd.lbItems!.splice(idx, 0, text);
-        wnd.lbItemData!.splice(idx, 0, 0);
+        if (isOwnerDrawNoStrings32) {
+          wnd.lbItems!.splice(idx, 0, '');
+          wnd.lbItemData!.splice(idx, 0, lParam);
+        } else {
+          const text = lParam ? emu.memory.readCString(lParam) : '';
+          wnd.lbItems!.splice(idx, 0, text);
+          wnd.lbItemData!.splice(idx, 0, 0);
+        }
         return idx;
       }
       if (message === LB_DELETESTRING) {
@@ -798,12 +813,17 @@ export function registerMessage(emu: Emulator): void {
       if (message === LB_GETCOUNT) return wnd.lbItems!.length;
       if (message === LB_GETTEXT) {
         if (wParam >= wnd.lbItems!.length) return LB_ERR;
+        if (isOwnerDrawNoStrings32) {
+          if (lParam) emu.memory.writeU32(lParam, wnd.lbItemData![wParam] ?? 0);
+          return 4;
+        }
         const text = wnd.lbItems![wParam];
         if (lParam) emu.memory.writeCString(lParam, text);
         return text.length;
       }
       if (message === LB_GETTEXTLEN) {
         if (wParam >= wnd.lbItems!.length) return LB_ERR;
+        if (isOwnerDrawNoStrings32) return 4;
         return wnd.lbItems![wParam].length;
       }
       if (message === LB_SETCURSEL) {

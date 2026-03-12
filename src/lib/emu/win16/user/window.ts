@@ -846,6 +846,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     if (classInfo?.wndProc) {
+      if (emu.wndProcDepth > 0) {
+        console.log(`[WIN16] CreateWindowEx16 (nested depth=${emu.wndProcDepth}) class="${className}" wndProc=0x${classInfo.wndProc.toString(16)} hwnd=0x${hwnd.toString(16)} parent=0x${hWndParent.toString(16)}`);
+      }
       const savedSP = emu.cpu.reg[4] & 0xFFFF;
       const cs = buildCreateStruct16(emu, emu.readArg16DWord(0), hInstance, hMenu, hWndParent,
         height, w, y, x, dwStyle, emu.readArg16DWord(22), emu.readArg16DWord(26), dwExStyle);

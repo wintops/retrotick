@@ -469,6 +469,24 @@ export class Emulator {
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
+  // Diagnostic: ring buffer of last N thunk calls for crash debugging
+  _diagThunkRing: string[] = [];
+  _diagThunkIdx = 0;
+  _diagThunkSize = 64;
+  diagThunk(name: string) {
+    const sp = this.cpu.reg[4] & 0xFFFF;
+    this._diagThunkRing[this._diagThunkIdx % this._diagThunkSize] = `SP=${sp.toString(16)} ${name}`;
+    this._diagThunkIdx++;
+  }
+  diagThunkDump(): string {
+    const n = Math.min(this._diagThunkIdx, this._diagThunkSize);
+    const start = this._diagThunkIdx - n;
+    const lines: string[] = [];
+    for (let i = start; i < this._diagThunkIdx; i++) {
+      lines.push(`  [${i - start}] ${this._diagThunkRing[i % this._diagThunkSize]}`);
+    }
+    return lines.join('\n');
+  }
   exitedNormally = false;
   exitCode = 0;
   stopped = false;
