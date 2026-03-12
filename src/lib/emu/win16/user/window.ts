@@ -49,13 +49,11 @@ function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
   const dx = wnd.x - origX;
   const dy = wnd.y - origY;
   if (dx !== 0 || dy !== 0) {
-    (wnd as any)._ccsChildOffsetX = dx;
     (wnd as any)._ccsChildOffsetY = dy;
     if (wnd.childList) {
       for (const childHwnd of wnd.childList) {
         const child = emu.handles.get<WindowInfo>(childHwnd);
         if (child) {
-          child.x += dx;
           child.y = Math.max(0, child.y + dy);
         }
       }
@@ -411,15 +409,13 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       let mx = (x << 16 >> 16), my = (y << 16 >> 16);
-      // If parent is a CCS control, adjust coordinates: the x86 COMMCTRL code
-      // computes positions using GetWindowRect which returns screen coords based on
-      // the old CCS position (-100,-100). Apply the stored delta.
+      // If parent is a CCS control, adjust Y coordinate only: the x86 COMMCTRL code
+      // computes Y positions using GetWindowRect which returns screen coords based on
+      // the old CCS position (-100,-100). X is already parent-client-relative.
       if (wnd.parent) {
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
-          const ox = (parentWnd as any)._ccsChildOffsetX;
           const oy = (parentWnd as any)._ccsChildOffsetY;
-          if (ox !== undefined) mx += ox;
           if (oy !== undefined) my = Math.max(0, my + oy);
         }
       }
@@ -613,9 +609,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       if (wnd.parent) {
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
-          const ox = (parentWnd as any)._ccsChildOffsetX;
           const oy = (parentWnd as any)._ccsChildOffsetY;
-          if (ox !== undefined) mx += ox;
           if (oy !== undefined) my = Math.max(0, my + oy);
         }
       }
