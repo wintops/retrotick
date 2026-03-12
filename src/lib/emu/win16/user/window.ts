@@ -617,6 +617,14 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
     if (!(uFlags & SWP_NOSIZE)) {
       if (wnd.width !== cx || wnd.height !== cy) sizeChanged = true;
+      // Track the toolbar's "internal" height — the x86 COMMCTRL code computes
+      // button positions based on this height, but the frame may force a smaller
+      // size. Store the max height the x86 code requests so we can compute the
+      // DC Y offset needed to center the painted buttons correctly.
+      const cn2 = wnd.classInfo?.className?.toUpperCase() || '';
+      if (cn2 === 'TOOLBARWINDOW' && cy > (wnd.height || 0)) {
+        (wnd as any)._ccsInternalHeight = cy;
+      }
       wnd.width = cx; wnd.height = cy;
     }
     const WS_VIS = 0x10000000;
