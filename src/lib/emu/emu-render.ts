@@ -179,9 +179,18 @@ function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offset
     }
     if (!child.visible) continue;
     out.push({ hwnd: childHwnd, info: child, ox: offsetX, oy: offsetY, mdiParentHwnd });
-    // Recurse into child dialogs (e.g. tab pages) that have their own children
+    // Recurse into child's children (e.g. tab pages, toolbar controls)
     if (child.childList && child.childList.length > 0) {
-      collectChildren(emu, child, offsetX + child.x, offsetY + child.y, out, mdiParentHwnd);
+      let childOffY = offsetY + child.y;
+      // CCS toolbar: shift overlay children down to align with DC-painted buttons.
+      // The DC uses the full ccsYOffset to center the internal coordinate space,
+      // but overlay children only need a fraction because their stored positions
+      // were partially corrected by fixCcsPosition.
+      const internalH = (child as any)._ccsInternalHeight;
+      if (internalH && internalH > child.height) {
+        childOffY += Math.round((internalH - child.height) / 4);
+      }
+      collectChildren(emu, child, offsetX + child.x, childOffY, out, mdiParentHwnd);
     }
   }
 }

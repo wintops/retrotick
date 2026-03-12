@@ -416,7 +416,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
           const oy = (parentWnd as any)._ccsChildOffsetY;
-          if (oy !== undefined) my = Math.max(0, my + oy);
+          if (oy !== undefined) {
+            my = my + oy;
+            my = Math.max(0, my);
+          }
         }
       }
       wnd.x = mx; wnd.y = my;
@@ -610,7 +613,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
           const oy = (parentWnd as any)._ccsChildOffsetY;
-          if (oy !== undefined) my = Math.max(0, my + oy);
+          if (oy !== undefined) {
+            my = my + oy;
+            my = Math.max(0, my);
+          }
         }
       }
       wnd.x = mx; wnd.y = my;

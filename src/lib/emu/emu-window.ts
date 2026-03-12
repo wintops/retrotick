@@ -195,6 +195,13 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
     ctx.beginPath();
     ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
     ctx.clip();
+    // Fill CCS toolbar background — the DC is shifted down so the top strip
+    // would otherwise show the canvas background color instead of BTNFACE.
+    if (ccsYOffset > 0) {
+      const bf = SYS_COLORS[COLOR_BTNFACE];
+      ctx.fillStyle = `rgb(${bf & 0xFF},${(bf >> 8) & 0xFF},${(bf >> 16) & 0xFF})`;
+      ctx.fillRect(0, -ccsYOffset, wnd.width, wnd.height);
+    }
     childDCSet.add(hdc);
   }
   return hdc;
