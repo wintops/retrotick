@@ -569,8 +569,14 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
     if (signedIndex === -16 && wnd) return wnd.style || 0;
     if (signedIndex === -20 && wnd) return wnd.exStyle || 0;
-    if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 4 <= wnd.extraBytes.length) {
-      return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+    if (wnd && wnd.extraBytes && nIndex >= 0) {
+      if (nIndex + 4 <= wnd.extraBytes.length) {
+        return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+      }
+      // Win16: if only 2 bytes remain, read as WORD (compatible with SetWindowWord)
+      if (nIndex + 2 <= wnd.extraBytes.length) {
+        return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8);
+      }
     }
     return 0;
   }, 135);
@@ -585,12 +591,19 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     let old = 0;
     if (signedIndex === -4 && wnd) { old = wnd.rawWndProc || wnd.wndProc || 0; wnd.rawWndProc = dwNewLong; wnd.wndProc = h.resolveFarPtr(dwNewLong); }
     else if (signedIndex === -16 && wnd) { old = wnd.style || 0; wnd.style = dwNewLong; }
-    else if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 4 <= wnd.extraBytes.length) {
-      old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
-      wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
-      wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
-      wnd.extraBytes[nIndex+2] = (dwNewLong >> 16) & 0xFF;
-      wnd.extraBytes[nIndex+3] = (dwNewLong >> 24) & 0xFF;
+    else if (wnd && wnd.extraBytes && nIndex >= 0) {
+      if (nIndex + 4 <= wnd.extraBytes.length) {
+        old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+        wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
+        wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
+        wnd.extraBytes[nIndex+2] = (dwNewLong >> 16) & 0xFF;
+        wnd.extraBytes[nIndex+3] = (dwNewLong >> 24) & 0xFF;
+      } else if (nIndex + 2 <= wnd.extraBytes.length) {
+        // Win16: if only 2 bytes remain, write as WORD (matches SetWindowWord behavior)
+        old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8);
+        wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
+        wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
+      }
     }
     return old;
   }, 136);
@@ -738,7 +751,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       return wnd.childList?.[0] ?? 0;
     }
     if (uCmd === GW_OWNER) {
-      return wnd.parent || 0;
+      return (wnd as any).owner || 0;
     }
     // For sibling navigation, find in parent's childList
     if (wnd.parent) {
