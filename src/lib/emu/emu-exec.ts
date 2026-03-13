@@ -764,10 +764,20 @@ export function emuTick(emu: Emulator): void {
 
   emu._tickRunning = false;
 
-  // Sync video memory for DOS mode (picks up direct B800:0000 writes)
+  // Sync video memory for DOS mode.
+  // Graphics mode: only sync when VBlank signals a complete frame (avoids tearing
+  // from capturing a half-written framebuffer mid-copy).
+  // Text mode: sync every tick (no tearing concern, direct B800:0000 writes).
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
-      syncGraphics(emu);
+      const now = performance.now();
+      // Sync on VBlank (normal path), or every ~33ms as fallback for games
+      // that don't poll 0x3DA (ensures display still updates).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 33) {
+        emu.vga.pendingSync = false;
+        emu.vga.lastSyncTime = now;
+        syncGraphics(emu);
+      }
     } else {
       syncVideoMemory(emu);
     }

@@ -10,7 +10,7 @@ import type { PEInfo, MenuItem } from '../pe/types';
 import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
 import { DefaultFileManager } from './file-manager';
-import { VGAState, isVGAPort } from './dos/vga';
+import { VGAState, isVGAPort, syncGraphics } from './dos/vga';
 import { DosAudio } from './dos/audio';
 import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
@@ -1274,7 +1274,17 @@ export class Emulator {
 
   /** Read an I/O port value */
   portIn(port: number): number {
-    if (isVGAPort(port)) return this.vga.portRead(port);
+    if (isVGAPort(port)) {
+      const val = this.vga.portRead(port);
+      // When VBlank is first detected on 0x3DA, sync immediately — VRAM still
+      // holds the complete previous frame (game hasn't started its copy yet).
+      if (port === 0x3DA && this.vga.pendingSync && this.isGraphicsMode) {
+        this.vga.pendingSync = false;
+        this.vga.lastSyncTime = performance.now();
+        syncGraphics(this);
+      }
+      return val;
+    }
     // Audio ports (AdLib, Sound Blaster)
     const audioVal = this.dosAudio.portIn(port);
     if (audioVal >= 0) return audioVal;
@@ -1474,13 +1484,9 @@ export class Emulator {
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
   injectHwKey(scancode: number, browserChar?: number): void {
-    // Queue all scancodes for sequential delivery — writing directly to port 0x60
+    // Queue scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
-    // Cap queue size to prevent overflow from key repeat (browser fires keydown ~30-60/s
-    // when holding a key, but the CPU can only process one INT 09h per execution batch).
-    // Break code (key-up, bit 7 set): flush queued repeat make codes for the
-    // same key so the character stops immediately when the key is released.
-    // Keep the first make code (initial press) but drop subsequent repeats.
+    // On break code: flush queued repeat make codes so repeat stops immediately.
     if ((scancode & 0x80) && scancode !== 0xE0) {
       const makeCode = scancode & 0x7F;
       let kept = false;
@@ -1490,9 +1496,8 @@ export class Emulator {
         if (k === makeCode) {
           if (!kept) {
             kept = true;
-            filtered.push(k); // keep first make
+            filtered.push(k);
           } else {
-            // Drop repeat; also drop preceding E0 prefix if present
             if (filtered.length > 0 && filtered[filtered.length - 1] === 0xE0) filtered.pop();
           }
           continue;
@@ -1525,6 +1530,41 @@ export class Emulator {
   _kbdReplayValue = 0xFF;
   _int09ReturnCS = -1; // CS of return address for active INT 09h; -1 = not active
   _int09ReturnIP = 0;
+
+  // --- Typematic repeat (DOS subsystem implements its own key repeat) ---
+  _typematicScan = -1;        // scancode of currently held key, -1 = none
+  _typematicChar: number | undefined; // browser char for the held key
+  _typematicExtended = false;  // whether the held key needs E0 prefix
+  _typematicTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Start typematic repeat for a key press (non-modifier only) */
+  startTypematic(scan: number, browserChar: number | undefined, isExtended: boolean): void {
+    this.stopTypematic();
+    this._typematicScan = scan;
+    this._typematicChar = browserChar;
+    this._typematicExtended = isExtended;
+    // Initial delay before repeat starts (500ms, matching typical BIOS default)
+    this._typematicTimer = setTimeout(() => {
+      // Repeat at ~30 Hz (33ms interval)
+      this._typematicTimer = setInterval(() => {
+        if (this._typematicScan < 0) return;
+        if (this._typematicExtended) this.injectHwKey(0xE0);
+        this.injectHwKey(this._typematicScan, this._typematicChar);
+      }, 33);
+    }, 500);
+  }
+
+  /** Stop typematic repeat (called on keyup or when a different key is pressed) */
+  stopTypematic(scan?: number): void {
+    // If scan is specified, only stop if it matches the currently repeating key
+    if (scan !== undefined && this._typematicScan !== scan) return;
+    if (this._typematicTimer !== null) {
+      clearTimeout(this._typematicTimer);
+      clearInterval(this._typematicTimer);
+      this._typematicTimer = null;
+    }
+    this._typematicScan = -1;
+  }
 
   /** Deliver a DOS key for INT 16h blocking wait */
   /** Write a key into the BDA keyboard buffer (for programs that read it directly) */
