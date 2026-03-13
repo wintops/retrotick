@@ -196,9 +196,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyle,
       exStyle: 0,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sx === CW_USEDEFAULT ? 0 : sy,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -258,6 +258,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.postMessage(emu.mainWindow, 0x0005, 0, lParam);
     }
 
+    fixCcsPosition(emu, hwnd, hWndParent);
     return hwnd;
   }, 41);
 
@@ -822,9 +823,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyleEx,
       exStyle: dwExStyle,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sx === CW_USEDEFAULT ? 0 : sy,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,

@@ -204,6 +204,9 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
   const allChildren: CollectedChild[] = [];
   collectChildren(emu, wnd, 0, 0, allChildren);
 
+  if (false) { // DIAG: enable for debugging render cycles
+  }
+
   // Notify overlays synchronously BEFORE custom draw so Preact renders
   // CompanionCanvas elements and sets wnd.domCanvas via ref callbacks.
   // This ensures sendDrawItem can draw directly to the companion canvas.
