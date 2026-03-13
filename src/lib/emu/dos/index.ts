@@ -98,6 +98,14 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case 0x12: // Get conventional memory size → AX = KB (640)
       cpu.setReg16(EAX, 640);
       return true;
+    case 0x18: // ROM BASIC — used by 256-byte intros as a cheap exit
+    case 0x19: // Bootstrap loader (reboot) — also used by intros as a 2-byte exit
+      emu.halted = true;
+      cpu.halted = true;
+      if (emu.onReboot) {
+        emu.onReboot();
+      }
+      return true;
     case 0x10: return handleInt10(cpu, emu);
     case 0x16: return handleInt16(cpu, emu, cpu.cs === 0xF000);
     case 0x20: return handleInt20(cpu, emu);

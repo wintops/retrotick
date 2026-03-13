@@ -677,6 +677,7 @@ export class Emulator {
   onMenuChanged?: () => void;
   onCrash?: (eip: string, description: string) => void;
   onExit?: () => void;
+  onReboot?: () => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 

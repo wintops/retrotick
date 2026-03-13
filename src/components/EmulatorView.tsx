@@ -626,6 +626,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         setWindowReady(prev => { if (!prev) onReady?.(); return true; });
       };
       emu.onCrash = (eip: string, description: string) => { setCrashInfo({ eip, description }); onReady?.(); };
+      emu.onReboot = () => { location.reload(); };
       emu.onExit = () => {
         emu.destroyAudio();
         if (emu.isConsole) {
