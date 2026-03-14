@@ -2,13 +2,13 @@
 
 <a lang="zh-Hans" href="./README.zh-Hans.md">简体中文</a> | <a lang="ja" href="./README.ja.md">日本語</a>
 
-**Run classic Windows and DOS executables directly in your browser.** No installation required. Just drag, drop, and watch programs come alive in a web page.
+**Run classic Windows and DOS executables directly in your browser.** No OS emulation. Just an x86 CPU emulator with reimplemented Windows/DOS APIs. Drag, drop, and play.
 
 ### [Try it now → retrotick.com](https://retrotick.com/)
 
 <img src="https://static.retrotick.com/screenshot.webp" width="800" height="600" alt="Screenshot" />
 
-RetroTick is an x86 virtual machine and Windows/DOS API compatibility layer built from scratch in TypeScript. It parses PE (Win32), NE (Win16), and MZ (DOS) binaries, executes x86 machine code instruction by instruction, and reimplements a subset of the Win32, Win16, and DOS API surface, enough to boot several `.exe` files from the classic Windows era and render their GUIs in the browser.
+RetroTick is an x86 CPU emulator and Windows/DOS API compatibility layer built from scratch in TypeScript. Rather than emulating an entire operating system, it emulates the x86 processor and reimplements OS APIs directly. It parses PE (Win32), NE (Win16), and MZ (DOS) binaries, executes x86 machine code instruction by instruction, and provides a subset of the Win32, Win16, and DOS API surface, enough to boot several `.exe` files from the classic Windows era and render their GUIs in the browser.
 
 ## What Runs
 

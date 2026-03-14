@@ -4,13 +4,13 @@
 
 [English](./README.md) | <a lang="zh-Hans" href="./README.zh-Hans.md">简体中文</a>
 
-**クラシックな Windows・DOS プログラムをブラウザで直接実行。** インストール不要。ドラッグ＆ドロップするだけで、懐かしいプログラムが Web ページ上でよみがえります。
+**クラシックな Windows・DOS プログラムをブラウザで直接実行。** OS エミュレーションではなく、x86 CPU エミュレーターと再実装された Windows/DOS API です。ドラッグ＆ドロップですぐ遊べます。
 
 ### [今すぐ試す → retrotick.com](https://retrotick.com/)
 
 <img src="https://static.retrotick.com/screenshot.webp" width="800" height="600" alt="スクリーンショット" />
 
-RetroTick は TypeScript のみでゼロから構築された x86 仮想マシンと Windows/DOS API 互換レイヤーです。PE (Win32)、NE (Win16)、MZ (DOS) バイナリを解析し、x86 機械語を一命令ずつ実行し、Win32・Win16・DOS の API のサブセットを再実装することで、クラシック Windows 時代のいくつかの `.exe` ファイルを起動し、GUI をブラウザ上にレンダリングします。
+RetroTick は TypeScript のみでゼロから構築された x86 CPU エミュレーターと Windows/DOS API 互換レイヤーです。OS 全体をエミュレートするのではなく、x86 プロセッサをエミュレートし、OS API を直接再実装します。PE (Win32)、NE (Win16)、MZ (DOS) バイナリを解析し、x86 機械語を一命令ずつ実行し、Win32・Win16・DOS の API のサブセットを提供することで、クラシック Windows 時代のいくつかの `.exe` ファイルを起動し、GUI をブラウザ上にレンダリングします。
 
 ## 動作するプログラム
 

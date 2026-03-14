@@ -4,13 +4,13 @@
 
 [English](./README.md) | <a lang="ja" href="./README.ja.md">日本語</a>
 
-**在浏览器中直接运行经典 Windows 和 DOS 程序。** 无需安装，拖放即可，让老程序在网页中重获新生。
+**在浏览器中直接运行经典 Windows 和 DOS 程序。** 不模拟操作系统，只模拟 x86 CPU 并重新实现 Windows/DOS API。拖放即玩。
 
 ### [立即体验 → retrotick.com](https://retrotick.com/)
 
 <img src="https://static.retrotick.com/screenshot.webp" width="800" height="600" alt="截图" />
 
-RetroTick 是一个完全使用 TypeScript 从零构建的 x86 虚拟机与 Windows/DOS API 兼容层。它解析 PE (Win32)、NE (Win16) 和 MZ (DOS) 二进制文件，逐条执行 x86 机器码，并重新实现了 Win32、Win16 和 DOS API 的一个子集，足以启动经典 Windows 时代的若干 `.exe` 文件，并在浏览器中渲染图形界面。
+RetroTick 是一个完全使用 TypeScript 从零构建的 x86 CPU 模拟器与 Windows/DOS API 兼容层。它不模拟整个操作系统，而是模拟 x86 处理器并直接重新实现操作系统 API。它解析 PE (Win32)、NE (Win16) 和 MZ (DOS) 二进制文件，逐条执行 x86 机器码，并提供 Win32、Win16 和 DOS API 的一个子集，足以启动经典 Windows 时代的若干 `.exe` 文件，并在浏览器中渲染图形界面。
 
 ## 可运行的程序
 
