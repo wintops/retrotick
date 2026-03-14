@@ -394,6 +394,20 @@ export class Emulator {
   isGraphicsMode = false;
   onVideoFrame?: () => void;
 
+  /** Initialize VGA Mode X detection callback (call once after memory is ready) */
+  initVgaModeXHook(): void {
+    this.vga.onUnchainedChange = (unchained: boolean) => {
+      if (unchained) {
+        // Mode X: activate planar memory hook and clear planes
+        this.cpu.mem.vgaPlanar = this.vga;
+        this.vga.clearPlanes();
+      } else {
+        // Back to Chain-4 linear mode 13h
+        this.cpu.mem.vgaPlanar = null;
+      }
+    };
+  }
+
   // API dispatch
   apiDefs = new Map<string, ApiDef>();
   ordinalNames = new Map<string, string>(); // "MODULE:ordinal" → human name

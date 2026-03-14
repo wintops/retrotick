@@ -211,6 +211,9 @@ export class Memory {
   }
 
   readU16(addr: number): number {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+      return this.readU8(addr) | (this.readU8(addr + 1) << 8);
+    }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
       return this.dv(addr).getUint16(off, true);
@@ -219,6 +222,10 @@ export class Memory {
   }
 
   readU32(addr: number): number {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+      return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
+        (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
+    }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
       return this.dv(addr).getUint32(off, true);
@@ -252,6 +259,11 @@ export class Memory {
   }
 
   writeU16(addr: number, val: number): void {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+      this.writeU8(addr, val & 0xFF);
+      this.writeU8(addr + 1, (val >> 8) & 0xFF);
+      return;
+    }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
       this.dv(addr).setUint16(off, val, true);
@@ -262,6 +274,13 @@ export class Memory {
   }
 
   writeU32(addr: number, val: number): void {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+      this.writeU8(addr, val & 0xFF);
+      this.writeU8(addr + 1, (val >> 8) & 0xFF);
+      this.writeU8(addr + 2, (val >> 16) & 0xFF);
+      this.writeU8(addr + 3, (val >> 24) & 0xFF);
+      return;
+    }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
       this.dv(addr).setUint32(off, val, true);
