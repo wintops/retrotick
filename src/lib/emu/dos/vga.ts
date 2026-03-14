@@ -295,7 +295,21 @@ export class VGAState {
 
     this.writeMapMask = this.seqRegs[2] & 0x0F;
     this.readMapSelect = this.gcRegs[4] & 0x03;
+    // Reset unchained state (Chain-4 is always enabled after a BIOS mode set)
+    this.unchained = false;
   }
+
+  // Mode X state: true when mode 13h has Chain-4 disabled (unchained 256-color planar)
+  unchained = false;
+
+  /** Check if current register state indicates Mode X (unchained mode 13h) */
+  isUnchained(): boolean {
+    // Mode X = mode 13h with Chain-4 disabled (seq reg 4 bit 3 = 0)
+    return this.currentMode.mode === 0x13 && !(this.seqRegs[4] & 0x08);
+  }
+
+  /** Callback set by emulator to update memory hook when unchained state changes */
+  onUnchainedChange?: (unchained: boolean) => void;
 
   portWrite(port: number, value: number): void {
     switch (port) {
@@ -315,12 +329,21 @@ export class VGAState {
       case 0x3C4: // Sequencer index
         this.seqIndex = value & 0x07;
         break;
-      case 0x3C5: // Sequencer data
+      case 0x3C5: { // Sequencer data
         if (this.seqIndex < this.seqRegs.length) {
           this.seqRegs[this.seqIndex] = value;
         }
         if (this.seqIndex === 0x02) this.writeMapMask = value & 0x0F;
+        // Detect Chain-4 toggle (seq reg 4 bit 3) for Mode X
+        if (this.seqIndex === 0x04) {
+          const wasUnchained = this.unchained;
+          this.unchained = this.isUnchained();
+          if (this.unchained !== wasUnchained) {
+            this.onUnchainedChange?.(this.unchained);
+          }
+        }
         break;
+      }
       case 0x3CE: // Graphics controller index
         this.gcIndex = value & 0x0F;
         break;
@@ -577,6 +600,65 @@ export function syncMode13h(emu: Emulator): void {
   emu.onVideoFrame?.();
 }
 
+/** Sync Mode X (unchained 256-color planar) framebuffer from VGA planes.
+ *  Supports page flipping via CRTC display start address (regs 0x0C-0x0D).
+ *  Resolution is derived from CRTC registers (typically 320x200 or 320x240). */
+export function syncModeX(emu: Emulator): void {
+  const vga = emu.vga;
+
+  // Derive resolution from CRTC registers
+  // Vertical Display End (CRTC 0x12) = visible scanlines - 1 (low 8 bits)
+  // Overflow register (CRTC 0x07) bit 1 = bit 8, bit 6 = bit 9
+  const vdeLow = vga.crtcRegs[0x12];
+  const overflow = vga.crtcRegs[0x07];
+  const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
+  const totalScanlines = vde + 1;
+  // Max Scan Line register (CRTC 0x09) bits 0-4: each pixel row occupies (maxScanLine+1) scanlines
+  // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
+  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
+  const height = Math.floor(totalScanlines / (maxScanLine + 1));
+  const width = 320; // Mode X is always 320 pixels wide
+
+  // Reinit framebuffer if resolution changed
+  if (!vga.framebuffer || vga.framebuffer.width !== width || vga.framebuffer.height !== height) {
+    vga.initFramebuffer(width, height);
+    if (!vga.framebuffer) return;
+  }
+
+  const lut = buildRGBLookup(vga.palette);
+  const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
+  const p0 = vga.planes[0], p1 = vga.planes[1], p2 = vga.planes[2], p3 = vga.planes[3];
+  const pixelMask = vga.dacPixelMask;
+
+  // Display start address from CRTC regs 0x0C (high) and 0x0D (low)
+  // This is the byte offset into planar memory where display begins
+  const displayStart = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
+
+  // CRTC offset register (0x13) = bytes per scanline / 2 in each plane
+  // For Mode X 320 wide: 320/4 pixels per plane per line = 80 bytes, offset = 80/2 = 40
+  const pitch = (vga.crtcRegs[0x13] || 40) * 2;
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = displayStart + y * pitch;
+    const px = y * width;
+    for (let x = 0; x < width; x++) {
+      const plane = x & 3;
+      const offset = (rowStart + (x >> 2)) & 0xFFFF;
+      let colorIdx: number;
+      switch (plane) {
+        case 0: colorIdx = p0[offset]; break;
+        case 1: colorIdx = p1[offset]; break;
+        case 2: colorIdx = p2[offset]; break;
+        default: colorIdx = p3[offset]; break;
+      }
+      buf32[px + x] = lut[colorIdx & pixelMask];
+    }
+  }
+
+  vga.dirty = false;
+  emu.onVideoFrame?.();
+}
+
 /** Sync CGA mode 4/5 (320x200x4) framebuffer from B8000, interleaved */
 export function syncCGA4(emu: Emulator): void {
   const vga = emu.vga;
@@ -698,6 +780,11 @@ export function syncPlanarMono(emu: Emulator): void {
 /** Sync any graphics mode framebuffer */
 export function syncGraphics(emu: Emulator): void {
   const mode = emu.videoMode;
+  // Mode X: mode 13h with Chain-4 disabled
+  if (mode === 0x13 && emu.vga.unchained) {
+    syncModeX(emu);
+    return;
+  }
   switch (mode) {
     case 0x13: syncMode13h(emu); break;
     case 0x04: case 0x05: syncCGA4(emu); break;

@@ -804,6 +804,9 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
   }
 
+  // Enable Mode X (unchained VGA) detection
+  emu.initVgaModeXHook();
+
   // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
   const IRET_SEG = 0xF000;
   const BIOS_BASE = IRET_SEG * 16;
