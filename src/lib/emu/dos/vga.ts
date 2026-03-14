@@ -130,8 +130,7 @@ export class VGAState {
   framebuffer: ImageData | null = null;
   dirty = false;
 
-  // VGA retrace timing — time-based to avoid tearing
-  private retraceCounter = 0;     // fallback counter for non-time-aware code
+  // VGA retrace timing
   private lastVblankSync = false;  // was previous 0x3DA read in VBlank?
   pendingSync = false;             // set when VBlank starts; tick should sync & present
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
@@ -302,6 +301,15 @@ export class VGAState {
   // Mode X state: true when mode 13h has Chain-4 disabled (unchained 256-color planar)
   unchained = false;
 
+  /** Get actual visible pixel height from CRTC registers (accounts for double-scanning) */
+  getVisibleHeight(): number {
+    const vdeLow = this.crtcRegs[0x12];
+    const overflow = this.crtcRegs[0x07];
+    const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
+    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
+    return Math.floor((vde + 1) / (maxScanLine + 1));
+  }
+
   /** Check if current register state indicates Mode X (unchained mode 13h) */
   isUnchained(): boolean {
     // Mode X = mode 13h with Chain-4 disabled (seq reg 4 bit 3 = 0)
@@ -408,20 +416,35 @@ export class VGAState {
         return this.crtcIndex < this.crtcRegs.length ? this.crtcRegs[this.crtcIndex] : 0;
       case 0x3DA: { // Input status register 1 — time-based retrace simulation
         this.atcFlipFlop = false; // reading 0x3DA resets ATC flip-flop
-        // 60 Hz frame = ~16.67ms. VBlank occupies last ~1.4ms (lines 480-524 of 525).
-        // Use real time so games that wait for VBlank get correct timing.
-        const frameMs = 16.667;
-        const vblankStartFrac = 0.915; // ~91.5% of frame is active display
-        const t = performance.now() % frameMs;
-        const frac = t / frameMs;
-        const inVblank = frac >= vblankStartFrac;
-        const inHblank = !inVblank && (this.retraceCounter++ % 3) === 0;
+
+        // VGA timing: 31.778 µs per scanline (31.469 kHz horizontal frequency)
+        // Mode 200 lines: 449 total lines, 70.09 Hz → frame ≈ 14.27ms, VBlank at line 200-448
+        // Mode 240 lines: 525 total lines, 59.94 Hz → frame ≈ 16.68ms, VBlank at line 240-524
+        // Mode 350 lines: 449 total lines, 70.09 Hz → frame ≈ 14.27ms, VBlank at line 350-448
+        // Mode 480 lines: 525 total lines, 59.94 Hz → frame ≈ 16.68ms, VBlank at line 480-524
+        const visibleLines = this.getVisibleHeight();
+        const totalLines = (visibleLines <= 350) ? 449 : 525;
+        const lineUs = 31.778; // µs per scanline
+        const frameUs = totalLines * lineUs;
+        const hblankStartFrac = 0.8; // HBlank occupies last ~20% of each line
+
+        const nowUs = performance.now() * 1000;
+        const tInFrame = nowUs % frameUs;
+        const currentLine = (tInFrame / lineUs) | 0;
+        const tInLine = tInFrame - currentLine * lineUs;
+        const lineFrac = tInLine / lineUs;
+
+        const inVblank = currentLine >= visibleLines;
+        const inHblank = !inVblank && lineFrac >= hblankStartFrac;
+
         // On VBlank entry: VRAM contains a complete frame — schedule sync.
-        // This ensures putImageData sees a fully written framebuffer.
         if (inVblank && !this.lastVblankSync) {
           this.pendingSync = true;
         }
         this.lastVblankSync = inVblank;
+
+        // Bit 3: Vertical retrace (VSync)
+        // Bit 0: Display disabled (HBlank or VBlank)
         return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
       }
       case 0x3C9: { // DAC data read
