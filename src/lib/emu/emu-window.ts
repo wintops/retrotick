@@ -256,13 +256,14 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
   applyClipChildren(emu, hwnd, wnd, hdc);
 
   // Erase background: for dialogs, use COLOR_BTNFACE (WM_CTLCOLORDLG default);
-  // for regular windows, use the class brush
+  // for regular windows, use the class brush; for toolbar, always BTNFACE
   if (wnd) {
     const dc = getDC(emu, hdc);
     if (dc) {
       const isDialog = wnd.classInfo.className === '#32770' || !!wnd.dlgProc;
+      const isToolbar = wnd.classInfo.className?.toUpperCase() === 'TOOLBARWINDOW';
       let bgColor: number | null = null;
-      if (isDialog) {
+      if (isDialog || isToolbar) {
         bgColor = SYS_COLORS[COLOR_BTNFACE];
       } else if (wnd.classInfo.hbrBackground) {
         const brush = getBrush(emu, wnd.classInfo.hbrBackground);
@@ -289,7 +290,6 @@ export function endPaint(emu: Emulator, hwnd: number, _hdc: number): void {
     if (dc) dc.ctx.restore();
     clipChildrenDCSet.delete(hdc);
   }
-
   // Restore canvas state for child windows
   if (hdc) releaseChildDC(emu, hdc);
 

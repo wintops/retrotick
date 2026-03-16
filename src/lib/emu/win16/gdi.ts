@@ -196,7 +196,41 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   function brushToFillStyle(dc: DCInfo, brush: BrushInfo): string | CanvasPattern | null {
     if (brush.patternBitmap) {
-      return dc.ctx.createPattern(brush.patternBitmap, 'repeat');
+      // Check if the pattern bitmap is monochrome — if so, colorize it using
+      // the DC's textColor (for black pixels) and bkColor (for white pixels).
+      // This is how Windows renders mono pattern brushes on color DCs.
+      const patCanvas = brush.patternBitmap;
+      const pw = patCanvas.width, ph = patCanvas.height;
+      if (pw > 0 && ph > 0) {
+        const patCtx = patCanvas.getContext('2d')!;
+        const patData = patCtx.getImageData(0, 0, pw, ph);
+        // Detect if pattern is monochrome (only black and white pixels)
+        let isMono = true;
+        for (let i = 0; i < patData.data.length; i += 4) {
+          const r = patData.data[i], g = patData.data[i+1], b = patData.data[i+2];
+          if (!((r === 0 && g === 0 && b === 0) || (r === 255 && g === 255 && b === 255))) {
+            isMono = false; break;
+          }
+        }
+        if (isMono) {
+          // Create a colorized copy of the pattern
+          const colorCanvas = new OffscreenCanvas(pw, ph);
+          const colorCtx = colorCanvas.getContext('2d')!;
+          const colorData = colorCtx.createImageData(pw, ph);
+          const txR = dc.textColor & 0xFF, txG = (dc.textColor >> 8) & 0xFF, txB = (dc.textColor >> 16) & 0xFF;
+          const bkR = dc.bkColor & 0xFF, bkG = (dc.bkColor >> 8) & 0xFF, bkB = (dc.bkColor >> 16) & 0xFF;
+          for (let i = 0; i < patData.data.length; i += 4) {
+            const isBlack = patData.data[i] === 0;
+            colorData.data[i] = isBlack ? txR : bkR;
+            colorData.data[i+1] = isBlack ? txG : bkG;
+            colorData.data[i+2] = isBlack ? txB : bkB;
+            colorData.data[i+3] = 255;
+          }
+          colorCtx.putImageData(colorData, 0, 0);
+          return dc.ctx.createPattern(colorCanvas, 'repeat');
+        }
+      }
+      return dc.ctx.createPattern(patCanvas, 'repeat');
     }
     return colorToCSS(brush.color);
   }
@@ -887,15 +921,32 @@ export function registerWin16Gdi(emu: Emulator): void {
       const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
       const dstData = dstDC.ctx.getImageData(rawX, rawY, w, h);
       const brush = emu.getBrush(dstDC.selectedBrush);
+      // Get pattern pixels if brush is a pattern brush, else use solid color
+      let patData: ImageData | null = null;
+      if (brush?.patternBitmap) {
+        const patCanvas = brush.patternBitmap;
+        const patCtx = patCanvas.getContext('2d')!;
+        patData = patCtx.getImageData(0, 0, patCanvas.width, patCanvas.height);
+      }
       const pR = brush ? (brush.color & 0xFF) : 0;
       const pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
       const pB = brush ? ((brush.color >> 16) & 0xFF) : 0;
       const sp = srcData.data, dp = dstData.data;
       for (let i = 0; i < sp.length; i += 4) {
         const sR = sp[i], sG = sp[i+1], sB = sp[i+2];
-        dp[i] = (dp[i] & (~sR & 0xFF)) | (pR & sR);
-        dp[i+1] = (dp[i+1] & (~sG & 0xFF)) | (pG & sG);
-        dp[i+2] = (dp[i+2] & (~sB & 0xFF)) | (pB & sB);
+        // Get pattern color: from pattern bitmap (tiled) or solid brush color
+        let bR = pR, bG = pG, bB = pB;
+        if (patData) {
+          const px = (i / 4) % w;
+          const py = Math.floor((i / 4) / w);
+          const patX = (rawX + px) % patData.width;
+          const patY = (rawY + py) % patData.height;
+          const patOff = (patY * patData.width + patX) * 4;
+          bR = patData.data[patOff]; bG = patData.data[patOff + 1]; bB = patData.data[patOff + 2];
+        }
+        dp[i] = (dp[i] & (~sR & 0xFF)) | (bR & sR);
+        dp[i+1] = (dp[i+1] & (~sG & 0xFF)) | (bG & sG);
+        dp[i+2] = (dp[i+2] & (~sB & 0xFF)) | (bB & sB);
       }
       dstDC.ctx.putImageData(dstData, rawX, rawY);
     } else {
