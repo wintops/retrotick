@@ -1075,9 +1075,13 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const onDocMouseUp = (e: PointerEvent) => {
       if (!mouseIsDown.current || !canvasRef.current) return;
       mouseIsDown.current = false;
-      handlePointerEvent(e, WM_MOUSEMOVE);
-      if (e.button === 0) handlePointerEvent(e, WM_LBUTTONUP);
-      else if (e.button === 2) handlePointerEvent(e, WM_RBUTTONUP);
+      const btn = e.button;
+      const saved = { clientX: e.clientX, clientY: e.clientY, buttons: e.buttons } as PointerEvent;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        handlePointerEvent(saved, WM_MOUSEMOVE);
+        if (btn === 0) handlePointerEvent(saved, WM_LBUTTONUP);
+        else if (btn === 2) handlePointerEvent(saved, WM_RBUTTONUP);
+      }));
     };
     document.addEventListener('pointermove', onDocMouseMove);
     document.addEventListener('pointerup', onDocMouseUp);
