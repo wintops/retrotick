@@ -1,6 +1,6 @@
 import type { Emulator } from '../emulator';
 import type { DCInfo, BitmapInfo, BrushInfo, PenInfo, PaletteInfo } from '../win32/gdi32/types';
-import { OPAQUE } from '../win32/types';
+import { OPAQUE, SYS_COLORS, COLOR_BTNFACE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
 import { decodeDib } from '../../pe/decode-dib';
 
@@ -926,7 +926,29 @@ export function registerWin16Gdi(emu: Emulator): void {
       if (brush?.patternBitmap) {
         const patCanvas = brush.patternBitmap;
         const patCtx = patCanvas.getContext('2d')!;
-        patData = patCtx.getImageData(0, 0, patCanvas.width, patCanvas.height);
+        const rawPat = patCtx.getImageData(0, 0, patCanvas.width, patCanvas.height);
+        // For monochrome pattern brushes (like the 55AA dither), colorize using
+        // btnHighlight (for black pixels) and btnFace (for white pixels).
+        // This matches Wine's TOOLBAR_DrawPattern behavior. The Win3.x COMMCTRL
+        // doesn't set textColor/bkColor before the ROP, so we use system colors.
+        let isMono = true;
+        for (let i = 0; i < rawPat.data.length && isMono; i += 4) {
+          if (rawPat.data[i] !== 0 && rawPat.data[i] !== 255) isMono = false;
+        }
+        if (isMono) {
+          const btnFace = SYS_COLORS ? SYS_COLORS[COLOR_BTNFACE] : 0xC8D0D4;
+          const btnHigh = 0xFFFFFF; // COLOR_BTNHIGHLIGHT
+          const fR = btnFace & 0xFF, fG = (btnFace >> 8) & 0xFF, fB = (btnFace >> 16) & 0xFF;
+          const hR = btnHigh & 0xFF, hG = (btnHigh >> 8) & 0xFF, hB = (btnHigh >> 16) & 0xFF;
+          for (let i = 0; i < rawPat.data.length; i += 4) {
+            const isBlack = rawPat.data[i] === 0;
+            rawPat.data[i] = isBlack ? hR : fR;
+            rawPat.data[i+1] = isBlack ? hG : fG;
+            rawPat.data[i+2] = isBlack ? hB : fB;
+            rawPat.data[i+3] = 255;
+          }
+        }
+        patData = rawPat;
       }
       const pR = brush ? (brush.color & 0xFF) : 0;
       const pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
