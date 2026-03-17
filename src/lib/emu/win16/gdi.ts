@@ -953,10 +953,25 @@ export function registerWin16Gdi(emu: Emulator): void {
       const pR = brush ? (brush.color & 0xFF) : 0;
       const pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
       const pB = brush ? ((brush.color >> 16) & 0xFF) : 0;
+      // Save icon pixels before the ROP. The icon was drawn at an offset
+      // within the button area (typically +3,+3). The ROP mask protects icon
+      // foreground but white/BTNFACE icon areas get the dither. To keep the
+      // icon fully readable, save pixels where the mask is BLACK (icon area)
+      // and restore them after applying the pattern to the background.
       const sp = srcData.data, dp = dstData.data;
+
+      // First pass: save pixels where mask is black (icon foreground)
+      const savedIcon = new Uint8Array(dp.length);
+      for (let i = 0; i < sp.length; i += 4) {
+        if (sp[i] === 0 && sp[i+1] === 0 && sp[i+2] === 0) {
+          savedIcon[i] = dp[i]; savedIcon[i+1] = dp[i+1];
+          savedIcon[i+2] = dp[i+2]; savedIcon[i+3] = 1; // flag: has saved pixel
+        }
+      }
+
+      // Second pass: apply pattern to ALL white mask areas (standard ROP)
       for (let i = 0; i < sp.length; i += 4) {
         const sR = sp[i], sG = sp[i+1], sB = sp[i+2];
-        // Get pattern color: from pattern bitmap (tiled) or solid brush color
         let bR = pR, bG = pG, bB = pB;
         if (patData) {
           const px = (i / 4) % w;
@@ -969,6 +984,13 @@ export function registerWin16Gdi(emu: Emulator): void {
         dp[i] = (dp[i] & (~sR & 0xFF)) | (bR & sR);
         dp[i+1] = (dp[i+1] & (~sG & 0xFF)) | (bG & sG);
         dp[i+2] = (dp[i+2] & (~sB & 0xFF)) | (bB & sB);
+      }
+
+      // Third pass: restore saved icon pixels
+      for (let i = 0; i < savedIcon.length; i += 4) {
+        if (savedIcon[i+3]) {
+          dp[i] = savedIcon[i]; dp[i+1] = savedIcon[i+1]; dp[i+2] = savedIcon[i+2];
+        }
       }
       dstDC.ctx.putImageData(dstData, rawX, rawY);
     } else {
