@@ -1,6 +1,6 @@
 import type { Emulator } from '../emulator';
 import type { DCInfo, BitmapInfo, BrushInfo, PenInfo, PaletteInfo } from '../win32/gdi32/types';
-import { OPAQUE, SYS_COLORS, COLOR_BTNFACE } from '../win32/types';
+import { OPAQUE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
 import { decodeDib } from '../../pe/decode-dib';
 
@@ -908,92 +908,9 @@ export function registerWin16Gdi(emu: Emulator): void {
         dstData.data[i+2] ^= srcData.data[i+2];
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
-    } else if (rop === 0x00E20746) {
-      // ROP 0xE20746: (D AND NOT S) OR (P AND S)
-      // Transparency mask: where source is black → keep destination, where source is non-zero → apply pattern brush
-      // getImageData/putImageData don't respect the canvas transform, so we must
-      // convert DC coordinates to raw canvas coordinates manually.
-      const t = dstDC.ctx.getTransform();
-      const rawX = Math.round(t.a * xDst + t.c * yDst + t.e);
-      const rawY = Math.round(t.b * xDst + t.d * yDst + t.f);
-      // Use RAW monochrome pixels (0/255) without bkColor/textColor conversion —
-      // the ROP operates directly on the mask bits.
-      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
-      const dstData = dstDC.ctx.getImageData(rawX, rawY, w, h);
-      const brush = emu.getBrush(dstDC.selectedBrush);
-      // Get pattern pixels if brush is a pattern brush, else use solid color
-      let patData: ImageData | null = null;
-      if (brush?.patternBitmap) {
-        const patCanvas = brush.patternBitmap;
-        const patCtx = patCanvas.getContext('2d')!;
-        const rawPat = patCtx.getImageData(0, 0, patCanvas.width, patCanvas.height);
-        // For monochrome pattern brushes (like the 55AA dither), colorize using
-        // btnHighlight (for black pixels) and btnFace (for white pixels).
-        // This matches Wine's TOOLBAR_DrawPattern behavior. The Win3.x COMMCTRL
-        // doesn't set textColor/bkColor before the ROP, so we use system colors.
-        let isMono = true;
-        for (let i = 0; i < rawPat.data.length && isMono; i += 4) {
-          if (rawPat.data[i] !== 0 && rawPat.data[i] !== 255) isMono = false;
-        }
-        if (isMono) {
-          const btnFace = SYS_COLORS ? SYS_COLORS[COLOR_BTNFACE] : 0xC8D0D4;
-          const btnHigh = 0xFFFFFF; // COLOR_BTNHIGHLIGHT
-          const fR = btnFace & 0xFF, fG = (btnFace >> 8) & 0xFF, fB = (btnFace >> 16) & 0xFF;
-          const hR = btnHigh & 0xFF, hG = (btnHigh >> 8) & 0xFF, hB = (btnHigh >> 16) & 0xFF;
-          for (let i = 0; i < rawPat.data.length; i += 4) {
-            const isBlack = rawPat.data[i] === 0;
-            rawPat.data[i] = isBlack ? hR : fR;
-            rawPat.data[i+1] = isBlack ? hG : fG;
-            rawPat.data[i+2] = isBlack ? hB : fB;
-            rawPat.data[i+3] = 255;
-          }
-        }
-        patData = rawPat;
-      }
-      const pR = brush ? (brush.color & 0xFF) : 0;
-      const pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
-      const pB = brush ? ((brush.color >> 16) & 0xFF) : 0;
-      // Save icon pixels before the ROP. The icon was drawn at an offset
-      // within the button area (typically +3,+3). The ROP mask protects icon
-      // foreground but white/BTNFACE icon areas get the dither. To keep the
-      // icon fully readable, save pixels where the mask is BLACK (icon area)
-      // and restore them after applying the pattern to the background.
-      const sp = srcData.data, dp = dstData.data;
-
-      // First pass: save pixels where mask is black (icon foreground)
-      const savedIcon = new Uint8Array(dp.length);
-      for (let i = 0; i < sp.length; i += 4) {
-        if (sp[i] === 0 && sp[i+1] === 0 && sp[i+2] === 0) {
-          savedIcon[i] = dp[i]; savedIcon[i+1] = dp[i+1];
-          savedIcon[i+2] = dp[i+2]; savedIcon[i+3] = 1; // flag: has saved pixel
-        }
-      }
-
-      // Second pass: apply pattern to ALL white mask areas (standard ROP)
-      for (let i = 0; i < sp.length; i += 4) {
-        const sR = sp[i], sG = sp[i+1], sB = sp[i+2];
-        let bR = pR, bG = pG, bB = pB;
-        if (patData) {
-          const px = (i / 4) % w;
-          const py = Math.floor((i / 4) / w);
-          const patX = (rawX + px) % patData.width;
-          const patY = (rawY + py) % patData.height;
-          const patOff = (patY * patData.width + patX) * 4;
-          bR = patData.data[patOff]; bG = patData.data[patOff + 1]; bB = patData.data[patOff + 2];
-        }
-        dp[i] = (dp[i] & (~sR & 0xFF)) | (bR & sR);
-        dp[i+1] = (dp[i+1] & (~sG & 0xFF)) | (bG & sG);
-        dp[i+2] = (dp[i+2] & (~sB & 0xFF)) | (bB & sB);
-      }
-
-      // Third pass: restore saved icon pixels
-      for (let i = 0; i < savedIcon.length; i += 4) {
-        if (savedIcon[i+3]) {
-          dp[i] = savedIcon[i]; dp[i+1] = savedIcon[i+1]; dp[i+2] = savedIcon[i+2];
-        }
-      }
-      dstDC.ctx.putImageData(dstData, rawX, rawY);
     } else {
+      // Fallback for unimplemented ROPs (including 0xE20746).
+      // TODO: implement ternary ROPs properly.
       dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
     }
     return 1;
@@ -1234,11 +1151,8 @@ export function registerWin16Gdi(emu: Emulator): void {
     const [hdc, w, h] = emu.readPascalArgs16([2, 2, 2]);
     const canvas = new OffscreenCanvas(w || 1, h || 1);
     const ctx = canvas.getContext('2d')!;
-    // If the source DC has a monochrome bitmap, the compatible bitmap is also mono
-    const srcDC = emu.getDC(hdc);
-    const srcBmp = srcDC ? emu.handles.get<BitmapInfo>(srcDC.selectedBitmap) : null;
-    const monochrome = !!srcBmp?.monochrome;
-    const bmp: BitmapInfo = { width: w, height: h, canvas, ctx, monochrome };
+    // TODO: propagate monochrome flag from source DC when mono DC support is complete
+    const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
   }, 51);
 

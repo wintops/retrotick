@@ -256,14 +256,13 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
   applyClipChildren(emu, hwnd, wnd, hdc);
 
   // Erase background: for dialogs, use COLOR_BTNFACE (WM_CTLCOLORDLG default);
-  // for regular windows, use the class brush; for toolbar, always BTNFACE
+  // for regular windows, use the class brush
   if (wnd) {
     const dc = getDC(emu, hdc);
     if (dc) {
       const isDialog = wnd.classInfo.className === '#32770' || !!wnd.dlgProc;
-      const isToolbar = wnd.classInfo.className?.toUpperCase() === 'TOOLBARWINDOW';
       let bgColor: number | null = null;
-      if (isDialog || isToolbar) {
+      if (isDialog) {
         bgColor = SYS_COLORS[COLOR_BTNFACE];
       } else if (wnd.classInfo.hbrBackground) {
         const brush = getBrush(emu, wnd.classInfo.hbrBackground);

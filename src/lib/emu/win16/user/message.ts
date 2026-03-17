@@ -743,6 +743,14 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         if (!wnd.toolbarChecked) wnd.toolbarChecked = new Set();
         if (lParam) wnd.toolbarChecked.add(wParam);
         else wnd.toolbarChecked.delete(wParam);
+        // Force main window repaint so renderChildControls re-renders the
+        // toolbar through the same code path as the initial startup rendering
+        if (emu.mainWindow) {
+          const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+          if (mainWnd) mainWnd.needsPaint = true;
+        }
+        // DIAG: log ALL TB_CHECKBUTTON calls to detect reverts
+        console.log(`[TB] TB_CHECKBUTTON id=${wParam} check=${lParam} checked=[${[...(wnd.toolbarChecked || [])].join(',')}]`);
       }
     }
     if (wnd?.wndProc) {
