@@ -1022,14 +1022,26 @@ export function renderControlOverlay(
         font: '11px/1 "Tahoma", "MS Sans Serif", sans-serif',
         borderTop: '1px solid #FFF',
       }}>
-        {texts.map((t: string, i: number) => (
-          <div key={i} style={{
-            flex: i === 0 ? 1 : undefined, padding: '0 2px', margin: '0 1px',
-            border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
-            height: 'calc(100% - 2px)', display: 'flex', alignItems: 'center',
-            overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '11px',
-          }}>{t}</div>
-        ))}
+        {texts.map((t: string, i: number) => {
+          // statusParts contains absolute right-edge positions (like Wine).
+          // Value -1 means "extend to right edge". Compute width from positions.
+          const parts = ctrl.statusParts || [];
+          const rightEdge = (parts[i] != null && parts[i] !== -1) ? parts[i] : undefined;
+          const leftEdge = i === 0 ? 0 : (parts[i - 1] != null && parts[i - 1] !== -1 ? parts[i - 1] : undefined);
+          const w = (rightEdge != null && leftEdge != null) ? rightEdge - leftEdge : undefined;
+          return (
+            <div key={i} style={{
+              width: w != null ? `${w}px` : undefined,
+              flex: w == null ? 1 : undefined,
+              flexShrink: w != null ? 0 : undefined,
+              padding: '0 2px', margin: '0 1px',
+              border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
+              height: 'calc(100% - 2px)', display: 'flex', alignItems: 'center',
+              overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '11px',
+              boxSizing: 'border-box',
+            }}>{t}</div>
+          );
+        })}
         {hasSizeGrip && (
           <svg
             width="13" height="13" viewBox="0 0 13 13"

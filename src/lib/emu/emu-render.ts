@@ -101,6 +101,7 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
     if (child.listColumns) overlay.listColumns = child.listColumns;
     if (child.listItems) overlay.listItems = child.listItems;
     if (child.statusTexts) overlay.statusTexts = child.statusTexts;
+    if (child.statusParts) overlay.statusParts = child.statusParts;
     if (child.tabItems) overlay.tabItems = child.tabItems;
     if (child.tabSelectedIndex !== undefined) overlay.tabSelectedIndex = child.tabSelectedIndex;
 

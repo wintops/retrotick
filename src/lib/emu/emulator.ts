@@ -88,6 +88,7 @@ export interface ControlOverlay {
   listColumns?: ListViewColumn[];
   listItems?: ListViewItem[];
   statusTexts?: string[];
+  statusParts?: number[];
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
   bgColor?: string;

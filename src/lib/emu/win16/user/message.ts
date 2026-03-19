@@ -1065,6 +1065,9 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       if (message === SB_SETPARTS) {
         wnd.statusParts = [];
         const addr = emu.resolveFarPtr(lParam);
+        // Win16 SB_SETPARTS: array of INT (16-bit signed) right-edge positions.
+        // Value -1 means the part extends to the right edge of the window.
+        // These are ABSOLUTE positions, not widths (Wine: status.c STATUSBAR_SetPartBounds).
         for (let i = 0; i < wParam; i++) {
           wnd.statusParts.push(emu.memory.readI16(addr + i * 2));
         }
