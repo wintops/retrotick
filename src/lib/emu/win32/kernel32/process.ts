@@ -414,7 +414,12 @@ export function registerProcess(emu: Emulator): void {
     let matchedName = baseName;
     for (const candidate of candidates) {
       for (const [name] of emu.additionalFiles) {
-        if (name.toLowerCase() === candidate) {
+        const nameLower = name.toLowerCase();
+        // Match by exact name or by trailing basename (after / or \)
+        const nameBase = nameLower.includes('/') ? nameLower.substring(nameLower.lastIndexOf('/') + 1)
+          : nameLower.includes('\\') ? nameLower.substring(nameLower.lastIndexOf('\\') + 1)
+          : nameLower;
+        if (nameLower === candidate || nameBase === candidate) {
           found = true;
           matchedName = name;
           break;
@@ -424,7 +429,7 @@ export function registerProcess(emu: Emulator): void {
     }
 
     if (!found) {
-
+      console.log(`[CreateProcessA] exe not found: "${exePath}" (baseName="${baseName}")`);
       return 0;
     }
 
@@ -490,7 +495,11 @@ export function registerProcess(emu: Emulator): void {
     let matchedName = baseName;
     for (const candidate of candidates) {
       for (const [name] of emu.additionalFiles) {
-        if (name.toLowerCase() === candidate) {
+        const nameLower = name.toLowerCase();
+        const nameBase = nameLower.includes('/') ? nameLower.substring(nameLower.lastIndexOf('/') + 1)
+          : nameLower.includes('\\') ? nameLower.substring(nameLower.lastIndexOf('\\') + 1)
+          : nameLower;
+        if (nameLower === candidate || nameBase === candidate) {
           found = true;
           matchedName = name;
           break;
@@ -498,7 +507,6 @@ export function registerProcess(emu: Emulator): void {
       }
       if (found) break;
     }
-
 
     // Fill PROCESS_INFORMATION struct (hProcess, hThread, dwProcessId, dwThreadId)
     if (lpProcessInformation) {
@@ -641,6 +649,17 @@ export function registerProcess(emu: Emulator): void {
     }
     return 0;
   });
+
+  // GetThreadContext — stub (2 args)
+  kernel32.register('GetThreadContext', 2, () => 0); // fail
+
+  // Comm port stubs
+  kernel32.register('ClearCommBreak', 1, () => 1);
+  kernel32.register('SetCommBreak', 1, () => 1);
+  kernel32.register('PurgeComm', 2, () => 1);
+  kernel32.register('SetCommTimeouts', 2, () => 1);
+  kernel32.register('SetupComm', 3, () => 1);
+  kernel32.register('GetOverlappedResult', 4, () => 0); // fail
 
   // FatalAppExitA(uAction, lpMessageText) — terminate the emulated app
   kernel32.register('FatalAppExitA', 2, () => {

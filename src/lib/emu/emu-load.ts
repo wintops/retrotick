@@ -22,6 +22,7 @@ import { registerOpengl32 } from './win32/opengl32';
 import { registerGlu32 } from './win32/glu32';
 import { registerWs2_32 } from './win32/ws2_32';
 import { registerDdraw } from './win32/ddraw';
+import { registerDsound } from './win32/dsound';
 import { registerShlwapi } from './win32/shlwapi';
 import { registerPsapi } from './win32/psapi';
 import { registerIphlpapi } from './win32/iphlpapi';
@@ -345,6 +346,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   registerGlu32(emu);
   registerWs2_32(emu);
   registerDdraw(emu);
+  registerDsound(emu);
   registerShlwapi(emu);
   registerPsapi(emu);
   registerIphlpapi(emu);

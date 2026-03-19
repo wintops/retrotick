@@ -158,6 +158,8 @@ export function registerComctl32(emu: Emulator): void {
   });
   comctl32.register('ImageList_SetIconSize', 3, () => 1);
   comctl32.register('ImageList_GetImageInfo', 3, () => 0);
+  comctl32.register('ImageList_Write', 2, () => 0);
+  comctl32.register('ImageList_Read', 1, () => 0);
 
   // PropertySheetA/W — stub: return 0 (user cancelled)
   comctl32.register('PropertySheetA', 1, () => 0);

@@ -36,12 +36,35 @@ export function registerWndProc(emu: Emulator): void {
     switch (message) {
       case WM_SYSCOMMAND:
         if ((wParam & 0xFFF0) === SC_CLOSE) {
-          emu.postMessage(hwnd, WM_CLOSE, 0, 0);
+          // Real Windows sends WM_CLOSE synchronously (SendMessage), not PostMessage
+          const scWnd = emu.handles.get<WindowInfo>(hwnd);
+          if (scWnd?.wndProc) {
+            emu.callWndProc(scWnd.wndProc, hwnd, WM_CLOSE, 0, 0);
+          }
         }
         return 0;
-      case WM_CLOSE:
-        emu.postMessage(hwnd, WM_DESTROY, 0, 0);
+      case WM_CLOSE: {
+        // Real Windows: DefWindowProc calls DestroyWindow(hwnd) synchronously
+        const closeWnd = emu.handles.get<WindowInfo>(hwnd);
+        if (closeWnd && closeWnd.wndProc) {
+          emu.callWndProc(closeWnd.wndProc, hwnd, WM_DESTROY, 0, 0);
+          emu.callWndProc(closeWnd.wndProc, hwnd, WM_NCDESTROY, 0, 0);
+        }
+        // Remove from parent's child list
+        if (closeWnd && closeWnd.parent) {
+          const parentWnd = emu.handles.get<WindowInfo>(closeWnd.parent);
+          if (parentWnd?.childList) {
+            const idx = parentWnd.childList.indexOf(hwnd);
+            if (idx >= 0) parentWnd.childList.splice(idx, 1);
+          }
+        }
+        if (hwnd === emu.mainWindow) {
+          console.log(`[WND] mainWindow 0x${hwnd.toString(16)} destroyed via DefWindowProc(WM_CLOSE)`);
+          emu.mainWindow = 0;
+        }
+        emu.handles.free(hwnd);
         return 0;
+      }
       case WM_NCCREATE:
         return 1;
       case WM_NCDESTROY:
@@ -62,12 +85,9 @@ export function registerWndProc(emu: Emulator): void {
           const hdc = wParam;
           const dc = emu.getDC(hdc);
           if (dc) {
-            let bgColor = SYS_COLORS[COLOR_BTNFACE]; // default
             const hBrush = wnd.classInfo.hbrBackground;
-            if (hBrush > 0 && hBrush <= 30) {
-              // Brush is actually a system color index + 1
-              bgColor = SYS_COLORS[hBrush - 1] ?? SYS_COLORS[COLOR_BTNFACE];
-            }
+            const brush = hBrush ? emu.getBrush(hBrush) : null;
+            const bgColor = (brush && !brush.isNull) ? brush.color : SYS_COLORS[COLOR_BTNFACE];
             const r = bgColor & 0xFF;
             const g = (bgColor >> 8) & 0xFF;
             const b = (bgColor >> 16) & 0xFF;

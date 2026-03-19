@@ -59,6 +59,32 @@ export function registerFile(emu: Emulator): void {
       } else if (existing.source === 'additional') {
         const ab = emu.additionalFiles.get(existing.name);
         if (ab) syncData = new Uint8Array(ab);
+      } else if (existing.source === 'virtual') {
+        // Check in-memory cache for virtual files (IndexedDB-backed)
+        const cached = fs.virtualFileCache?.get(existing.name.toUpperCase());
+        if (cached) {
+          syncData = new Uint8Array(cached);
+        } else if (fs.onFileRequest) {
+          // Async fetch: pause execution, create handle when data arrives
+          const stackBytes = emu._currentThunkStackBytes;
+          emu.waitingForMessage = true;
+          const fileSize = existing.size;
+          const fileName = existing.name;
+          fs.fetchFileData(existing, emu.additionalFiles, resolved).then(buf => {
+            emu.waitingForMessage = false;
+            if (buf) fs.virtualFileCache?.set(fileName.toUpperCase(), buf);
+            const data = buf ? new Uint8Array(buf) : null;
+            const handle = emu.handles.alloc('file', {
+              path: upper, access: dwDesiredAccess, pos: 0,
+              data, size: data ? data.length : fileSize, modified: false,
+            } satisfies OpenFile);
+            emuCompleteThunk(emu, handle, stackBytes);
+            if (emu.running && !emu.halted) {
+              requestAnimationFrame(emu.tick);
+            }
+          });
+          return undefined as any;
+        }
       }
       return emu.handles.alloc('file', {
         path: upper, access: dwDesiredAccess, pos: 0,
@@ -224,6 +250,29 @@ export function registerFile(emu: Emulator): void {
     if (file) fs.persistOnClose(file);
     emu.handles.free(hFile);
     return 0;
+  });
+
+  // _lwrite(hFile, lpBuffer, uBytes)
+  kernel32.register('_lwrite', 3, () => {
+    const hFile = emu.readArg(0);
+    const lpBuffer = emu.readArg(1);
+    const uBytes = emu.readArg(2);
+    const file = emu.handles.get<OpenFile>(hFile);
+    if (!file) return HFILE_ERROR;
+    if (file.data === null) file.data = new Uint8Array(0);
+    const needed = file.pos + uBytes;
+    if (needed > file.data.length) {
+      const newData = new Uint8Array(needed);
+      newData.set(file.data);
+      file.data = newData;
+    }
+    for (let i = 0; i < uBytes; i++) {
+      file.data[file.pos + i] = emu.memory.readU8(lpBuffer + i);
+    }
+    file.pos += uBytes;
+    if (file.pos > file.size) file.size = file.pos;
+    file.modified = true;
+    return uBytes;
   });
 
   // _llseek(hFile, lOffset, iOrigin)
@@ -947,8 +996,19 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('RemoveDirectoryW', 1, () => doRemoveDirectory(true));
 
   // ---- Drive / disk APIs ----
-  kernel32.register('GetDriveTypeW', 1, () => 3);
-  kernel32.register('GetDriveTypeA', 1, () => 3);
+  const DRIVE_FIXED = 3;
+  const DRIVE_CDROM = 5;
+  function getDriveType(wide: boolean) {
+    const ptr = emu.readArg(0);
+    if (ptr) {
+      const ch = wide ? emu.memory.readU16(ptr) : emu.memory.readU8(ptr);
+      // D: is the virtual file drive — report as CD-ROM for games that scan for their CD
+      if (ch === 0x44 || ch === 0x64) return DRIVE_CDROM; // 'D' or 'd'
+    }
+    return DRIVE_FIXED;
+  }
+  kernel32.register('GetDriveTypeW', 1, () => getDriveType(true));
+  kernel32.register('GetDriveTypeA', 1, () => getDriveType(false));
   kernel32.register('GetLogicalDrives', 0, () => 0x0200000C);
   kernel32.register('GetFileAttributesExW', 3, () => 0);
 
@@ -958,10 +1018,11 @@ export function registerFile(emu: Emulator): void {
     const lpBytesPerSector = emu.readArg(2);
     const lpNumberOfFreeClusters = emu.readArg(3);
     const lpTotalNumberOfClusters = emu.readArg(4);
-    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 8);
+    // Use FAT16-style values (all under 65536) to avoid 16-bit overflow in older games
+    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 64);
     if (lpBytesPerSector) emu.memory.writeU32(lpBytesPerSector, 512);
-    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 262144);
-    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 2621440);
+    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 32760);   // ~1GB free
+    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 65520); // ~2GB total
     return 1;
   });
 
@@ -971,23 +1032,27 @@ export function registerFile(emu: Emulator): void {
     const lpBytesPerSector = emu.readArg(2);
     const lpNumberOfFreeClusters = emu.readArg(3);
     const lpTotalNumberOfClusters = emu.readArg(4);
-    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 8);
+    // Use FAT16-style values (all under 65536) to avoid 16-bit overflow in older games
+    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 64);
     if (lpBytesPerSector) emu.memory.writeU32(lpBytesPerSector, 512);
-    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 262144);
-    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 2621440);
+    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 32760);   // ~1GB free
+    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 65520); // ~2GB total
     return 1;
   });
 
-  kernel32.register('GetDiskFreeSpaceExW', 4, () => {
+  const getDiskFreeSpaceExImpl = () => {
     const _lpDir = emu.readArg(0);
     const lpFreeBytesAvailable = emu.readArg(1);
     const lpTotalBytes = emu.readArg(2);
     const lpTotalFreeBytes = emu.readArg(3);
+    // Report 1GB free, 10GB total
     if (lpFreeBytesAvailable) { emu.memory.writeU32(lpFreeBytesAvailable, 0x40000000); emu.memory.writeU32(lpFreeBytesAvailable + 4, 0); }
     if (lpTotalBytes) { emu.memory.writeU32(lpTotalBytes, 0x80000000); emu.memory.writeU32(lpTotalBytes + 4, 2); }
     if (lpTotalFreeBytes) { emu.memory.writeU32(lpTotalFreeBytes, 0x40000000); emu.memory.writeU32(lpTotalFreeBytes + 4, 0); }
     return 1;
-  });
+  };
+  kernel32.register('GetDiskFreeSpaceExW', 4, getDiskFreeSpaceExImpl);
+  kernel32.register('GetDiskFreeSpaceExA', 4, getDiskFreeSpaceExImpl);
 
   kernel32.register('DeviceIoControl', 8, () => 0);
 

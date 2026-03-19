@@ -7,6 +7,7 @@ interface Props {
   storePath: string;  // full IndexedDB key (e.g. "myfolder/test.exe")
   iconUrl: string | null;
   isFolder?: boolean;
+  isExe?: boolean;
   selected: boolean;
   editing?: boolean;
   onSelect: () => void;
@@ -19,25 +20,52 @@ interface Props {
 
 const GENERIC_ICON = (
   <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="4" y="2" width="24" height="28" rx="2" fill="#c0c0c0" stroke="#808080" stroke-width="1"/>
-    <rect x="8" y="6" width="16" height="4" fill="#000080"/>
-    <rect x="8" y="14" width="16" height="1" fill="#808080"/>
-    <rect x="8" y="18" width="12" height="1" fill="#808080"/>
-    <rect x="8" y="22" width="14" height="1" fill="#808080"/>
+    <path d="M3 0h18l8 8v23a1 1 0 01-1 1H3a1 1 0 01-1-1V1a1 1 0 011-1z" fill="#c0c0c0" stroke="#808080" stroke-width="1"/>
+    <path d="M21 0v7a1 1 0 001 1h7" fill="#e0e0e0" stroke="#808080" stroke-width="1"/>
+  </svg>
+);
+
+const EXE_ICON = (
+  <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="2" width="32" height="28" rx="1" fill="#c0c0c0" stroke="#808080" stroke-width="1"/>
+    <rect x="1" y="3" width="30" height="4" fill="#000080"/>
+    <rect x="24" y="3" width="4" height="4" fill="#c0c0c0" stroke="#808080" stroke-width="0.5"/>
+    <rect x="28" y="3" width="3" height="4" fill="#c0c0c0" stroke="#808080" stroke-width="0.5"/>
+    <rect x="3" y="4" width="10" height="2" fill="#ffffff"/>
+    <rect x="2" y="9" width="28" height="19" fill="#ffffff" stroke="#808080" stroke-width="0.5"/>
   </svg>
 );
 
 const FOLDER_ICON = (
   <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M2 7h12l2-3h14v2H16l-2 3H2z" fill="#C4A000"/>
-    <rect x="2" y="9" width="28" height="19" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
-    <rect x="2" y="7" width="12" height="3" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
+    <path d="M0 7h14l2-4h16v3H16l-2 4H0z" fill="#C4A000"/>
+    <rect x="0" y="9" width="32" height="21" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
+    <rect x="0" y="7" width="14" height="3" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
   </svg>
 );
 
-export { INTERNAL_MIME };
+const FOLDER_ICON_16 = (
+  <svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M0 7h14l2-4h16v3H16l-2 4H0z" fill="#C4A000"/>
+    <rect x="0" y="9" width="32" height="21" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
+    <rect x="0" y="7" width="14" height="3" rx="1" fill="#EDD400" stroke="#C4A000" stroke-width="1"/>
+  </svg>
+);
 
-export function DesktopIcon({ name, storePath, iconUrl, isFolder, selected, editing, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
+const EXE_ICON_16 = (
+  <svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="2" width="32" height="28" rx="1" fill="#c0c0c0" stroke="#808080" stroke-width="1"/>
+    <rect x="1" y="3" width="30" height="4" fill="#000080"/>
+    <rect x="24" y="3" width="4" height="4" fill="#c0c0c0" stroke="#808080" stroke-width="0.5"/>
+    <rect x="28" y="3" width="3" height="4" fill="#c0c0c0" stroke="#808080" stroke-width="0.5"/>
+    <rect x="3" y="4" width="10" height="2" fill="#ffffff"/>
+    <rect x="2" y="9" width="28" height="19" fill="#ffffff" stroke="#808080" stroke-width="0.5"/>
+  </svg>
+);
+
+export { INTERNAL_MIME, FOLDER_ICON_16, EXE_ICON_16 };
+
+export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selected, editing, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
   const [lastClick, setLastClick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const [editValue, setEditValue] = useState(name);
@@ -120,9 +148,10 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, selected, edit
       onDragLeave={() => setFolderDragOver(false)}
       onDrop={handleDrop}
     >
-      <div class="w-[32px] h-[32px] flex items-center justify-center mb-1" style={{ position: 'relative' }}>
-        {isFolder ? FOLDER_ICON : iconUrl ? <img src={iconUrl} width={32} height={32} draggable={false} style={{ imageRendering: 'pixelated' }} /> : GENERIC_ICON}
-        {(selected || folderDragOver) && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,128,0.5)', mixBlendMode: 'multiply', pointerEvents: 'none' }} />}
+      <div class="w-[32px] h-[32px] flex items-center justify-center mb-1"
+        style={(selected || folderDragOver) ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)' } : undefined}
+      >
+        {isFolder ? FOLDER_ICON : iconUrl ? <img src={iconUrl} width={32} height={32} draggable={false} style={{ imageRendering: 'pixelated' }} /> : (isExe && /\.(exe|com)$/i.test(name)) ? EXE_ICON : GENERIC_ICON}
       </div>
       {editing ? (
         <input

@@ -14,7 +14,7 @@ export function registerTimer(emu: Emulator): void {
     // Clear existing timer with same ID
     emu.clearWin32Timer(hwnd, timerId);
 
-    const jsTimer = window.setInterval(() => {
+    const jsTimer = globalThis.setInterval(() => {
       // lParam = timerFunc so DispatchMessage can call the callback
       emu.postMessage(hwnd, WM_TIMER, timerId, timerFunc);
     }, elapse);

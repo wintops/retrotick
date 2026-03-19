@@ -10,13 +10,13 @@ import type { PEInfo, MenuItem } from '../pe/types';
 import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
 import { DefaultFileManager } from './file-manager';
-import { VGAState, isVGAPort } from './dos/vga';
+import { VGAState, isVGAPort, syncGraphics } from './dos/vga';
 import { DosAudio } from './dos/audio';
 import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
 import { emuLoad, emuFindResourceEntry } from './emu-load';
-import { emuTick, emuCallWndProc, emuCallWndProc16, emuCallNative } from './emu-exec';
+import { emuTick, emuCallWndProc, emuCallWndProc16, emuCallNative, emuCallCallback } from './emu-exec';
 import { Thread } from './thread';
 
 export { fillTextBitmap } from './emu-render';
@@ -467,6 +467,7 @@ export class Emulator {
   // State
   running = false;
   halted = false;
+  traceApi = false;
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
@@ -593,6 +594,8 @@ export class Emulator {
   configuredLcid = 0x0409; // Set from regional settings at load time
   windowDCs = new Map<number, number>();
   private timers = new Map<string, number>();
+  /** Multimedia timers (timeSetEvent) — callback invoked during tick */
+  _mmTimers = new Map<number, { callback: number; dwUser: number; delay: number; periodic: boolean; nextFire: number }>();
 
   // CBT hooks (WH_CBT = 5)
   cbtHooks: { lpfn: number; hMod: number }[] = [];
@@ -672,6 +675,22 @@ export class Emulator {
   // Audio
   audioContext?: AudioContext;
   dosAudio = new DosAudio();
+
+  /** Stop all playing audio and release audio resources. */
+  destroyAudio(): void {
+    // DOS audio: OPL2 worklet + PC speaker + SB DMA
+    this.dosAudio.destroy();
+    // Win32 waveOut: stop all active AudioBufferSourceNodes
+    for (const [, device] of this.handles.findByType<{ nodes?: AudioBufferSourceNode[] }>('waveout')) {
+      if (device.nodes) {
+        for (const node of device.nodes) {
+          try { node.stop(); } catch { /* already stopped */ }
+          node.disconnect();
+        }
+        device.nodes.length = 0;
+      }
+    }
+  }
 
   // Generic common dialog request — UI renders the appropriate dialog
   onShowCommonDialog?: (req: CommonDialogRequest) => void;
@@ -1202,7 +1221,11 @@ export class Emulator {
   beginPaint(hwnd: number): number { return _beginPaint(this, hwnd); }
   endPaint(hwnd: number, hdc: number): void { _endPaint(this, hwnd, hdc); }
   renderChildControls(hwnd: number): void { _renderChildControls(this, hwnd); }
+  private _repaintingChildren = false;
   repaintChildWindows(hwnd: number): void {
+    if (this._repaintingChildren) return;
+    this._repaintingChildren = true;
+    try {
     const wnd = this.handles.get<WindowInfo>(hwnd);
     if (!wnd?.childList) return;
     const WM_PAINT = 0x000F;
@@ -1217,6 +1240,7 @@ export class Emulator {
       }
       child.needsPaint = false;
     }
+    } finally { this._repaintingChildren = false; }
   }
   /** Hit-test: find the deepest visible child window at (x,y) in the main window's client area.
    *  Returns { hwnd, x, y } with coordinates relative to the found window's client area. */
@@ -1276,6 +1300,10 @@ export class Emulator {
     return emuCallNative(this, addr);
   }
 
+  callCallback(addr: number, args: number[]): number | undefined {
+    return emuCallCallback(this, addr, args);
+  }
+
   /** Resolve a pending console input wait (ReadConsoleW, ReadConsoleInput, _getch, WaitForSingleObject stdin) */
   deliverConsoleInput(retVal: number): void {
     if (this._consoleInputResume) {
@@ -1291,7 +1319,17 @@ export class Emulator {
 
   /** Read an I/O port value */
   portIn(port: number): number {
-    if (isVGAPort(port)) return this.vga.portRead(port);
+    if (isVGAPort(port)) {
+      const val = this.vga.portRead(port);
+      // When VBlank is first detected on 0x3DA, sync immediately — VRAM still
+      // holds the complete previous frame (game hasn't started its copy yet).
+      if (port === 0x3DA && this.vga.pendingSync && this.isGraphicsMode) {
+        this.vga.pendingSync = false;
+        this.vga.lastSyncTime = performance.now();
+        syncGraphics(this);
+      }
+      return val;
+    }
     // Audio ports (AdLib, Sound Blaster)
     const audioVal = this.dosAudio.portIn(port);
     if (audioVal >= 0) return audioVal;
@@ -1491,13 +1529,9 @@ export class Emulator {
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
   injectHwKey(scancode: number, browserChar?: number): void {
-    // Queue all scancodes for sequential delivery — writing directly to port 0x60
+    // Queue scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
-    // Cap queue size to prevent overflow from key repeat (browser fires keydown ~30-60/s
-    // when holding a key, but the CPU can only process one INT 09h per execution batch).
-    // Break code (key-up, bit 7 set): flush queued repeat make codes for the
-    // same key so the character stops immediately when the key is released.
-    // Keep the first make code (initial press) but drop subsequent repeats.
+    // On break code: flush queued repeat make codes so repeat stops immediately.
     if ((scancode & 0x80) && scancode !== 0xE0) {
       const makeCode = scancode & 0x7F;
       let kept = false;
@@ -1507,9 +1541,8 @@ export class Emulator {
         if (k === makeCode) {
           if (!kept) {
             kept = true;
-            filtered.push(k); // keep first make
+            filtered.push(k);
           } else {
-            // Drop repeat; also drop preceding E0 prefix if present
             if (filtered.length > 0 && filtered[filtered.length - 1] === 0xE0) filtered.pop();
           }
           continue;
@@ -1542,6 +1575,41 @@ export class Emulator {
   _kbdReplayValue = 0xFF;
   _int09ReturnCS = -1; // CS of return address for active INT 09h; -1 = not active
   _int09ReturnIP = 0;
+
+  // --- Typematic repeat (DOS subsystem implements its own key repeat) ---
+  _typematicScan = -1;        // scancode of currently held key, -1 = none
+  _typematicChar: number | undefined; // browser char for the held key
+  _typematicExtended = false;  // whether the held key needs E0 prefix
+  _typematicTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Start typematic repeat for a key press (non-modifier only) */
+  startTypematic(scan: number, browserChar: number | undefined, isExtended: boolean): void {
+    this.stopTypematic();
+    this._typematicScan = scan;
+    this._typematicChar = browserChar;
+    this._typematicExtended = isExtended;
+    // Initial delay before repeat starts (500ms, matching typical BIOS default)
+    this._typematicTimer = setTimeout(() => {
+      // Repeat at ~30 Hz (33ms interval)
+      this._typematicTimer = setInterval(() => {
+        if (this._typematicScan < 0) return;
+        if (this._typematicExtended) this.injectHwKey(0xE0);
+        this.injectHwKey(this._typematicScan, this._typematicChar);
+      }, 33);
+    }, 500);
+  }
+
+  /** Stop typematic repeat (called on keyup or when a different key is pressed) */
+  stopTypematic(scan?: number): void {
+    // If scan is specified, only stop if it matches the currently repeating key
+    if (scan !== undefined && this._typematicScan !== scan) return;
+    if (this._typematicTimer !== null) {
+      clearTimeout(this._typematicTimer);
+      clearInterval(this._typematicTimer);
+      this._typematicTimer = null;
+    }
+    this._typematicScan = -1;
+  }
 
   /** Deliver a DOS key for INT 16h blocking wait */
   /** Write a key into the BDA keyboard buffer (for programs that read it directly) */

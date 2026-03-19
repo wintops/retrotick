@@ -37,6 +37,45 @@ export function buildThunkTable(emu: Emulator): void {
     'WINMM.DLL': {
       2: 'PlaySoundA',
     },
+    'WS2_32.DLL': {
+      1: 'accept', 2: 'bind', 3: 'closesocket', 4: 'connect',
+      5: 'getpeername', 6: 'getsockname', 7: 'getsockopt',
+      8: 'htonl', 9: 'htons', 10: 'ioctlsocket',
+      11: 'inet_addr', 12: 'inet_ntoa', 13: 'listen',
+      14: 'ntohl', 15: 'ntohs', 16: 'recv', 17: 'recvfrom',
+      18: 'select', 19: 'send', 20: 'sendto', 21: 'setsockopt',
+      22: 'shutdown', 23: 'socket',
+      51: 'gethostbyaddr', 52: 'gethostbyname',
+      53: 'getprotobyname', 54: 'getprotobynumber',
+      55: 'getservbyname', 56: 'getservbyport', 57: 'gethostname',
+      101: 'WSAStartup', 102: 'WSACleanup', 103: 'WSASetLastError',
+      104: 'WSAGetLastError', 105: 'WSAIsBlocking',
+      108: 'WSACancelBlockingCall',
+      111: 'WSAAsyncGetProtoByName', 112: 'WSAAsyncGetProtoByNumber',
+      113: 'WSAAsyncGetHostByName', 114: 'WSAAsyncGetHostByAddr',
+      115: 'WSACancelAsyncRequest', 116: 'WSAAsyncSelect',
+    },
+    // WSOCK32 ordinals are DIFFERENT from WS2_32 above ordinal 100!
+    'WSOCK32.DLL': {
+      1: 'accept', 2: 'bind', 3: 'closesocket', 4: 'connect',
+      5: 'getpeername', 6: 'getsockname', 7: 'getsockopt',
+      8: 'htonl', 9: 'htons', 10: 'ioctlsocket',
+      11: 'inet_addr', 12: 'inet_ntoa', 13: 'listen',
+      14: 'ntohl', 15: 'ntohs', 16: 'recv', 17: 'recvfrom',
+      18: 'select', 19: 'send', 20: 'sendto', 21: 'setsockopt',
+      22: 'shutdown', 23: 'socket',
+      51: 'gethostbyaddr', 52: 'gethostbyname',
+      53: 'getprotobyname', 54: 'getprotobynumber',
+      55: 'getservbyname', 56: 'getservbyport', 57: 'gethostname',
+      101: 'WSAAsyncSelect', 102: 'WSAAsyncGetHostByAddr',
+      103: 'WSAAsyncGetHostByName', 104: 'WSAAsyncGetProtoByName',
+      105: 'WSAAsyncGetProtoByNumber', 106: 'WSAAsyncGetServByName',
+      107: 'WSAAsyncGetServByPort', 108: 'WSACancelAsyncRequest',
+      109: 'WSASetBlockingHook', 110: 'WSAUnhookBlockingHook',
+      111: 'WSAGetLastError', 112: 'WSASetLastError',
+      113: 'WSACancelBlockingCall', 114: 'WSAIsBlocking',
+      115: 'WSAStartup', 116: 'WSACleanup',
+    },
     'OLEAUT32.DLL': {
       2: 'SysAllocString', 3: 'SysReAllocString', 4: 'SysAllocStringLen',
       5: 'SysReAllocStringLen', 6: 'SysFreeString', 7: 'SysStringLen',
@@ -49,6 +88,7 @@ export function buildThunkTable(emu: Emulator): void {
 
   // DLL name aliases (map old names to canonical names used in API registration)
   const dllAliases: Record<string, string> = {
+    // WSOCK32 has its own ordinal mapping above — only alias for API name resolution
     'WSOCK32.DLL': 'WS2_32.DLL',
     'API-MS-WIN-CRT-RUNTIME-L1-1-0.DLL': 'MSVCRT.DLL',
     'API-MS-WIN-CRT-STDIO-L1-1-0.DLL': 'MSVCRT.DLL',
@@ -77,15 +117,15 @@ export function buildThunkTable(emu: Emulator): void {
   ]);
 
   for (const [addr, info] of emu.pe.apiMap) {
-    // Normalize DLL name aliases
-    info.dll = dllAliases[info.dll] || info.dll;
-    // Resolve ordinal imports to names
+    // Resolve ordinal imports to names BEFORE alias renaming (ordinals differ between WSOCK32 and WS2_32)
     const ordMatch = info.name.match(/^ord_(\d+)$/);
     if (ordMatch) {
       const ord = parseInt(ordMatch[1]);
       const nameFromOrd = ordinalMap[info.dll]?.[ord];
       if (nameFromOrd) info.name = nameFromOrd;
     }
+    // Normalize DLL name aliases
+    info.dll = dllAliases[info.dll] || info.dll;
 
     const key = `${info.dll}:${info.name}`;
     const def = emu.apiDefs.get(key);

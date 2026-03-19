@@ -81,8 +81,57 @@ export function registerLocale(emu: Emulator): void {
     return 1;
   });
 
-  kernel32.register('GetStringTypeA', 5, () => {
+  /** Fill character type info for ANSI string (shared by GetStringTypeA and GetStringTypeExA) */
+  function fillCharTypeA(dwInfoType: number, lpSrcStr: number, cchSrc: number, lpCharType: number): number {
+    let len = cchSrc;
+    if (len < 0) {
+      // -1 means null-terminated
+      len = 0;
+      while (emu.memory.readU8(lpSrcStr + len) !== 0) len++;
+      len++; // include null
+    }
+    for (let i = 0; i < len; i++) {
+      const ch = emu.memory.readU8(lpSrcStr + i);
+      let flags = 0;
+      if (dwInfoType === CT_CTYPE1) {
+        if (ch >= 0x41 && ch <= 0x5A) flags |= C1_UPPER | C1_ALPHA | C1_DEFINED;
+        else if (ch >= 0x61 && ch <= 0x7A) flags |= C1_LOWER | C1_ALPHA | C1_DEFINED;
+        else if (ch >= 0x30 && ch <= 0x39) flags |= C1_DIGIT | C1_XDIGIT | C1_DEFINED;
+        else if (ch === 0x20) flags |= C1_SPACE | C1_BLANK | C1_DEFINED;
+        else if (ch === 0x09) flags |= C1_SPACE | C1_BLANK | C1_CNTRL | C1_DEFINED;
+        else if (ch >= 0x0A && ch <= 0x0D) flags |= C1_SPACE | C1_CNTRL | C1_DEFINED;
+        else if (ch < 0x20 || ch === 0x7F) flags |= C1_CNTRL | C1_DEFINED;
+        else if (ch >= 0x21 && ch <= 0x2F) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x3A && ch <= 0x40) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x5B && ch <= 0x60) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x7B && ch <= 0x7E) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch > 0x7F) flags |= C1_DEFINED; // high ANSI
+        if ((ch >= 0x41 && ch <= 0x46) || (ch >= 0x61 && ch <= 0x66)) flags |= C1_XDIGIT;
+      }
+      // CT_CTYPE2 and CT_CTYPE3: leave as 0 (simplified)
+      emu.memory.writeU16(lpCharType + i * 2, flags);
+    }
     return 1;
+  }
+
+  // GetStringTypeA(Locale, dwInfoType, lpSrcStr, cchSrc, lpCharType)
+  kernel32.register('GetStringTypeA', 5, () => {
+    const _locale = emu.readArg(0);
+    const dwInfoType = emu.readArg(1);
+    const lpSrcStr = emu.readArg(2);
+    const cchSrc = emu.readArg(3) | 0;
+    const lpCharType = emu.readArg(4);
+    return fillCharTypeA(dwInfoType, lpSrcStr, cchSrc, lpCharType);
+  });
+
+  // GetStringTypeExA(Locale, dwInfoType, lpSrcStr, cchSrc, lpCharType)
+  kernel32.register('GetStringTypeExA', 5, () => {
+    const _locale = emu.readArg(0);
+    const dwInfoType = emu.readArg(1);
+    const lpSrcStr = emu.readArg(2);
+    const cchSrc = emu.readArg(3) | 0;
+    const lpCharType = emu.readArg(4);
+    return fillCharTypeA(dwInfoType, lpSrcStr, cchSrc, lpCharType);
   });
 
   kernel32.register('LCMapStringA', 6, () => {
@@ -620,11 +669,46 @@ export function registerLocale(emu: Emulator): void {
   });
 
   kernel32.register('GetStringTypeExW', 5, () => {
+    const _locale = emu.readArg(0);
+    const dwInfoType = emu.readArg(1);
+    const lpSrcStr = emu.readArg(2);
+    const cchSrc = emu.readArg(3) | 0;
+    const lpCharType = emu.readArg(4);
+    // Same logic as GetStringTypeW
+    let len = cchSrc;
+    if (len < 0) {
+      len = 0;
+      while (emu.memory.readU16(lpSrcStr + len * 2) !== 0) len++;
+      len++;
+    }
+    for (let i = 0; i < len; i++) {
+      const ch = emu.memory.readU16(lpSrcStr + i * 2);
+      let flags = 0;
+      if (dwInfoType === CT_CTYPE1) {
+        if (ch >= 0x41 && ch <= 0x5A) flags |= C1_UPPER | C1_ALPHA | C1_DEFINED;
+        else if (ch >= 0x61 && ch <= 0x7A) flags |= C1_LOWER | C1_ALPHA | C1_DEFINED;
+        else if (ch >= 0x30 && ch <= 0x39) flags |= C1_DIGIT | C1_XDIGIT | C1_DEFINED;
+        else if (ch === 0x20) flags |= C1_SPACE | C1_BLANK | C1_DEFINED;
+        else if (ch === 0x09) flags |= C1_SPACE | C1_BLANK | C1_CNTRL | C1_DEFINED;
+        else if (ch >= 0x0A && ch <= 0x0D) flags |= C1_SPACE | C1_CNTRL | C1_DEFINED;
+        else if (ch < 0x20 || ch === 0x7F) flags |= C1_CNTRL | C1_DEFINED;
+        else if (ch >= 0x21 && ch <= 0x2F) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x3A && ch <= 0x40) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x5B && ch <= 0x60) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch >= 0x7B && ch <= 0x7E) flags |= C1_PUNCT | C1_DEFINED;
+        else if (ch > 0x7F) flags |= C1_DEFINED;
+        if ((ch >= 0x41 && ch <= 0x46) || (ch >= 0x61 && ch <= 0x66)) flags |= C1_XDIGIT;
+      }
+      emu.memory.writeU16(lpCharType + i * 2, flags);
+    }
     return 1;
   });
 
   // EnumSystemLocalesA(LOCALE_ENUMPROCA, DWORD) — return TRUE without calling callback
   kernel32.register('EnumSystemLocalesA', 2, () => 1);
+
+  // EnumCalendarInfoA(CALINFO_ENUMPROCA, LCID, CALID, CALTYPE) — stub, return TRUE
+  kernel32.register('EnumCalendarInfoA', 4, () => 1);
 
   // GetDateFormatA(LCID, DWORD, SYSTEMTIME*, LPCSTR lpFormat, LPSTR, int)
   kernel32.register('GetDateFormatA', 6, () => {

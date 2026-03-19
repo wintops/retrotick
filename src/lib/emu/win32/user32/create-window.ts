@@ -3,8 +3,8 @@ import type { WindowInfo } from './types';
 import { getClientSize, clampToMinTrackSize } from './_helpers';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
-  WM_SIZE, WM_ACTIVATE, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
-  WM_NCDESTROY,
+  WM_SIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
+  WM_NCDESTROY, WM_WINDOWPOSCHANGED,
   CW_USEDEFAULT,
 } from '../types';
 
@@ -106,11 +106,12 @@ export function registerCreateWindow(emu: Emulator): void {
     if ((!hParent || hParent === 0) && width > 0 && height > 0 && emu.mainWindow === 0) {
       emu.promoteToMainWindow(hwnd, wnd);
     }
-    // If current mainWindow is a WS_POPUP (e.g. Delphi TApplication), replace it with
-    // the first non-popup overlapped window (the actual visible form)
+    // If current mainWindow is an invisible/zero-size WS_POPUP (e.g. Delphi TApplication),
+    // replace it with the first non-popup overlapped window (the actual visible form).
+    // Don't replace a visible popup (e.g. splash screen) — wait for ShowWindow instead.
     if (emu.mainWindow !== 0 && !(style & WS_CHILD) && !(style & WS_POPUP) && width > 0 && height > 0) {
       const curMain = emu.handles.get<WindowInfo>(emu.mainWindow);
-      if (curMain && (curMain.style & WS_POPUP)) {
+      if (curMain && (curMain.style & WS_POPUP) && (!curMain.visible || curMain.width === 0 || curMain.height === 0)) {
         console.log(`[WND] Replacing popup mainWindow 0x${emu.mainWindow.toString(16)} with overlapped 0x${hwnd.toString(16)}`);
         emu.promoteToMainWindow(hwnd, wnd);
       }
@@ -239,7 +240,7 @@ export function registerCreateWindow(emu: Emulator): void {
     const WS_CHILD_CW = 0x40000000;
     if (emu.mainWindow !== 0 && !(style & WS_CHILD_CW) && !(style & WS_POPUP_CW) && width > 0 && height > 0) {
       const curMain = emu.handles.get<WindowInfo>(emu.mainWindow);
-      if (curMain && (curMain.style & WS_POPUP_CW)) {
+      if (curMain && (curMain.style & WS_POPUP_CW) && (!curMain.visible || curMain.width === 0 || curMain.height === 0)) {
         console.log(`[WND] Replacing popup mainWindow 0x${emu.mainWindow.toString(16)} with overlapped 0x${hwnd.toString(16)}`);
         emu.promoteToMainWindow(hwnd, wnd);
       }
@@ -334,9 +335,36 @@ export function registerCreateWindow(emu: Emulator): void {
 
     // If no mainWindow yet, promote the first visible top-level window with actual size
     const WS_CHILD = 0x40000000;
-    if (wnd.visible && wnd.width > 0 && wnd.height > 0 && emu.mainWindow === 0 && !(wnd.style & WS_CHILD)) {
-      console.log(`[WND] ShowWindow promoting 0x${hwnd.toString(16)} to mainWindow`);
-      emu.promoteToMainWindow(hwnd, wnd);
+    const WS_POPUP_SW = 0x80000000;
+    if (wnd.visible && wnd.width > 0 && wnd.height > 0 && !(wnd.style & WS_CHILD)) {
+      if (emu.mainWindow === 0) {
+        console.log(`[WND] ShowWindow promoting 0x${hwnd.toString(16)} to mainWindow`);
+        emu.promoteToMainWindow(hwnd, wnd);
+      } else if (!(wnd.style & WS_POPUP_SW) && hwnd !== emu.mainWindow) {
+        // Replace a popup mainWindow with an overlapped window being shown,
+        // but only if the popup is hidden/zero-size (don't steal from a visible splash)
+        const curMain = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (curMain && (curMain.style & WS_POPUP_SW) && (!curMain.visible || curMain.width === 0 || curMain.height === 0)) {
+          console.log(`[WND] ShowWindow replacing popup mainWindow 0x${emu.mainWindow.toString(16)} with 0x${hwnd.toString(16)}`);
+          emu.promoteToMainWindow(hwnd, wnd);
+        }
+      }
+    }
+
+    // When the mainWindow (popup/splash) is hidden, find the next overlapped window to promote
+    if (!wnd.visible && hwnd === emu.mainWindow && (wnd.style & WS_POPUP_SW)) {
+      console.log(`[WND] mainWindow 0x${hwnd.toString(16)} hidden, looking for next overlapped window`);
+      emu.mainWindow = 0;
+      // Find the best overlapped visible window to promote
+      for (const [h, candidate] of emu.handles.findByType('window') as [number, WindowInfo][]) {
+        if (candidate && candidate.visible && candidate.width > 0 && candidate.height > 0
+            && !(candidate.style & WS_CHILD) && !(candidate.style & WS_POPUP_SW)
+            && candidate.wndProc) {
+          console.log(`[WND] Promoting overlapped 0x${h.toString(16)} class="${candidate.classInfo?.className}" as new mainWindow`);
+          emu.promoteToMainWindow(h, candidate);
+          break;
+        }
+      }
     }
 
     // Update canvas size when main window is shown
@@ -352,6 +380,7 @@ export function registerCreateWindow(emu: Emulator): void {
     emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0,
       ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
     if (wnd.visible) {
+      emu.callWndProc(wnd.wndProc, hwnd, WM_ACTIVATEAPP, 1, 0);
       emu.callWndProc(wnd.wndProc, hwnd, WM_ACTIVATE, 1, 0);
       // Mark window as needing paint (WM_PAINT synthesized by GetMessage)
       wnd.needsPaint = true;
@@ -417,7 +446,6 @@ export function registerCreateWindow(emu: Emulator): void {
     const uFlags = emu.readArg(6);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
-
     const SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_FRAMECHANGED = 0x20;
     const SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
     let sizeChanged = false;
@@ -439,12 +467,28 @@ export function registerCreateWindow(emu: Emulator): void {
     if (uFlags & SWP_SHOWWINDOW) wnd.visible = true;
     if (uFlags & SWP_HIDEWINDOW) wnd.visible = false;
 
+    // Send WM_WINDOWPOSCHANGED so VCL can update internal bounds via UpdateBounds
+    if (wnd.wndProc && sizeChanged) {
+      // WINDOWPOS struct: hwnd, hInsertAfter, x, y, cx, cy, flags (28 bytes)
+      const wpPtr = emu.allocHeap(28);
+      emu.memory.writeU32(wpPtr, hwnd);
+      emu.memory.writeU32(wpPtr + 4, 0); // hInsertAfter
+      emu.memory.writeU32(wpPtr + 8, wnd.x || 0);
+      emu.memory.writeU32(wpPtr + 12, wnd.y || 0);
+      emu.memory.writeU32(wpPtr + 16, wnd.width);
+      emu.memory.writeU32(wpPtr + 20, wnd.height);
+      emu.memory.writeU32(wpPtr + 24, uFlags);
+      emu.callWndProc(wnd.wndProc, hwnd, WM_WINDOWPOSCHANGED, 0, wpPtr);
+    }
+
     if ((uFlags & SWP_FRAMECHANGED) || sizeChanged) {
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
       if (hwnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
         emu.onWindowChange?.(wnd);
       }
+      // WM_SIZE is typically sent by DefWindowProc's WM_WINDOWPOSCHANGED handler,
+      // but send it explicitly in case the app doesn't call DefWindowProc
       if (sizeChanged && wnd.wndProc) {
         emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0,
           ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));

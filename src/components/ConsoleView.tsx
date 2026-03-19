@@ -261,21 +261,23 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     // DOS mode: inject hardware scancodes via INT 09h path.
     // The BIOS INT 09h handler converts scancodes to ASCII and pushes to dosKeyBuffer.
     if (emu.isDOS) {
+      // Filter out ALL browser key repeats — the DOS subsystem implements
+      // its own typematic repeat with correct timing.
+      if (e.repeat) return;
       // Resume AudioContext if suspended (user gesture)
       if (emu.audioContext?.state === 'suspended') emu.audioContext.resume();
       const modScan = getModifierScan(e.code);
       if (modScan !== undefined) {
-        // Modifier keydown: make only; break is sent on keyup.
-        // Skip repeat events for modifiers (they don't typematic).
-        if (e.repeat) return;
         emu.injectHwKey(modScan);
       } else {
         const scan = CODE_TO_SCANCODE[e.code];
         if (scan === undefined) return;
-        // Regular keydown: make only; break is sent on keyup.
         const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
-        if (EXTENDED_NAV_CODES.has(e.code)) emu.injectHwKey(0xE0);
+        const isExtended = EXTENDED_NAV_CODES.has(e.code);
+        if (isExtended) emu.injectHwKey(0xE0);
         emu.injectHwKey(scan, browserChar);
+        // Start typematic repeat for non-modifier keys
+        emu.startTypematic(scan, browserChar, isExtended);
       }
       emu.screenDirty = true;
 
@@ -565,6 +567,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
 
     const scan = CODE_TO_SCANCODE[e.code];
     if (scan === undefined) return;
+    emu.stopTypematic(scan);
     if (EXTENDED_NAV_CODES.has(e.code)) emu.injectHwKey(0xE0);
     emu.injectHwKey(scan | 0x80);
     emu.screenDirty = true;

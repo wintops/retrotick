@@ -2,6 +2,7 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
+import { tryFastLoop } from './fast-loops';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -37,21 +38,23 @@ export function emuResume(emu: Emulator): void {
   }
 }
 
-export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
-  if (!wndProc || wndProc === 0) return 0;
-  // Skip WndProc calls to addresses outside image and thunk ranges (garbage/unimplemented pointers)
+/** Call a stdcall callback with N args. Used by callWndProc (4 args) and multimedia timers (5 args). */
+function callStdcall(emu: Emulator, addr: number, args: number[]): number | undefined {
+  if (!addr) return 0;
   if (!emu.isNE && emu.pe) {
-    const isThunk = emu.thunkToApi.has(wndProc);
-    let inImage = wndProc >= emu.pe.imageBase && wndProc < emu.pe.imageBase + emu.pe.sizeOfImage;
+    const isThunk = emu.thunkToApi.has(addr);
+    let inImage = addr >= emu.pe.imageBase && addr < emu.pe.imageBase + emu.pe.sizeOfImage;
     if (!inImage) {
       for (const mod of emu.loadedModules.values()) {
-        if (mod.sizeOfImage && wndProc >= mod.imageBase && wndProc < mod.imageBase + mod.sizeOfImage) {
+        if (mod.sizeOfImage && addr >= mod.imageBase && addr < mod.imageBase + mod.sizeOfImage) {
           inImage = true;
           break;
         }
       }
     }
-    if (!isThunk && !inImage) {
+    const inVirtualAlloc = addr >= emu.virtualBase && addr < emu.virtualPtr;
+    if (!isThunk && !inImage && !inVirtualAlloc) {
+      console.error(`[callStdcall] addr 0x${(addr >>> 0).toString(16)} is outside known ranges: image=0x${emu.pe.imageBase.toString(16)}..0x${(emu.pe.imageBase + emu.pe.sizeOfImage).toString(16)}, virtualAlloc=0x${emu.virtualBase.toString(16)}..0x${emu.virtualPtr.toString(16)}, args=[${args.map(a => '0x' + (a >>> 0).toString(16))}]`);
       return 0;
     }
   }
@@ -63,16 +66,13 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
   const savedEDI = emu.cpu.reg[7];
   const savedEBP = emu.cpu.reg[5];
 
-  // Set up stack for WndProc call
-  emu.cpu.push32(lParam);
-  emu.cpu.push32(wParam);
-  emu.cpu.push32(message);
-  emu.cpu.push32(hwnd);
+  // Push args right-to-left (stdcall)
+  for (let i = args.length - 1; i >= 0; i--) emu.cpu.push32(args[i]);
   emu.cpu.push32(WNDPROC_RETURN_THUNK);
   const wndProcRetThunkAddr = emu.cpu.reg[4] >>> 0; // remember where the thunk was pushed
-  emu.cpu.eip = wndProc;
+  emu.cpu.eip = addr;
 
-  // Run a local step loop until the wndproc returns or goes async.
+  // Run a local step loop until the callback returns or goes async.
   // This reuses the frame stack so that WNDPROC_RETURN in emuTick
   // can also handle completion if we yield to async.
   const frame = {
@@ -83,10 +83,32 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  const MAX_STEPS = 20000000;
-
-  while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted && steps < MAX_STEPS) {
+  // Tight loop detection: two consecutive-match samplers at different periods.
+  // P=256 catches loops of length 1,2,4,8,16... (powers of 2).
+  // P=252 catches loops of length 1,2,3,4,6,7,9,12,14... (highly composite).
+  // Together they cover all common loop lengths 1-12.
+  let csEipA = 0, csHitA = 0;  // period 256
+  let csEipB = 0, csHitB = 0, csNextB = 252;  // period 252
+  while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
+
+    let csTry = false;
+    if ((steps & 0xFF) === 0 && steps > 0) {
+      if (eip === csEipA) { if (++csHitA >= 2) csTry = true; } else { csEipA = eip; csHitA = 0; }
+    }
+    if (steps >= csNextB) {
+      csNextB = steps + 252;
+      if (eip === csEipB) { if (++csHitB >= 2) csTry = true; }
+      else {
+          csEipB = eip; csHitB = 0;
+      }
+    }
+    if (csTry) {
+      const iters = tryFastLoop(emu.cpu, emu.memory);
+      if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      csHitA = csHitB = 0;
+    }
+
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
     if (thunk) {
       const key = `${thunk.dll}:${thunk.name}`;
@@ -150,10 +172,6 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
     return undefined;
   }
 
-  if (steps >= MAX_STEPS) {
-    console.warn(`WndProc exceeded max steps for msg 0x${message.toString(16)}, EIP=0x${(emu.cpu.eip >>> 0).toString(16)}`);
-  }
-
   // Zero out the stale WNDPROC_RETURN_THUNK from stack memory to prevent
   // it from being picked up by a later RET instruction when the stack grows
   emu.memory.writeU32(wndProcRetThunkAddr, 0);
@@ -165,6 +183,20 @@ export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, mes
   emu.cpu.reg[7] = savedEDI;
 
   return emu.wndProcResult;
+}
+
+export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
+  return callStdcall(emu, wndProc, [hwnd, message, wParam, lParam]);
+}
+
+/** Call any stdcall callback with arbitrary args. Used for COM enumeration callbacks etc. */
+export function emuCallCallback(emu: Emulator, addr: number, args: number[]): number | undefined {
+  return callStdcall(emu, addr, args);
+}
+
+export function emuCallTimerProc(emu: Emulator, callback: number, timerId: number, dwUser: number): number | undefined {
+  // void CALLBACK TimeProc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2)
+  return callStdcall(emu, callback, [timerId, 0 /* TIME_CALLBACK */, dwUser, 0, 0]);
 }
 
 export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
@@ -442,7 +474,9 @@ export function emuTick(emu: Emulator): void {
     const pitReload = emu._pitCounters[0] || 0x10000;
     const timerIntervalMs = (pitReload / 1193182) * 1000;
     if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-      emu._dosLastTimerTick = now;
+      emu._dosLastTimerTick += timerIntervalMs;
+      // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
+      if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
       emu._pendingHwInts.push(0x08);
       emu._dosHalted = false;
     }
@@ -452,6 +486,34 @@ export function emuTick(emu: Emulator): void {
     }
     // If still halted, fall through to bottom where next tick is scheduled
   }
+
+  // Dispatch multimedia timers (timeSetEvent)
+  if (emu._mmTimers.size > 0 && !emu.isDOS) {
+    const now = Date.now();
+    for (const [id, t] of emu._mmTimers) {
+      if (now >= t.nextFire) {
+        // Save ALL CPU state — the timer callback runs via callStdcall which
+        // clobbers general-purpose registers. Without saving them, long-running
+        // computations (e.g. CRC loops) that span multiple ticks get corrupted.
+        const savedEIP = emu.cpu.eip;
+        const savedRegs = [...emu.cpu.reg]; // EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
+        const savedFlags = emu.cpu.getFlags();
+        emuCallTimerProc(emu, t.callback, id, t.dwUser);
+        // Restore CPU state after callback
+        emu.cpu.eip = savedEIP;
+        for (let ri = 0; ri < 8; ri++) emu.cpu.reg[ri] = savedRegs[ri];
+        emu.cpu.setFlags(savedFlags);
+        if (t.periodic) {
+          t.nextFire = now + t.delay;
+        } else {
+          emu._mmTimers.delete(id);
+        }
+        if (emu.halted || emu.waitingForMessage) break;
+      }
+    }
+  }
+
+  let tkEipA = 0, tkHitA = 0, tkEipB = 0, tkHitB = 0, tkNextB = 252;
 
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
@@ -490,8 +552,12 @@ export function emuTick(emu: Emulator): void {
       const pitReload = emu._pitCounters[0] || 0x10000;
       const timerIntervalMs = (pitReload / 1193182) * 1000; // PIT frequency → ms
       if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-        emu._dosLastTimerTick = now;
-        if (!emu._pendingHwInts.includes(0x08)) emu._pendingHwInts.push(0x08);
+        if (!emu._pendingHwInts.includes(0x08)) {
+          emu._dosLastTimerTick += timerIntervalMs;
+          // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
+          if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+          emu._pendingHwInts.push(0x08);
+        }
         emu._dosHalted = false; // wake from HLT
       }
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)
@@ -603,6 +669,12 @@ export function emuTick(emu: Emulator): void {
       emu.diagThunk(key);
       const handler = emu.apiDefs.get(key)?.handler;
 
+      const origESP = emu.cpu.reg[4] + thunk.stackBytes + 4;
+
+      if (emu.traceApi && key !== 'SYSTEM:WNDPROC_RETURN') {
+        console.log(`[API] ${key}`);
+      }
+
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
           // Check if this is a legitimate WNDPROC_RETURN or a stale value on the stack.
@@ -658,6 +730,23 @@ export function emuTick(emu: Emulator): void {
       continue;
     }
 
+    // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
+    {
+      let tkTry = false;
+      if ((stepCount & 0xFF) === 0 && stepCount > 0) {
+        if (eip === tkEipA) { if (++tkHitA >= 2) tkTry = true; } else { tkEipA = eip; tkHitA = 0; }
+      }
+      if (stepCount >= tkNextB) {
+        tkNextB = stepCount + 252;
+        if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
+      }
+      if (tkTry) {
+        const it = tryFastLoop(emu.cpu, emu.memory);
+        if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        tkHitA = tkHitB = 0;
+      }
+    }
+
     const prevEip = eip;
     emu.cpu.step();
     emu._pitInsnCount++;
@@ -686,7 +775,7 @@ export function emuTick(emu: Emulator): void {
     }
     // Detect wild EIP
     const newEip = emu.cpu.eip >>> 0;
-    if (newEip !== 0 && !emu.thunkToApi.has(newEip)) {
+    if (!emu.thunkToApi.has(newEip)) {
       let inImage = false;
       if (emu.isNE && emu.ne) {
         for (const seg of emu.ne.segments) {
@@ -768,10 +857,20 @@ export function emuTick(emu: Emulator): void {
 
   emu._tickRunning = false;
 
-  // Sync video memory for DOS mode (picks up direct B800:0000 writes)
+  // Sync video memory for DOS mode.
+  // Graphics mode: only sync when VBlank signals a complete frame (avoids tearing
+  // from capturing a half-written framebuffer mid-copy).
+  // Text mode: sync every tick (no tearing concern, direct B800:0000 writes).
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
-      syncGraphics(emu);
+      const now = performance.now();
+      // Sync on VBlank (normal path), or every ~33ms as fallback for games
+      // that don't poll 0x3DA (ensures display still updates).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 33) {
+        emu.vga.pendingSync = false;
+        emu.vga.lastSyncTime = now;
+        syncGraphics(emu);
+      }
     } else {
       syncVideoMemory(emu);
     }

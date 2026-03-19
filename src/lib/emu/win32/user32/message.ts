@@ -125,9 +125,8 @@ export function registerMessage(emu: Emulator): void {
     }
 
     // PeekMessage is non-blocking: return 0 (no message).
-    // If inside a top-level WndProc (modal loop like mouse capture), yield briefly
-    // to let the browser deliver events, then resume with 0.
-    if (emu.wndProcDepth === 1) {
+    // Yield to the browser to deliver events and render frames.
+    if (emu.wndProcDepth <= 1) {
       const stackBytes = emu._currentThunkStackBytes;
       emu.waitingForMessage = true;
       const resumeWith0 = () => {

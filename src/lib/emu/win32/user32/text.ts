@@ -555,6 +555,22 @@ export function registerText(emu: Emulator): void {
 
   user32.register('OemToCharA', 2, () => 1);
 
+  // CharToOemA(LPCSTR, LPSTR) — copy src to dest (identity for ASCII)
+  user32.register('CharToOemA', 2, () => {
+    const src = emu.readArg(0);
+    const dst = emu.readArg(1);
+    if (src && dst) {
+      let i = 0;
+      while (true) {
+        const ch = emu.memory.readU8(src + i);
+        emu.memory.writeU8(dst + i, ch);
+        if (ch === 0) break;
+        i++;
+      }
+    }
+    return 1;
+  });
+
   user32.register('CharUpperA', 1, () => {
     const p = emu.readArg(0);
     // If high word is 0, it's a single char; otherwise pointer to string

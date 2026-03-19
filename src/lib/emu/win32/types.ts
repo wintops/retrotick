@@ -304,8 +304,43 @@ export const MF_CHECKED = 0x00000008;
 export const MF_UNCHECKED = 0x00000000;
 export const MF_ENABLED = 0x00000000;
 export const MF_GRAYED = 0x00000001;
+export const MF_DISABLED = 0x00000002;
 export const MF_STRING = 0x00000000;
+export const MF_BITMAP = 0x00000004;
+export const MF_POPUP = 0x00000010;
+export const MF_MENUBARBREAK = 0x00000020;
+export const MF_MENUBREAK = 0x00000040;
+export const MF_OWNERDRAW = 0x00000100;
 export const MF_SEPARATOR = 0x00000800;
+
+// MENUITEMINFO mask flags
+export const MIIM_STATE = 0x00000001;
+export const MIIM_ID = 0x00000002;
+export const MIIM_SUBMENU = 0x00000004;
+export const MIIM_CHECKMARKS = 0x00000008;
+export const MIIM_TYPE = 0x00000010;
+export const MIIM_DATA = 0x00000020;
+export const MIIM_STRING = 0x00000040;
+export const MIIM_BITMAP = 0x00000080;
+export const MIIM_FTYPE = 0x00000100;
+
+// MENUITEMINFO type flags
+export const MFT_STRING = 0x00000000;
+export const MFT_BITMAP = 0x00000004;
+export const MFT_MENUBARBREAK = 0x00000020;
+export const MFT_MENUBREAK = 0x00000040;
+export const MFT_OWNERDRAW = 0x00000100;
+export const MFT_SEPARATOR = 0x00000800;
+
+// MENUITEMINFO state flags
+export const MFS_ENABLED = 0x00000000;
+export const MFS_GRAYED = 0x00000003;
+export const MFS_DISABLED = 0x00000003;
+export const MFS_CHECKED = 0x00000008;
+export const MFS_DEFAULT = 0x00001000;
+
+// MENUITEMINFO struct size
+export const SIZEOF_MENUITEMINFO = 48;
 
 // WM_NCHITTEST return values
 export const HTNOWHERE = 0;

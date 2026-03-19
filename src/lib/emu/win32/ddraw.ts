@@ -36,6 +36,9 @@ const DDS7_VTABLE_SIZE = 49; // 49 methods
 // IDirectDrawClipper vtable: QI, AddRef, Release, GetClipList, GetHWnd, Initialize, IsClipListChanged, SetClipList, SetHWnd
 const DDC_VTABLE_SIZE = 9;
 
+// IDirectDrawPalette vtable: QI, AddRef, Release, GetCaps, GetEntries, Initialize, SetEntries
+const DDP_VTABLE_SIZE = 7;
+
 // DDSCAPS2 flags
 const DDSCAPS_PRIMARYSURFACE = 0x00000200;
 const DDSCAPS_BACKBUFFER = 0x00000004;
@@ -52,6 +55,7 @@ const DDSD_PIXELFORMAT = 0x00001000;
 const DDSD_LPSURFACE = 0x00000800;
 
 // DDPF flags
+const DDPF_PALETTEINDEXED8 = 0x00000020;
 const DDPF_RGB = 0x00000040;
 
 // HRESULT codes
@@ -68,6 +72,7 @@ interface DDSurface {
   isPrimary: boolean;
   backBuffer?: number;    // handle to back buffer surface
   attachedTo?: number;    // parent surface objAddr
+  paletteAddr?: number;   // address of palette data (256 RGBQUAD entries)
 }
 
 function allocComObject(emu: Emulator, prefix: string, methodCount: number, handlers: Record<number, () => number>): number {
@@ -110,6 +115,8 @@ function allocComObject(emu: Emulator, prefix: string, methodCount: number, hand
 
 export function registerDdraw(emu: Emulator): void {
   const surfaces = new Map<number, DDSurface>();
+  const paletteDataMap = new Map<number, number>(); // palette COM obj → paletteData address
+  let lastPaletteData = 0; // fallback: most recently created palette
   let displayWidth = 640, displayHeight = 480, displayBpp = 32;
 
   // Helper to set stackBytes for a COM thunk after creation
@@ -132,7 +139,24 @@ export function registerDdraw(emu: Emulator): void {
     const pitch = surf.pitch;
     const bpp = surf.bpp;
 
-    if (bpp === 16) {
+    const palAddr8 = surf.paletteAddr || lastPaletteData;
+    if (bpp === 8 && palAddr8) {
+      // 8-bit palettized — palette is 256 RGBQUAD entries (R, G, B, flags)
+      const palAddr = palAddr8;
+      for (let y = 0; y < h; y++) {
+        const rowOff = base + y * pitch;
+        for (let x = 0; x < w; x++) {
+          const idx = mem.readU8(rowOff + x);
+          const pe = palAddr + idx * 4;
+          // PALETTEENTRY: peRed, peGreen, peBlue, peFlags
+          const di = (y * w + x) * 4;
+          dst[di] = mem.readU8(pe);       // R
+          dst[di + 1] = mem.readU8(pe + 1); // G
+          dst[di + 2] = mem.readU8(pe + 2); // B
+          dst[di + 3] = 255;
+        }
+      }
+    } else if (bpp === 16) {
       // RGB565
       for (let y = 0; y < h; y++) {
         const rowOff = base + y * pitch;
@@ -218,10 +242,32 @@ export function registerDdraw(emu: Emulator): void {
       const dstRect = emu.readArg(1);
       const srcObj = emu.readArg(2);
       const srcRectPtr = emu.readArg(3);
+      const flags = emu.readArg(4);
+      const bltFxPtr = emu.readArg(5);
       const dstSurf = surfaces.get(thisPtr);
-      const srcSurf = srcObj ? surfaces.get(srcObj) : null;
-      if (dstSurf && srcSurf) {
-        bltSurfaces(dstSurf, dstRect, srcSurf, srcRectPtr);
+      if (!dstSurf) return DD_OK;
+      const DDBLT_COLORFILL = 0x00000400;
+      if ((flags & DDBLT_COLORFILL) && bltFxPtr) {
+        // Color fill — dwFillColor at offset 80 in DDBLTFX
+        const fillColor = emu.memory.readU32(bltFxPtr + 80);
+        const mem = emu.memory;
+        let dl = 0, dt = 0, dr = dstSurf.width, db = dstSurf.height;
+        if (dstRect) {
+          dl = mem.readU32(dstRect) | 0; dt = mem.readU32(dstRect + 4) | 0;
+          dr = mem.readU32(dstRect + 8) | 0; db = mem.readU32(dstRect + 12) | 0;
+        }
+        const bytesPerPixel = dstSurf.bpp / 8;
+        for (let y = dt; y < db; y++) {
+          const rowOff = dstSurf.pixelData + y * dstSurf.pitch + dl * bytesPerPixel;
+          for (let x = 0; x < (dr - dl); x++) {
+            if (bytesPerPixel === 1) mem.writeU8(rowOff + x, fillColor & 0xFF);
+            else if (bytesPerPixel === 2) mem.writeU16(rowOff + x * 2, fillColor & 0xFFFF);
+            else if (bytesPerPixel === 4) mem.writeU32(rowOff + x * 4, fillColor);
+          }
+        }
+      } else {
+        const srcSurf = srcObj ? surfaces.get(srcObj) : null;
+        if (srcSurf) bltSurfaces(dstSurf, dstRect, srcSurf, srcRectPtr);
       }
       return DD_OK;
     };
@@ -331,8 +377,26 @@ export function registerDdraw(emu: Emulator): void {
     handlers[28] = () => DD_OK;
     // SetColorKey (29) - this, flags, colorKey
     handlers[29] = () => DD_OK;
+    // SetPalette (31) - this, palette
+    handlers[31] = () => {
+      const thisPtr = emu.readArg(0);
+      const palObj = emu.readArg(1);
+      const surf = surfaces.get(thisPtr);
+      if (surf && palObj) {
+        const palData = paletteDataMap.get(palObj);
+        if (palData !== undefined) surf.paletteAddr = palData;
+      }
+      return DD_OK;
+    };
     // Unlock (32) - this, rect
-    handlers[32] = () => DD_OK;
+    handlers[32] = () => {
+      const thisPtr = emu.readArg(0);
+      const surf = surfaces.get(thisPtr);
+      if (surf && surf.isPrimary) {
+        blitToCanvas(surf);
+      }
+      return DD_OK;
+    };
 
     const objAddr = allocComObject(emu, 'DDS7', DDS7_VTABLE_SIZE, handlers);
     surfaceRef.objAddr = objAddr;
@@ -357,6 +421,8 @@ export function registerDdraw(emu: Emulator): void {
     setComThunkStackBytes(objAddr, 27, 1); // Restore(this)
     setComThunkStackBytes(objAddr, 28, 2); // SetClipper(this, clipper)
     setComThunkStackBytes(objAddr, 29, 3); // SetColorKey(this, flags, ck)
+    setComThunkStackBytes(objAddr, 30, 3); // SetOverlayPosition(this, x, y)
+    setComThunkStackBytes(objAddr, 31, 2); // SetPalette(this, palette)
     setComThunkStackBytes(objAddr, 32, 2); // Unlock(this, rect)
 
     const surf: DDSurface = { objAddr, width, height, pitch, bpp, pixelData, isPrimary };
@@ -378,19 +444,29 @@ export function registerDdraw(emu: Emulator): void {
     emu.memory.writeU32(ptr + 36, pixelData); // lpSurface
     // DDPIXELFORMAT at offset 72
     emu.memory.writeU32(ptr + 72, 32);     // dwSize
-    emu.memory.writeU32(ptr + 76, DDPF_RGB);
-    emu.memory.writeU32(ptr + 80, 0);      // fourCC
-    emu.memory.writeU32(ptr + 84, bpp);    // rgbBitCount
-    if (bpp === 32) {
-      emu.memory.writeU32(ptr + 88, 0x00FF0000);
-      emu.memory.writeU32(ptr + 92, 0x0000FF00);
-      emu.memory.writeU32(ptr + 96, 0x000000FF);
-      emu.memory.writeU32(ptr + 100, 0xFF000000);
-    } else if (bpp === 16) {
-      emu.memory.writeU32(ptr + 88, 0xF800);
-      emu.memory.writeU32(ptr + 92, 0x07E0);
-      emu.memory.writeU32(ptr + 96, 0x001F);
+    if (bpp === 8) {
+      emu.memory.writeU32(ptr + 76, DDPF_PALETTEINDEXED8 | DDPF_RGB);
+      emu.memory.writeU32(ptr + 80, 0);
+      emu.memory.writeU32(ptr + 84, 8);
+      emu.memory.writeU32(ptr + 88, 0);
+      emu.memory.writeU32(ptr + 92, 0);
+      emu.memory.writeU32(ptr + 96, 0);
       emu.memory.writeU32(ptr + 100, 0);
+    } else {
+      emu.memory.writeU32(ptr + 76, DDPF_RGB);
+      emu.memory.writeU32(ptr + 80, 0);      // fourCC
+      emu.memory.writeU32(ptr + 84, bpp);    // rgbBitCount
+      if (bpp === 32) {
+        emu.memory.writeU32(ptr + 88, 0x00FF0000);
+        emu.memory.writeU32(ptr + 92, 0x0000FF00);
+        emu.memory.writeU32(ptr + 96, 0x000000FF);
+        emu.memory.writeU32(ptr + 100, 0xFF000000);
+      } else if (bpp === 16) {
+        emu.memory.writeU32(ptr + 88, 0xF800);
+        emu.memory.writeU32(ptr + 92, 0x07E0);
+        emu.memory.writeU32(ptr + 96, 0x001F);
+        emu.memory.writeU32(ptr + 100, 0);
+      }
     }
     // DDSCAPS2 at offset 104
     emu.memory.writeU32(ptr + 104, 0);
@@ -409,7 +485,13 @@ export function registerDdraw(emu: Emulator): void {
     const handlers: Record<number, () => number> = {};
 
     // QueryInterface (0) - this, riid, ppv
-    handlers[0] = () => DDERR_GENERIC;
+    handlers[0] = () => {
+      const thisPtr = emu.readArg(0);
+      const ppv = emu.readArg(2);
+      // Return the same object for any interface query (IDirectDraw, IDirectDraw2, IDirectDraw4, IDirectDraw7)
+      if (ppv) emu.memory.writeU32(ppv, thisPtr);
+      return DD_OK;
+    };
     // AddRef (1)
     handlers[1] = () => 2;
     // Release (2)
@@ -430,6 +512,55 @@ export function registerDdraw(emu: Emulator): void {
       setComThunkStackBytes(clipObj, 2, 1);
       setComThunkStackBytes(clipObj, 8, 3); // SetHWnd(this, flags, hwnd)
       emu.memory.writeU32(outPtr, clipObj);
+      return DD_OK;
+    };
+    // CreatePalette (5) - this, flags, colorArray, outPalette, outer
+    handlers[5] = () => {
+      const flags = emu.readArg(1);
+      const colorArrayPtr = emu.readArg(2);
+      const outPtr = emu.readArg(3);
+      console.log(`[DDRAW] CreatePalette flags=0x${flags.toString(16)} colorArray=0x${colorArrayPtr.toString(16)}`);
+
+      // Store palette entries (256 RGBQUAD entries = 1024 bytes)
+      const paletteData = emu.allocHeap(1024);
+      if (colorArrayPtr) {
+        for (let i = 0; i < 1024; i++) {
+          emu.memory.writeU8(paletteData + i, emu.memory.readU8(colorArrayPtr + i));
+        }
+      }
+
+      const palHandlers: Record<number, () => number> = {};
+      palHandlers[0] = () => DDERR_GENERIC; // QI
+      palHandlers[1] = () => 2; // AddRef
+      palHandlers[2] = () => 0; // Release
+      palHandlers[3] = () => DD_OK; // GetCaps
+      palHandlers[4] = () => DD_OK; // GetEntries
+      palHandlers[5] = () => DD_OK; // Initialize
+      // SetEntries (6) - this, flags, start, count, entries
+      palHandlers[6] = () => {
+        const start = emu.readArg(2);
+        const count = emu.readArg(3);
+        const entriesPtr = emu.readArg(4);
+        if (entriesPtr) {
+          for (let i = 0; i < count * 4; i++) {
+            emu.memory.writeU8(paletteData + start * 4 + i, emu.memory.readU8(entriesPtr + i));
+          }
+        }
+        return DD_OK;
+      };
+
+      const palObj = allocComObject(emu, 'DDP', DDP_VTABLE_SIZE, palHandlers);
+      setComThunkStackBytes(palObj, 0, 3);  // QI
+      setComThunkStackBytes(palObj, 1, 1);  // AddRef
+      setComThunkStackBytes(palObj, 2, 1);  // Release
+      setComThunkStackBytes(palObj, 3, 2);  // GetCaps(this, caps)
+      setComThunkStackBytes(palObj, 4, 5);  // GetEntries(this, flags, start, count, entries)
+      setComThunkStackBytes(palObj, 5, 2);  // Initialize(this, dd)
+      setComThunkStackBytes(palObj, 6, 5);  // SetEntries(this, flags, start, count, entries)
+
+      paletteDataMap.set(palObj, paletteData);
+      lastPaletteData = paletteData;
+      if (outPtr) emu.memory.writeU32(outPtr, palObj);
       return DD_OK;
     };
     // CreateSurface (6) - this, desc, outSurface, outer
@@ -463,8 +594,56 @@ export function registerDdraw(emu: Emulator): void {
 
       return DD_OK;
     };
+    // EnumDisplayModes (8) - this, flags, surfDesc, context, callback
+    handlers[8] = () => {
+      const context = emu.readArg(3);
+      const callback = emu.readArg(4);
+      console.log(`[DDRAW] EnumDisplayModes callback=0x${callback.toString(16)} context=0x${context.toString(16)}`);
+      if (!callback) return DD_OK;
+      const DDENUMRET_OK = 1;
+      const modes = [
+        { w: 640, h: 480, bpp: 8 },
+        { w: 640, h: 480, bpp: 16 },
+        { w: 640, h: 480, bpp: 32 },
+        { w: 800, h: 600, bpp: 8 },
+        { w: 800, h: 600, bpp: 16 },
+        { w: 800, h: 600, bpp: 32 },
+        { w: 1024, h: 768, bpp: 16 },
+        { w: 1024, h: 768, bpp: 32 },
+      ];
+      const modeDescPtr = emu.allocHeap(124);
+      for (const mode of modes) {
+        const pitch = ((mode.w * (mode.bpp / 8) + 3) & ~3);
+        writeSurfaceDesc(modeDescPtr, mode.w, mode.h, pitch, mode.bpp, 0);
+        // HRESULT CALLBACK EnumModesCallback(LPDDSURFACEDESC2, LPVOID)
+        const ret = emu.callCallback(callback, [modeDescPtr, context]);
+        console.log(`[DDRAW] EnumDisplayModes callback returned ${ret} for ${mode.w}x${mode.h}x${mode.bpp}`);
+        if (ret !== DDENUMRET_OK) break;
+      }
+      return DD_OK;
+    };
     // GetCaps (11) - this, driverCaps, helCaps
-    handlers[11] = () => DD_OK;
+    handlers[11] = () => {
+      const driverCapsPtr = emu.readArg(1);
+      const helCapsPtr = emu.readArg(2);
+      // Fill in minimal DDCAPS structure
+      // dwSize at offset 0, dwCaps at offset 4
+      if (driverCapsPtr) {
+        const size = emu.memory.readU32(driverCapsPtr);
+        // Zero it out then set dwCaps
+        for (let i = 4; i < Math.min(size, 380); i += 4) emu.memory.writeU32(driverCapsPtr + i, 0);
+        emu.memory.writeU32(driverCapsPtr + 4, 0x00000040); // DDCAPS_BLT
+        // dwVidMemTotal at offset 24
+        emu.memory.writeU32(driverCapsPtr + 24, 64 * 1024 * 1024); // 64MB
+        // dwVidMemFree at offset 28
+        emu.memory.writeU32(driverCapsPtr + 28, 60 * 1024 * 1024);
+      }
+      if (helCapsPtr) {
+        const size = emu.memory.readU32(helCapsPtr);
+        for (let i = 4; i < Math.min(size, 380); i += 4) emu.memory.writeU32(helCapsPtr + i, 0);
+      }
+      return DD_OK;
+    };
     // GetDisplayMode (12) - this, surfDesc
     handlers[12] = () => {
       const descPtr = emu.readArg(1);
@@ -493,6 +672,14 @@ export function registerDdraw(emu: Emulator): void {
     };
     // WaitForVerticalBlank (22) - this, flags, event
     handlers[22] = () => DD_OK;
+    // GetAvailableVidMem (23) - this, caps, total, free
+    handlers[23] = () => {
+      const totalPtr = emu.readArg(2);
+      const freePtr = emu.readArg(3);
+      if (totalPtr) emu.memory.writeU32(totalPtr, 64 * 1024 * 1024); // 64MB
+      if (freePtr) emu.memory.writeU32(freePtr, 60 * 1024 * 1024); // 60MB free
+      return DD_OK;
+    };
     // TestCooperativeLevel (26)
     handlers[26] = () => DD_OK;
 
@@ -503,13 +690,16 @@ export function registerDdraw(emu: Emulator): void {
     setComThunkStackBytes(ddObj, 1, 1);  // AddRef
     setComThunkStackBytes(ddObj, 2, 1);  // Release
     setComThunkStackBytes(ddObj, 4, 4);  // CreateClipper(this, flags, out, outer)
+    setComThunkStackBytes(ddObj, 5, 5);  // CreatePalette(this, flags, colorArray, out, outer)
     setComThunkStackBytes(ddObj, 6, 4);  // CreateSurface(this, desc, out, outer)
+    setComThunkStackBytes(ddObj, 8, 5);  // EnumDisplayModes(this, flags, desc, ctx, cb)
     setComThunkStackBytes(ddObj, 11, 3); // GetCaps(this, driver, hel)
     setComThunkStackBytes(ddObj, 12, 2); // GetDisplayMode(this, desc)
     setComThunkStackBytes(ddObj, 19, 1); // RestoreDisplayMode(this)
     setComThunkStackBytes(ddObj, 20, 3); // SetCooperativeLevel(this, hwnd, flags)
     setComThunkStackBytes(ddObj, 21, 6); // SetDisplayMode(this, w, h, bpp, refresh, flags)
     setComThunkStackBytes(ddObj, 22, 3); // WaitForVerticalBlank(this, flags, event)
+    setComThunkStackBytes(ddObj, 23, 4); // GetAvailableVidMem(this, caps, total, free)
     setComThunkStackBytes(ddObj, 26, 1); // TestCooperativeLevel(this)
 
     // Write object pointer to output
@@ -520,9 +710,18 @@ export function registerDdraw(emu: Emulator): void {
   }, stackBytes: 4 * 4 });
 
   // DirectDrawCreate(lpGUID, lplpDD, pUnkOuter) → HRESULT
+  // IDirectDraw (not IDirectDraw7): SetDisplayMode takes 3 args, not 5
   emu.apiDefs.set('DDRAW.DLL:DirectDrawCreate', { handler: () => {
-    // Redirect to DirectDrawCreateEx-like behavior
+    const lplpDD = emu.readArg(1);
+    // Create via DirectDrawCreateEx handler (reuses same logic)
     const ddCreateEx = emu.apiDefs.get('DDRAW.DLL:DirectDrawCreateEx');
-    return ddCreateEx ? ddCreateEx.handler(emu) : 0;
+    if (!ddCreateEx) return DDERR_GENERIC;
+    // Temporarily store lplpDD for the inner handler
+    const result = ddCreateEx.handler(emu);
+    if (result !== DD_OK) return result;
+    // Patch SetDisplayMode to expect IDirectDraw args (this, w, h, bpp) = 4 args
+    const ddObj = emu.memory.readU32(lplpDD);
+    setComThunkStackBytes(ddObj, 21, 4); // IDirectDraw::SetDisplayMode(this, w, h, bpp)
+    return DD_OK;
   }, stackBytes: 3 * 4 });
 }

@@ -589,6 +589,9 @@ export function registerBitmap(emu: Emulator): void {
     return 1;
   });
 
+  // MaskBlt(hdcDest, xDest, yDest, width, height, hdcSrc, xSrc, ySrc, hbmMask, xMask, yMask, rop)
+  gdi32.register('MaskBlt', 12, () => 0);
+
   gdi32.register('PatBlt', 6, () => {
     const hdc = emu.readArg(0);
     const x = emu.readArg(1) | 0;

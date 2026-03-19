@@ -66,6 +66,7 @@ interface WindowProps {
   clientW?: number;
   clientH?: number;
   iconUrl?: string | null;
+  iconElement?: ComponentChildren;
   focused?: boolean;
   maximized?: boolean;
   minimized?: boolean;
@@ -91,7 +92,7 @@ interface WindowProps {
 }
 
 export function Window({
-  title, style: wStyle, clientW, clientH, iconUrl,
+  title, style: wStyle, clientW, clientH, iconUrl, iconElement,
   focused = true, maximized, minimized,
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
@@ -210,12 +211,14 @@ export function Window({
             padding: '2px 2px', display: 'flex', alignItems: 'center',
             height: '20px', userSelect: 'none',
           }}>
-          {iconUrl && (
+          {iconUrl ? (
             <img src={iconUrl} style={{
               display: 'inline-block', width: '16px', height: '16px', marginRight: '3px',
               flexShrink: 0, imageRendering: 'pixelated',
             }} />
-          )}
+          ) : iconElement ? (
+            <span style={{ display: 'inline-flex', width: '16px', height: '16px', marginRight: '3px', flexShrink: 0 }}>{iconElement}</span>
+          ) : null}
           <span style={{
             flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', letterSpacing: '0.2px', lineHeight: '16px',
           }}>

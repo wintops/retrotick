@@ -21,6 +21,7 @@ import { WelcomeWindow } from './WelcomeWindow';
 import { RegionalSettingsWindow } from './RegionalSettingsWindow';
 import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
+import { FOLDER_ICON_16, EXE_ICON_16 } from './DesktopIcon';
 import { MessageBox, MB_YESNO, MB_ICONQUESTION, IDYES } from './win2k/MessageBox';
 import { ProcessRegistry } from '../lib/emu/emulator';
 import type { Emulator } from '../lib/emu/emulator';
@@ -279,6 +280,7 @@ export function App() {
       id: app.id,
       title: windowTitles.get(app.id) || app.exeName,
       iconUrl: windowIcons.get(app.id),
+      iconElement: !windowIcons.get(app.id) ? EXE_ICON_16 : undefined,
       minimized: minimizedApps.has(app.id),
       lang: appLangs.get(app.id) || undefined,
     })),
@@ -286,12 +288,14 @@ export function App() {
       id: app.id,
       title: windowTitles.get(app.id) || app.exeName,
       iconUrl: windowIcons.get(app.id),
+      iconElement: !windowIcons.get(app.id) ? EXE_ICON_16 : undefined,
       minimized: minimizedApps.has(app.id),
     })),
     ...openFolders.map(folder => ({
       id: folder.id,
       title: windowTitles.get(folder.id) || displayName(folder.path),
       iconUrl: null as string | null | undefined,
+      iconElement: FOLDER_ICON_16,
       minimized: minimizedApps.has(folder.id),
     })),
     ...(showWelcome ? [{
@@ -307,6 +311,11 @@ export function App() {
       minimized: minimizedApps.has(regionalSettingsId.current),
     }] : []),
   ];
+
+  useEffect(() => {
+    const focused = allApps.find(a => a.id === focusedAppId);
+    document.title = focused ? `${focused.title} - RetroTick` : 'RetroTick';
+  }, [focusedAppId, windowTitles, allApps]);
 
   return (
     <div class="w-full h-screen" style={{ display: 'flex', flexDirection: 'column', cursor: loadingAppIds.size > 0 ? 'progress' : undefined }}>

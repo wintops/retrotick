@@ -372,7 +372,19 @@ export function registerWinmm(emu: Emulator): void {
     const data = findWavResource(emu, name);
     if (data) return data;
 
-    // Could be a filename — we don't have a filesystem, return null
+    // Try as a filename — resolve path and look up in filesystem/additionalFiles
+    const resolved = emu.resolvePath(name);
+    const fileInfo = emu.fs.findFile(resolved, emu.additionalFiles);
+    if (fileInfo) {
+      if (fileInfo.source === 'additional') {
+        const ab = emu.additionalFiles.get(fileInfo.name);
+        if (ab) return new Uint8Array(ab);
+      } else if (fileInfo.source === 'external') {
+        const ext = emu.fs.externalFiles.get(resolved.toUpperCase());
+        if (ext) return ext.data;
+      }
+    }
+
     console.log(`[WINMM] PlaySound: cannot find sound "${name}"`);
     return null;
   }
@@ -452,6 +464,36 @@ export function registerWinmm(emu: Emulator): void {
 
   // timeEndPeriod(uPeriod) → MMRESULT
   winmm.register('timeEndPeriod', 1, () => 0);
+
+  // timeSetEvent(uDelay, uResolution, lpTimeProc, dwUser, fuEvent) → timerID
+  const TIME_ONESHOT = 0x0000;
+  const TIME_PERIODIC = 0x0001;
+  let nextTimerId = 1;
+  winmm.register('timeSetEvent', 5, () => {
+    const uDelay = emu.readArg(0);
+    const _uResolution = emu.readArg(1);
+    const lpTimeProc = emu.readArg(2);
+    const dwUser = emu.readArg(3);
+    const fuEvent = emu.readArg(4);
+    const id = nextTimerId++;
+    const periodic = (fuEvent & TIME_PERIODIC) !== 0;
+    emu._mmTimers.set(id, {
+      callback: lpTimeProc,
+      dwUser,
+      delay: Math.max(uDelay, 1),
+      periodic,
+      nextFire: Date.now() + uDelay,
+    });
+    console.log(`[WINMM] timeSetEvent id=${id} delay=${uDelay} periodic=${periodic} callback=0x${lpTimeProc.toString(16)}`);
+    return id;
+  });
+
+  // timeKillEvent(uTimerID) → MMRESULT
+  winmm.register('timeKillEvent', 1, () => {
+    const id = emu.readArg(0);
+    emu._mmTimers.delete(id);
+    return 0;
+  });
 
   // MCI — stub: return 0 (success, no-op)
   winmm.register('mciSendCommandA', 4, () => 0);
@@ -1066,4 +1108,12 @@ export function registerWinmm(emu: Emulator): void {
 
   winmm.register('mmioGetInfo', 3, () => 0);
   winmm.register('mmioSetInfo', 3, () => 0);
+
+  // Joystick APIs
+  const JOYERR_UNPLUGGED = 167;
+  winmm.register('joyGetNumDevs', 0, () => 0); // no joysticks
+  winmm.register('joyGetDevCapsA', 3, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetDevCapsW', 3, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetPos', 2, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetPosEx', 2, () => JOYERR_UNPLUGGED);
 }

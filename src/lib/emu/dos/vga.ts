@@ -130,8 +130,11 @@ export class VGAState {
   framebuffer: ImageData | null = null;
   dirty = false;
 
-  // VGA retrace counter for port 0x3DA
-  private retraceCounter = 0;
+  // VGA retrace timing — time-based to avoid tearing
+  private retraceCounter = 0;     // fallback counter for non-time-aware code
+  private lastVblankSync = false;  // was previous 0x3DA read in VBlank?
+  pendingSync = false;             // set when VBlank starts; tick should sync & present
+  lastSyncTime = 0;                // performance.now() of last syncGraphics call
 
   constructor() {
     this.initRegsForMode(0x03);
@@ -380,12 +383,24 @@ export class VGAState {
         return this.crtcIndex;
       case 0x3D5: // CRTC data
         return this.crtcIndex < this.crtcRegs.length ? this.crtcRegs[this.crtcIndex] : 0;
-      case 0x3DA: // Input status register 1 — retrace simulation
+      case 0x3DA: { // Input status register 1 — time-based retrace simulation
         this.atcFlipFlop = false; // reading 0x3DA resets ATC flip-flop
-        this.retraceCounter++;
-        const inVblank = (this.retraceCounter % 70) >= 60;
-        const inHblank = !inVblank && (this.retraceCounter % 3) === 0;
+        // 60 Hz frame = ~16.67ms. VBlank occupies last ~1.4ms (lines 480-524 of 525).
+        // Use real time so games that wait for VBlank get correct timing.
+        const frameMs = 16.667;
+        const vblankStartFrac = 0.915; // ~91.5% of frame is active display
+        const t = performance.now() % frameMs;
+        const frac = t / frameMs;
+        const inVblank = frac >= vblankStartFrac;
+        const inHblank = !inVblank && (this.retraceCounter++ % 3) === 0;
+        // On VBlank entry: VRAM contains a complete frame — schedule sync.
+        // This ensures putImageData sees a fully written framebuffer.
+        if (inVblank && !this.lastVblankSync) {
+          this.pendingSync = true;
+        }
+        this.lastVblankSync = inVblank;
         return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
+      }
       case 0x3C9: { // DAC data read
         const val = this.palette[this.dacReadIndex * 3 + this.dacComponent];
         this.dacComponent++;

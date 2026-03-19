@@ -13,4 +13,11 @@ export function registerImm32(emu: Emulator): void {
   imm32.register('ImmSetCompositionFontW', 2, () => 0);
   imm32.register('ImmGetCompositionStringW', 4, () => 0);
   imm32.register('ImmAssociateContext', 2, () => 0);
+  // A variants
+  imm32.register('ImmSetCompositionFontA', 2, () => 0);
+  imm32.register('ImmGetCompositionStringA', 4, () => 0);
+  // IME status
+  imm32.register('ImmGetConversionStatus', 3, () => 0);
+  imm32.register('ImmSetConversionStatus', 3, () => 0);
+  imm32.register('ImmIsIME', 1, () => 0); // no IME active
 }

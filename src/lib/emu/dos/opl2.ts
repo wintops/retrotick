@@ -1,83 +1,97 @@
 /**
- * OPL2 (YM3812) FM synthesis emulation.
+ * OPL2 (YM3812) FM synthesis emulation — enhanced.
  *
  * Emulates the AdLib-compatible FM chip at ports 0x388-0x389.
  * 9 channels, 18 operators, 4 waveforms, envelope generation with
  * attack/decay/sustain/release, feedback, FM/additive connection modes,
  * tremolo (AM), vibrato, KSL, EG type, percussion mode, and CSM.
+ *
+ * Enhancements beyond real hardware:
+ * - 2x oversampling (reduces FM aliasing artifacts, especially in bass)
+ * - Stereo channel spread (constant-power panning)
+ * - Gentle warm saturation (tanh)
+ * - Frequency-aware chorus (reduced on bass for tight low-end)
+ * - dB-domain envelope with 72 dB dynamic range (smooth decay tails)
+ * - Interpolated sine table + resampling
+ * - 2-pole Butterworth low-pass filter (~14 kHz)
+ * - Air shelf EQ (~10 kHz, +1.5 dB openness)
+ * - DC blocking high-pass filter (~5 Hz)
+ * - Freeverb-style stereo reverb (warm room ambience)
+ * - Even harmonic generation (tube-like warmth)
  */
 
+import { StereoReverb } from './reverb';
+
 const OPL_RATE = 49716; // OPL2 native sample rate
+const INTERNAL_RATE = OPL_RATE * 2; // 2x oversampling for FM anti-aliasing (cleaner bass)
 const NUM_CHANNELS = 9;
 const NUM_OPERATORS = 18;
 
-// Operator index within a channel: channel i → operators [CH_OP[i][0], CH_OP[i][1]]
+// Operator index within a channel: channel i -> operators [CH_OP[i][0], CH_OP[i][1]]
 const CH_OP: [number, number][] = [
   [0, 3], [1, 4], [2, 5], [6, 9], [7, 10], [8, 11], [12, 15], [13, 16], [14, 17],
 ];
 
-// Register offset → operator index mapping
+// Register offset -> operator index mapping
 const OP_OFFSET = [0, 1, 2, 3, 4, 5, -1, -1, 6, 7, 8, 9, 10, 11, -1, -1, 12, 13, 14, 15, 16, 17];
 
 // Multiplier table
 const MULTI = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 12, 12, 15, 15];
 
-// Sine table (10-bit, 1024 entries, output = 0..8191 representing -log2 attenuation)
+// Sine table (10-bit, 1024 entries)
 const SINE_TABLE = new Float64Array(1024);
 for (let i = 0; i < 1024; i++) {
   SINE_TABLE[i] = Math.sin((i + 0.5) * Math.PI / 512);
 }
 
-// FM modulation depth: operator output ±1 maps to ±MOD_DEPTH cycles of phase shift.
-// Real OPL2: ~4 cycles at max volume. This determines timbre richness.
+// FM modulation depth: operator output +/-1 maps to +/-MOD_DEPTH cycles of phase shift.
 const MOD_DEPTH = 4.0;
 
-// OPL2 envelope rate system: the 4-bit register value is combined with the
-// octave (block) and F-number to get an "effective rate" (0-63). The effective
-// rate indexes into 64-entry timing tables.
-//
-// effectiveRate = min(63, registerRate * 4 + Rof)
-// where Rof = (block*2 + fnum_bit) >> (KSR ? 0 : 2)
-//
-// Attack: time (ms) from max attenuation to zero. Grouped in fours — each
-// group has the same base time, with sub-rates giving slight variation.
-// Values derived from YM3812 application manual and die analysis.
+// ---- Stereo panning (constant-power) ----
+
+const CHANNEL_PAN = [-0.35, 0.25, -0.15, 0.35, 0.0, -0.25, 0.15, -0.10, 0.10];
+const PAN_L = new Float64Array(NUM_CHANNELS);
+const PAN_R = new Float64Array(NUM_CHANNELS);
+for (let i = 0; i < NUM_CHANNELS; i++) {
+  const theta = (CHANNEL_PAN[i] + 1) * Math.PI / 4;
+  PAN_L[i] = Math.cos(theta);
+  PAN_R[i] = Math.sin(theta);
+}
+
+// ---- Soft saturation (gentle warmth, preserves bass dynamics) ----
+
+const DRIVE = 1.15;
+const INV_TANH_DRIVE = 1 / Math.tanh(DRIVE);
+
+// ---- Chorus: per-channel slow LFO detuning ----
+
+const CHORUS_RATES = [0.31, 0.67, 0.43, 0.59, 0.37, 0.53, 0.47, 0.41, 0.61]; // Hz
+const CHORUS_DEPTH = 3; // +/- cents
+
+// ---- Envelope timing tables ----
+
 const ATTACK_TIMES = new Float64Array(64);
 const DECAY_TIMES = new Float64Array(64);
-// Rate 0-3: infinity (envelope frozen)
 for (let i = 0; i < 4; i++) { ATTACK_TIMES[i] = Infinity; DECAY_TIMES[i] = Infinity; }
-// Rates 4-63: each group of 4 halves the time from the previous group
-// Base time at rate 4: attack ~2826ms, decay ~39280ms (from OPL2 datasheet)
 for (let i = 4; i < 64; i++) {
-  const group = i >> 2;            // which group (1-15)
-  const sub = i & 3;              // position within group (0-3)
-  const groupScale = Math.pow(2, -(group - 1)); // halves each group
-  // Sub-rate scaling: 0=base, 1=~91.7%, 2=~83.3%, 3=~75%
+  const group = i >> 2;
+  const sub = i & 3;
+  const groupScale = Math.pow(2, -(group - 1));
   const subScale = 1 - sub / 12;
   ATTACK_TIMES[i] = 2826 * groupScale * subScale;
   DECAY_TIMES[i] = 39280 * groupScale * subScale;
 }
-// Rates 60-63: instant (effectively zero time)
 for (let i = 60; i < 64; i++) { ATTACK_TIMES[i] = 0; DECAY_TIMES[i] = 0; }
 
 // ---- KSL (Key Scale Level) ----
 
-// KSL ROM table (from OPL2 die analysis, indexed by fnum bits 9-6)
 const KSL_ROM = [0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64];
-
-// KSL shift amounts indexed by register bits (D7:D6 of reg 0x40):
-//   0 (00) = 0 dB/oct    → shift 31 (effectively 0)
-//   1 (01) = 3.0 dB/oct  → shift 1
-//   2 (10) = 1.5 dB/oct  → shift 2
-//   3 (11) = 6.0 dB/oct  → shift 0
 const KSL_SHIFT = [31, 1, 2, 0];
 
 // ---- LFO frequencies ----
 
-// Tremolo (AM): ~3.7 Hz triangle wave
-const TREMOLO_FREQ = OPL_RATE / 13432;
-// Vibrato: ~6.1 Hz triangle wave
-const VIBRATO_FREQ = OPL_RATE / 8192;
+const TREMOLO_FREQ = OPL_RATE / 13432; // ~3.7 Hz
+const VIBRATO_FREQ = OPL_RATE / 8192;  // ~6.1 Hz
 
 // ---- Operator state ----
 
@@ -87,12 +101,19 @@ const ENV_DECAY = 2;
 const ENV_SUSTAIN = 3;
 const ENV_RELEASE = 4;
 
+const SILENCE_DB = 72; // 72 dB dynamic range (smooth decay tails on good headphones)
+
+// Anti-click ramp duration in samples at INTERNAL_RATE (~0.5ms)
+const CLICK_RAMP_SAMPLES = Math.round(INTERNAL_RATE * 0.0005);
+
 interface OpState {
   phase: number;          // 0..1 accumulator
-  envLevel: number;       // 0 = max volume, 1 = silent
+  envLevel: number;       // dB attenuation: 0 = max volume, SILENCE_DB = silent
   envState: number;       // ENV_*
   feedback0: number;      // previous output for feedback
   feedback1: number;      // previous-previous output for feedback
+  rampPos: number;        // anti-click ramp: 0=silent, CLICK_RAMP_SAMPLES=full
+  rampDir: number;        // +1 = ramping up (key-on), -1 = ramping down (key-off), 0 = stable
 }
 
 // ---- OPL2 Emulator ----
@@ -102,9 +123,34 @@ export class OPL2 {
   private regIndex = 0; // address latch
   private ops: OpState[] = [];
   private sampleRate: number;
-  private outputBuf: Float32Array;
-  private bufPos = 0;
   private accumPhase = 0; // fractional resampling accumulator
+  // 4-point history for cubic Hermite interpolation (newest = h3)
+  private h0L = 0; private h1L = 0; private h2L = 0; private h3L = 0;
+  private h0R = 0; private h1R = 0; private h2R = 0; private h3R = 0;
+  private currL = 0; private currR = 0;
+  // 2-pole Butterworth LPF state (Direct Form II Transposed)
+  private lpS1L = 0; private lpS2L = 0;
+  private lpS1R = 0; private lpS2R = 0;
+  private lpA1 = 0; private lpA2 = 0; private lpB0 = 0;
+  // DC blocking HPF state: y[n] = x[n] - x[n-1] + R*y[n-1]
+  private dcPrevInL = 0; private dcPrevOutL = 0;
+  private dcPrevInR = 0; private dcPrevOutR = 0;
+  private dcR: number = 0;
+  // Analog warmth: gentle mid-bass peaking EQ (~120 Hz, +2 dB)
+  private wS1L = 0; private wS2L = 0;
+  private wS1R = 0; private wS2R = 0;
+  private wB0 = 0; private wB1 = 0; private wB2 = 0;
+  private wA1 = 0; private wA2 = 0;
+  // Air shelf EQ: high shelf at 10 kHz, +1.5 dB (openness/transparency)
+  private airS1L = 0; private airS2L = 0;
+  private airS1R = 0; private airS2R = 0;
+  private airB0 = 0; private airB1 = 0; private airB2 = 0;
+  private airA1 = 0; private airA2 = 0;
+  // Stereo reverb
+  private reverb: StereoReverb;
+  // TPDF dither PRNG state (simple xorshift32)
+  private ditherState = 0x12345678;
+  private chorusPhase = new Float64Array(NUM_CHANNELS);
 
   // Global LFO state
   private tremoloPhase = 0;   // 0..1 triangle at ~3.7 Hz
@@ -130,14 +176,64 @@ export class OPL2 {
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
-    this.outputBuf = new Float32Array(4096);
+    this.reverb = new StereoReverb(sampleRate);
+    this.computeFilterCoeffs(sampleRate);
     for (let i = 0; i < NUM_OPERATORS; i++) {
-      this.ops.push({ phase: 0, envLevel: 1, envState: ENV_OFF, feedback0: 0, feedback1: 0 });
+      this.ops.push({ phase: 0, envLevel: SILENCE_DB, envState: ENV_OFF, feedback0: 0, feedback1: 0, rampPos: 0, rampDir: 0 });
+    }
+    for (let i = 0; i < NUM_CHANNELS; i++) {
+      this.chorusPhase[i] = i / NUM_CHANNELS;
     }
   }
 
+  /** Compute 2-pole Butterworth LPF + DC blocking HPF coefficients. */
+  private computeFilterCoeffs(rate: number): void {
+    // 2-pole Butterworth LPF at 14 kHz (sharper rolloff than 1-pole, preserves bass)
+    const fc = 14000;
+    const w0 = 2 * Math.PI * fc / rate;
+    const alpha = Math.sin(w0) / (2 * Math.SQRT2); // Q = 1/sqrt(2) for Butterworth
+    const cosw0 = Math.cos(w0);
+    const a0 = 1 + alpha;
+    this.lpB0 = ((1 - cosw0) / 2) / a0;
+    // lpB1 = (1 - cosw0) / a0 = 2 * lpB0, lpB2 = lpB0 (symmetric)
+    this.lpA1 = (-2 * cosw0) / a0;
+    this.lpA2 = (1 - alpha) / a0;
+    // DC blocking HPF: y[n] = x[n] - x[n-1] + R * y[n-1], R close to 1
+    this.dcR = 1 - 2 * Math.PI * 5 / rate; // ~5 Hz cutoff
+    // Air shelf: high shelf at 10 kHz, +1.5 dB (adds openness/transparency)
+    const airFreq = 10000, airGain = 1.5;
+    const airA = Math.pow(10, airGain / 40);
+    const airW0 = 2 * Math.PI * airFreq / rate;
+    const airAlpha = Math.sin(airW0) / (2 * 0.7); // Q=0.7
+    const airCos = Math.cos(airW0);
+    const airA0 = (airA + 1) - (airA - 1) * airCos + 2 * Math.sqrt(airA) * airAlpha;
+    this.airB0 = (airA * ((airA + 1) + (airA - 1) * airCos + 2 * Math.sqrt(airA) * airAlpha)) / airA0;
+    this.airB1 = (-2 * airA * ((airA - 1) + (airA + 1) * airCos)) / airA0;
+    this.airB2 = (airA * ((airA + 1) + (airA - 1) * airCos - 2 * Math.sqrt(airA) * airAlpha)) / airA0;
+    this.airA1 = (2 * ((airA - 1) - (airA + 1) * airCos)) / airA0;
+    this.airA2 = ((airA + 1) - (airA - 1) * airCos - 2 * Math.sqrt(airA) * airAlpha) / airA0;
+
+    // Analog warmth: peaking EQ at 120 Hz, +2 dB, Q=0.8
+    // Simulates the mid-bass body of real AdLib analog output stage
+    const wFreq = 120, wGain = 2, wQ = 0.8;
+    const wA = Math.pow(10, wGain / 40); // sqrt of linear gain
+    const wW0 = 2 * Math.PI * wFreq / rate;
+    const wAlpha = Math.sin(wW0) / (2 * wQ);
+    const wCos = Math.cos(wW0);
+    const wA0 = 1 + wAlpha / wA;
+    this.wB0 = (1 + wAlpha * wA) / wA0;
+    this.wB1 = (-2 * wCos) / wA0;
+    this.wB2 = (1 - wAlpha * wA) / wA0;
+    this.wA1 = this.wB1; // same numerator/denominator cosine term
+    this.wA2 = (1 - wAlpha / wA) / wA0;
+  }
+
   /** Update the output sample rate (preserves all register/operator state). */
-  setSampleRate(rate: number): void { this.sampleRate = rate; }
+  setSampleRate(rate: number): void {
+    this.sampleRate = rate;
+    this.computeFilterCoeffs(rate);
+    this.reverb.setSampleRate(rate);
+  }
 
   writeAddr(val: number): void { this.regIndex = val & 0xFF; }
 
@@ -152,20 +248,19 @@ export class OPL2 {
           this.timer1IRQFired = true;
           this.onTimerIRQ();
         }
-        // CSM mode (reg 0x08 bit 7): key-on all channels when timer 1 overflows
         if (this.regs[0x08] & 0x80) {
           for (let ch = 0; ch < NUM_CHANNELS; ch++) {
             const [op1, op2] = CH_OP[ch];
             this.ops[op1].envState = ENV_ATTACK;
-            this.ops[op1].envLevel = 1;
+            this.ops[op1].envLevel = SILENCE_DB;
             this.ops[op2].envState = ENV_ATTACK;
-            this.ops[op2].envLevel = 1;
+            this.ops[op2].envLevel = SILENCE_DB;
           }
         }
       }
     }
     if (this.timer2Running && !this.timer2Expired) {
-      const period = (256 - this.timer2Value) * 0.320; // 320µs per tick, in ms
+      const period = (256 - this.timer2Value) * 0.320;
       if (now - this.timer2Start >= period) {
         this.timer2Expired = true;
         if (!this.timer2Mask && !this.timer2IRQFired) {
@@ -190,8 +285,9 @@ export class OPL2 {
   private keyOnOp(opIdx: number): void {
     const op = this.ops[opIdx];
     op.envState = ENV_ATTACK;
-    op.envLevel = 1;
+    op.envLevel = SILENCE_DB;
     op.phase = 0;
+    op.rampDir = 1; // fade in to prevent click
   }
 
   /** Trigger key-off for a single operator. */
@@ -247,13 +343,8 @@ export class OPL2 {
       const keyOn = (val >> 5) & 1;
       const wasOn = (old >> 5) & 1;
       const [op1, op2] = CH_OP[ch];
-      if (keyOn && !wasOn) {
-        this.keyOnOp(op1);
-        this.keyOnOp(op2);
-      } else if (!keyOn && wasOn) {
-        this.keyOffOp(op1);
-        this.keyOffOp(op2);
-      }
+      if (keyOn && !wasOn) { this.keyOnOp(op1); this.keyOnOp(op2); }
+      else if (!keyOn && wasOn) { this.keyOffOp(op1); this.keyOffOp(op2); }
     }
 
     // Rhythm mode key-on/off: register 0xBD bits 0-4 control percussion instruments
@@ -269,7 +360,7 @@ export class OPL2 {
         // Tom-tom (bit 2): channel 8, operator 1
         if ((val & 0x04) && !(old & 0x04)) this.keyOnOp(CH_OP[8][0]);
         if (!(val & 0x04) && (old & 0x04)) this.keyOffOp(CH_OP[8][0]);
-        // Top cymbal (bit 1): channel 8, operator 2
+        // Cymbal (bit 1): channel 8, operator 2
         if ((val & 0x02) && !(old & 0x02)) this.keyOnOp(CH_OP[8][1]);
         if (!(val & 0x02) && (old & 0x02)) this.keyOffOp(CH_OP[8][1]);
         // Hi-hat (bit 0): channel 7, operator 1
@@ -279,21 +370,18 @@ export class OPL2 {
     }
   }
 
-  // Get operator register values
   private opReg(opIdx: number, baseReg: number): number {
-    // Convert operator index to register offset
     const offset = opIdx < 6 ? opIdx : opIdx < 12 ? opIdx + 2 : opIdx + 4;
     return this.regs[baseReg + offset] ?? 0;
   }
 
   private getMulti(opIdx: number): number { return MULTI[this.opReg(opIdx, 0x20) & 0x0F]; }
-  /** Total level: 0-63, each step = 0.75 dB attenuation. Returns linear amplitude 0..1. */
+
   private getTotalLevel(opIdx: number): number {
     const tl = this.opReg(opIdx, 0x40) & 0x3F;
-    return Math.pow(10, -tl * 0.75 / 20); // dB to linear
+    return Math.pow(10, -tl * 0.75 / 20);
   }
 
-  /** Map operator index to its parent channel (0-8). */
   private opChannel(opIdx: number): number {
     for (let ch = 0; ch < NUM_CHANNELS; ch++) {
       if (CH_OP[ch][0] === opIdx || CH_OP[ch][1] === opIdx) return ch;
@@ -314,7 +402,7 @@ export class OPL2 {
     const fnumBit = nts
       ? (this.regs[0xB0 + ch] & 0x01)
       : ((this.regs[0xB0 + ch] >> 1) & 0x01);
-    const ksr = (this.opReg(opIdx, 0x20) >> 4) & 0x01;  // KSR bit from reg 0x20
+    const ksr = (this.opReg(opIdx, 0x20) >> 4) & 0x01; // KSR bit from reg 0x20
     const rof = (block * 2 + fnumBit) >> (ksr ? 0 : 2);
     return Math.min(63, regRate * 4 + rof);
   }
@@ -325,11 +413,10 @@ export class OPL2 {
   private getDecayRate(opIdx: number): number {
     return this.effectiveRate(opIdx, this.opReg(opIdx, 0x60) & 0x0F);
   }
-  /** Sustain level: 0-15, each step = 3 dB. Returns dB attenuation (0=max, 1=silent). */
+  /** Sustain level: 0-15, each step = 3 dB. Returns dB attenuation. */
   private getSustainLevel(opIdx: number): number {
     const sl = (this.opReg(opIdx, 0x80) >> 4) & 0x0F;
-    if (sl === 15) return 1; // -45 dB ≈ silent
-    return 1 - Math.pow(10, -sl * 3 / 20); // convert to envLevel (0=max, 1=silent)
+    return sl * 3; // 0=0dB, 15=45dB
   }
   private getReleaseRate(opIdx: number): number {
     return this.effectiveRate(opIdx, this.opReg(opIdx, 0x80) & 0x0F);
@@ -364,43 +451,49 @@ export class OPL2 {
     const level = Math.max(0, baseLevel);
     const shift = KSL_SHIFT[kslBits];
     const attenUnits = shift >= 31 ? 0 : level >> shift;
-    const attenDB = attenUnits * 0.1875; // each unit = 0.1875 dB
+    const attenDB = attenUnits * 0.1875;
     return Math.pow(10, -attenDB / 20);
   }
 
-  // Apply waveform shaping
+  private sineInterp(p: number): number {
+    const fidx = p * 1024;
+    const idx = fidx | 0;
+    const frac = fidx - idx;
+    return SINE_TABLE[idx & 1023] + (SINE_TABLE[(idx + 1) & 1023] - SINE_TABLE[idx & 1023]) * frac;
+  }
+
+  // Apply waveform shaping (with interpolated sine lookup)
   private waveform(phase: number, type: number): number {
-    // Normalize phase to 0..1
     const p = ((phase % 1) + 1) % 1;
-    const idx = (p * 1024) | 0;
     switch (type) {
-      case 0: return SINE_TABLE[idx & 1023]; // sine
-      case 1: return p < 0.5 ? SINE_TABLE[idx & 1023] : 0; // half-sine
-      case 2: return Math.abs(SINE_TABLE[idx & 1023]); // abs-sine
-      case 3: return (p % 0.5) < 0.25 ? SINE_TABLE[(idx * 2) & 1023] : 0; // quarter-sine (pulse)
-      default: return SINE_TABLE[idx & 1023];
+      case 0: return this.sineInterp(p);                                        // sine
+      case 1: return p < 0.5 ? this.sineInterp(p) : 0;                         // half-sine
+      case 2: return Math.abs(this.sineInterp(p));                              // abs-sine
+      case 3: return (p % 0.5) < 0.25 ? this.sineInterp((p * 2) % 1) : 0;     // quarter-sine (pulse)
+      default: return this.sineInterp(p);
     }
   }
 
-  // Update envelope for one operator, returns current amplitude (0..1)
-  // envLevel: 0 = max volume, 1 = silent (linear scale representing dB attenuation)
   private updateEnvelope(op: OpState, opIdx: number, dt: number): number {
     if (op.envState === ENV_OFF) return 0;
 
-    const tl = this.getTotalLevel(opIdx); // linear amplitude from total level
+    const tl = this.getTotalLevel(opIdx);
 
     switch (op.envState) {
       case ENV_ATTACK: {
+        // Real OPL2 attack: rate proportional to distance from target.
+        // dLevel/dt = -level * k, where k derived from attack time.
+        // This gives a fast initial rise that slows as it approaches full volume,
+        // matching the characteristic "punch" of real FM bass.
         const rate = this.getAttackRate(opIdx);
-        if (rate < 4) { op.envLevel = 1; break; }
+        if (rate < 4) { op.envLevel = SILENCE_DB; break; }
         if (rate >= 60) { op.envLevel = 0; op.envState = ENV_DECAY; break; }
         const attackTime = ATTACK_TIMES[rate] / 1000;
-        // Real OPL2 attack is exponential (fast start, slow finish).
-        // ODE: dL/dt = -ln(1+K)/(K*T) * (1 + K*L), where T=attackTime.
-        // K=7 gives a good match to the OPL2 capacitor-charge curve.
-        // Total time from L=1 to L=0 is exactly attackTime.
-        op.envLevel -= dt / attackTime * 0.2970 * (1 + 7 * op.envLevel);
-        if (op.envLevel <= 0) { op.envLevel = 0; op.envState = ENV_DECAY; }
+        // Solve for k: level(t) = SILENCE_DB * exp(-k*t), level(attackTime) ≈ 0
+        // k = ln(SILENCE_DB/threshold) / attackTime
+        const k = Math.log(SILENCE_DB / 0.005) / attackTime;
+        op.envLevel -= op.envLevel * k * dt;
+        if (op.envLevel < 0.005) { op.envLevel = 0; op.envState = ENV_DECAY; }
         break;
       }
       case ENV_DECAY: {
@@ -409,7 +502,7 @@ export class OPL2 {
         if (rate < 4) break;
         if (rate >= 60) { op.envLevel = sl; op.envState = ENV_SUSTAIN; break; }
         const decayTime = DECAY_TIMES[rate] / 1000;
-        op.envLevel += dt / decayTime;
+        op.envLevel += dt / decayTime * SILENCE_DB;
         if (op.envLevel >= sl) { op.envLevel = sl; op.envState = ENV_SUSTAIN; }
         break;
       }
@@ -419,11 +512,11 @@ export class OPL2 {
         if (egType === 0) {
           const rate = this.getReleaseRate(opIdx);
           if (rate >= 4) {
-            const relTime = (rate >= 60) ? 0 : DECAY_TIMES[rate] / 1000;
-            if (relTime <= 0) { op.envLevel = 1; op.envState = ENV_OFF; }
+            if (rate >= 60) { op.envLevel = SILENCE_DB; op.envState = ENV_OFF; }
             else {
-              op.envLevel += dt / relTime;
-              if (op.envLevel >= 1) { op.envLevel = 1; op.envState = ENV_OFF; }
+              const relTime = DECAY_TIMES[rate] / 1000;
+              op.envLevel += dt / relTime * SILENCE_DB;
+              if (op.envLevel >= SILENCE_DB) { op.envLevel = SILENCE_DB; op.envState = ENV_OFF; }
             }
           }
         }
@@ -432,20 +525,26 @@ export class OPL2 {
       case ENV_RELEASE: {
         const rate = this.getReleaseRate(opIdx);
         if (rate < 4) break;
-        if (rate >= 60) { op.envLevel = 1; op.envState = ENV_OFF; break; }
+        if (rate >= 60) { op.envLevel = SILENCE_DB; op.envState = ENV_OFF; break; }
         const relTime = DECAY_TIMES[rate] / 1000;
-        op.envLevel += dt / relTime;
-        if (op.envLevel >= 1) { op.envLevel = 1; op.envState = ENV_OFF; }
+        op.envLevel += dt / relTime * SILENCE_DB;
+        if (op.envLevel >= SILENCE_DB) { op.envLevel = SILENCE_DB; op.envState = ENV_OFF; }
         break;
       }
     }
 
-    // Convert envLevel (0=max, 1=silent) to linear amplitude, scaled by total level
-    const amplitude = (1 - op.envLevel) * tl;
+    if (op.envLevel >= SILENCE_DB) { op.rampPos = 0; op.rampDir = 0; return 0; }
+    // Anti-click ramp: smooth 0.5ms fade-in on key-on
+    if (op.rampDir !== 0) {
+      op.rampPos += op.rampDir;
+      if (op.rampPos >= CLICK_RAMP_SAMPLES) { op.rampPos = CLICK_RAMP_SAMPLES; op.rampDir = 0; }
+      else if (op.rampPos <= 0) { op.rampPos = 0; op.rampDir = 0; }
+    }
+    const rampGain = op.rampPos / CLICK_RAMP_SAMPLES;
+    const amplitude = Math.pow(10, -op.envLevel / 20) * tl * rampGain;
     return Math.max(0, Math.min(1, amplitude));
   }
 
-  /** Process one melodic channel. Returns its contribution to the output. */
   private processChannel(
     ch: number, dt: number, tremoDB: number, vibMul: number,
   ): number {
@@ -456,33 +555,33 @@ export class OPL2 {
     const op1 = this.ops[opIdx1];
     const op2 = this.ops[opIdx2];
 
-    // Update envelopes
     let amp1 = this.updateEnvelope(op1, opIdx1, dt);
     let amp2 = this.updateEnvelope(op2, opIdx2, dt);
     if (amp1 === 0 && amp2 === 0) return 0;
 
-    // Apply KSL
     amp1 *= this.getKSL(opIdx1, ch);
     amp2 *= this.getKSL(opIdx2, ch);
 
-    // Apply tremolo (AM): register 0x20 bit 7 per operator
     if (this.opReg(opIdx1, 0x20) & 0x80) amp1 *= Math.pow(10, -tremoDB / 20);
     if (this.opReg(opIdx2, 0x20) & 0x80) amp2 *= Math.pow(10, -tremoDB / 20);
 
-    // Advance phases with vibrato: register 0x20 bit 6 per operator
+    // Chorus: per-channel micro-detuning (reduced on bass for tight low-end)
+    const chorusLFO = Math.sin(this.chorusPhase[ch] * 2 * Math.PI);
+    const chorusScale = freq < 150 ? 0.15 : freq < 300 ? 0.5 : 1.0;
+    const chorusMul = Math.pow(2, chorusLFO * CHORUS_DEPTH * chorusScale / 1200);
+
     const multi1 = this.getMulti(opIdx1);
     const multi2 = this.getMulti(opIdx2);
     const vib1 = (this.opReg(opIdx1, 0x20) & 0x40) ? vibMul : 1;
     const vib2 = (this.opReg(opIdx2, 0x20) & 0x40) ? vibMul : 1;
-    op1.phase += freq * multi1 * vib1 / OPL_RATE;
-    op2.phase += freq * multi2 * vib2 / OPL_RATE;
+    op1.phase += freq * multi1 * vib1 * chorusMul / INTERNAL_RATE;
+    op2.phase += freq * multi2 * vib2 * chorusMul / INTERNAL_RATE;
 
     const connection = this.getConnection(ch);
     const feedback = this.getFeedback(ch);
     const wave1 = this.getWaveform(opIdx1);
     const wave2 = this.getWaveform(opIdx2);
 
-    // Operator 1 (modulator) with feedback
     let mod1 = 0;
     if (feedback > 0) {
       mod1 = (op1.feedback0 + op1.feedback1) * MOD_DEPTH * Math.pow(2, feedback - 9);
@@ -492,15 +591,12 @@ export class OPL2 {
     op1.feedback0 = out1;
 
     if (connection === 0) {
-      // FM: op1 modulates op2's phase
       return this.waveform(op2.phase + out1 * MOD_DEPTH, wave2) * amp2;
     } else {
-      // Additive: both operators output directly
       return out1 + this.waveform(op2.phase, wave2) * amp2;
     }
   }
 
-  /** Compute operator amplitude with KSL + tremolo applied. Also advances phase. */
   private percOpAmp(
     opIdx: number, ch: number, dt: number, tremoDB: number, vibMul: number,
   ): number {
@@ -509,24 +605,19 @@ export class OPL2 {
     if (amp === 0) return 0;
     amp *= this.getKSL(opIdx, ch);
     if (this.opReg(opIdx, 0x20) & 0x80) amp *= Math.pow(10, -tremoDB / 20);
-    // Advance phase
     const freq = this.getChannelFreq(ch);
     if (freq > 0) {
       const vib = (this.opReg(opIdx, 0x20) & 0x40) ? vibMul : 1;
-      op.phase += freq * this.getMulti(opIdx) * vib / OPL_RATE;
+      op.phase += freq * this.getMulti(opIdx) * vib / INTERNAL_RATE;
     }
     return amp;
   }
 
-  /** Generate percussion output for channels 6-8 in rhythm mode. */
   private generatePercussion(dt: number, tremoDB: number, vibMul: number): number {
     let output = 0;
 
-    // Bass drum (channel 6): normal FM with both operators
     output += this.processChannel(6, dt, tremoDB, vibMul);
 
-    // Phase-based noise (from OPL2 die analysis):
-    // Uses phase bits from channel 7 op1 (hi-hat) and channel 8 op2 (cymbal)
     const ph7 = ((this.ops[CH_OP[7][0]].phase * 1024) | 0) & 0x3FF;
     const ph8 = ((this.ops[CH_OP[8][1]].phase * 1024) | 0) & 0x3FF;
     const phaseNoise = (
@@ -535,16 +626,13 @@ export class OPL2 {
       (((ph7 >> 3) ^ (ph8 >> 2)) & 1)
     ) !== 0;
 
-    // LFSR noise bit (for snare drum)
     const lfsrBit = (this.noiseRNG & 1) !== 0;
 
-    // Hi-hat (channel 7, operator 1): noise-based rectangular wave
     {
       const amp = this.percOpAmp(CH_OP[7][0], 7, dt, tremoDB, vibMul);
       if (amp > 0) output += (phaseNoise ? 0.5 : -0.5) * amp;
     }
 
-    // Snare drum (channel 7, operator 2): noise XOR phase high bit
     {
       const opIdx = CH_OP[7][1];
       const amp = this.percOpAmp(opIdx, 7, dt, tremoDB, vibMul);
@@ -555,14 +643,12 @@ export class OPL2 {
       }
     }
 
-    // Tom-tom (channel 8, operator 1): normal sine, no noise
     {
       const opIdx = CH_OP[8][0];
       const amp = this.percOpAmp(opIdx, 8, dt, tremoDB, vibMul);
       if (amp > 0) output += this.waveform(this.ops[opIdx].phase, this.getWaveform(opIdx)) * amp;
     }
 
-    // Top cymbal (channel 8, operator 2): noise-based rectangular wave
     {
       const amp = this.percOpAmp(CH_OP[8][1], 8, dt, tremoDB, vibMul);
       if (amp > 0) output += (phaseNoise ? 0.5 : -0.5) * amp;
@@ -571,26 +657,29 @@ export class OPL2 {
     return output;
   }
 
-  // Generate one sample at OPL_RATE
-  private generateOneSample(): number {
-    let output = 0;
-    const dt = 1 / OPL_RATE;
+  /** Generate one stereo sample at INTERNAL_RATE. Writes to currL/currR. */
+  private generateOneSampleStereo(): void {
+    let left = 0, right = 0;
+    const dt = 1 / INTERNAL_RATE;
 
     // Advance global LFOs
-    this.tremoloPhase = (this.tremoloPhase + TREMOLO_FREQ / OPL_RATE) % 1;
-    this.vibratoPhase = (this.vibratoPhase + VIBRATO_FREQ / OPL_RATE) % 1;
+    this.tremoloPhase = (this.tremoloPhase + TREMOLO_FREQ / INTERNAL_RATE) % 1;
+    this.vibratoPhase = (this.vibratoPhase + VIBRATO_FREQ / INTERNAL_RATE) % 1;
 
-    // Advance 23-bit LFSR noise generator (taps at bits 0, 14, 15)
+    // Advance 23-bit LFSR noise generator
     const nbit = ((this.noiseRNG ^ (this.noiseRNG >> 14) ^ (this.noiseRNG >> 15)) & 1);
     this.noiseRNG = (this.noiseRNG >> 1) | (nbit << 22);
 
-    // Compute tremolo: triangle wave 0→peak→0, converted to dB attenuation
-    const tremoloTriangle = 1 - 2 * Math.abs(this.tremoloPhase - 0.5); // 0..1..0
+    // Advance chorus LFOs
+    for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+      this.chorusPhase[ch] = (this.chorusPhase[ch] + CHORUS_RATES[ch] / INTERNAL_RATE) % 1;
+    }
+
+    const tremoloTriangle = 1 - 2 * Math.abs(this.tremoloPhase - 0.5);
     const deepTrem = (this.regs[0xBD] & 0x80) !== 0;
     const tremoDB = tremoloTriangle * (deepTrem ? 4.8 : 1.0);
 
-    // Compute vibrato: triangle wave -1..+1, converted to frequency multiplier
-    const vibTriangle = 4 * Math.abs(this.vibratoPhase - 0.5) - 1; // -1..+1..-1
+    const vibTriangle = 4 * Math.abs(this.vibratoPhase - 0.5) - 1;
     const deepVib = (this.regs[0xBD] & 0x40) !== 0;
     const vibCents = vibTriangle * (deepVib ? 14 : 7);
     const vibMul = Math.pow(2, vibCents / 1200);
@@ -598,30 +687,109 @@ export class OPL2 {
     const rhythmMode = (this.regs[0xBD] & 0x20) !== 0;
     const melodicEnd = rhythmMode ? 6 : 9;
 
-    // Melodic channels (always 0-5, plus 6-8 when rhythm mode is off)
+    // Melodic channels with frequency-dependent stereo panning
+    // Bass frequencies (<200 Hz) panned narrower for tight center imaging
     for (let ch = 0; ch < melodicEnd; ch++) {
-      output += this.processChannel(ch, dt, tremoDB, vibMul);
+      const s = this.processChannel(ch, dt, tremoDB, vibMul);
+      const freq = this.getChannelFreq(ch);
+      const narrowing = freq < 100 ? 0.2 : freq < 200 ? 0.5 : freq < 400 ? 0.75 : 1.0;
+      const panL = PAN_L[ch] * narrowing + (1 - narrowing) * Math.SQRT1_2;
+      const panR = PAN_R[ch] * narrowing + (1 - narrowing) * Math.SQRT1_2;
+      left += s * panL;
+      right += s * panR;
     }
 
-    // Percussion channels 6-8 when rhythm mode is on
+    // Percussion: centered (equal L/R)
     if (rhythmMode) {
-      output += this.generatePercussion(dt, tremoDB, vibMul);
+      const perc = this.generatePercussion(dt, tremoDB, vibMul);
+      left += perc;
+      right += perc;
     }
 
-    return output / NUM_CHANNELS; // Normalize
+    // Normalize + tube-like saturation (tanh + subtle 2nd harmonic)
+    const norm = 1.4 / NUM_CHANNELS;
+    const satL = Math.tanh(left * norm * DRIVE) * INV_TANH_DRIVE;
+    const satR = Math.tanh(right * norm * DRIVE) * INV_TANH_DRIVE;
+    // Even harmonic generation: x² produces 2nd harmonic (warm, musical)
+    // DC from squaring is removed by downstream DC blocking filter
+    this.currL = satL + 0.04 * satL * satL;
+    this.currR = satR + 0.04 * satR * satR;
   }
 
-  /** Fill a Float32Array with audio samples at the target sample rate. */
-  generateSamples(out: Float32Array, length: number): void {
-    const ratio = OPL_RATE / this.sampleRate;
+  /** Fill stereo buffers at the target sample rate.
+   *  4x oversampled -> cubic Hermite interpolation -> Butterworth LPF -> DC block -> crossfeed. */
+  generateSamples(outL: Float32Array, outR: Float32Array, length: number): void {
+    const ratio = INTERNAL_RATE / this.sampleRate;
+    const { lpB0, lpA1, lpA2, dcR } = this;
+    const lpB1 = lpB0 * 2; // Butterworth symmetry: b1 = 2*b0, b2 = b0
     for (let i = 0; i < length; i++) {
       this.accumPhase += ratio;
       while (this.accumPhase >= 1) {
         this.accumPhase -= 1;
-        this.outputBuf[this.bufPos & 4095] = this.generateOneSample();
-        this.bufPos++;
+        this.h0L = this.h1L; this.h1L = this.h2L; this.h2L = this.h3L;
+        this.h0R = this.h1R; this.h1R = this.h2R; this.h2R = this.h3R;
+        this.generateOneSampleStereo();
+        this.h3L = this.currL;
+        this.h3R = this.currR;
       }
-      out[i] = this.outputBuf[(this.bufPos - 1) & 4095];
+      // Cubic Hermite interpolation (4-point, 3rd-order) — much cleaner than linear
+      const t = 1 - this.accumPhase;
+      const t2 = t * t, t3 = t2 * t;
+      const inL = 0.5 * (
+        (2 * this.h1L) +
+        (-this.h0L + this.h2L) * t +
+        (2 * this.h0L - 5 * this.h1L + 4 * this.h2L - this.h3L) * t2 +
+        (-this.h0L + 3 * this.h1L - 3 * this.h2L + this.h3L) * t3
+      );
+      const inR = 0.5 * (
+        (2 * this.h1R) +
+        (-this.h0R + this.h2R) * t +
+        (2 * this.h0R - 5 * this.h1R + 4 * this.h2R - this.h3R) * t2 +
+        (-this.h0R + 3 * this.h1R - 3 * this.h2R + this.h3R) * t3
+      );
+      // 2-pole Butterworth LPF (Direct Form II Transposed)
+      const yL = lpB0 * inL + this.lpS1L;
+      this.lpS1L = lpB1 * inL - lpA1 * yL + this.lpS2L;
+      this.lpS2L = lpB0 * inL - lpA2 * yL;
+      const yR = lpB0 * inR + this.lpS1R;
+      this.lpS1R = lpB1 * inR - lpA1 * yR + this.lpS2R;
+      this.lpS2R = lpB0 * inR - lpA2 * yR;
+      // Analog warmth: mid-bass peaking EQ (120 Hz, +2 dB)
+      const wL = this.wB0 * yL + this.wS1L;
+      this.wS1L = this.wB1 * yL - this.wA1 * wL + this.wS2L;
+      this.wS2L = this.wB2 * yL - this.wA2 * wL;
+      const wR = this.wB0 * yR + this.wS1R;
+      this.wS1R = this.wB1 * yR - this.wA1 * wR + this.wS2R;
+      this.wS2R = this.wB2 * yR - this.wA2 * wR;
+      // Air shelf: high shelf at 10 kHz, +1.5 dB (openness)
+      const aL = this.airB0 * wL + this.airS1L;
+      this.airS1L = this.airB1 * wL - this.airA1 * aL + this.airS2L;
+      this.airS2L = this.airB2 * wL - this.airA2 * aL;
+      const aR = this.airB0 * wR + this.airS1R;
+      this.airS1R = this.airB1 * wR - this.airA1 * aR + this.airS2R;
+      this.airS2R = this.airB2 * wR - this.airA2 * aR;
+      // DC blocking HPF
+      const hpL = aL - this.dcPrevInL + dcR * this.dcPrevOutL;
+      this.dcPrevInL = aL; this.dcPrevOutL = hpL;
+      const hpR = aR - this.dcPrevInR + dcR * this.dcPrevOutR;
+      this.dcPrevInR = aR; this.dcPrevOutR = hpR;
+      // Stereo reverb: warm room ambience
+      this.reverb.process(hpL, hpR);
+      const rvL = this.reverb.processL;
+      const rvR = this.reverb.processR;
+      // Headphone crossfeed: blend ~15% of opposite channel for natural imaging
+      const cfL = rvL * 0.85 + rvR * 0.15;
+      const cfR = rvR * 0.85 + rvL * 0.15;
+      // TPDF dither: two uniform random values summed → triangular PDF
+      // Amplitude: ±1 LSB of float32 mantissa at typical signal levels (~1e-6)
+      let d = this.ditherState;
+      d ^= d << 13; d ^= d >> 17; d ^= d << 5; this.ditherState = d;
+      const d1 = (d & 0xFFFF) / 65536 - 0.5;
+      d ^= d << 13; d ^= d >> 17; d ^= d << 5; this.ditherState = d;
+      const d2 = (d & 0xFFFF) / 65536 - 0.5;
+      const dither = (d1 + d2) * 1.5e-6; // ~-116 dBFS, below audible for music
+      outL[i] = cfL + dither;
+      outR[i] = cfR + dither;
     }
   }
 }

@@ -579,6 +579,132 @@ export function registerMsvcrt(emu: Emulator): void {
     return emu.readArg(1); // just return the new mode
   });
 
+  // _open(filename, oflag, [pmode]) → fd or -1
+  msvcrt.register('_open', 0, () => {
+    const fnPtr = emu.readArg(0);
+    const oflag = emu.readArg(1);
+    if (!fnPtr) return -1;
+    const filename = emu.memory.readCString(fnPtr);
+    const O_RDONLY = 0x0000, O_WRONLY = 0x0001, O_RDWR = 0x0002;
+    const O_CREAT = 0x0100, O_TRUNC = 0x0200;
+    const GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
+
+    let access = 0;
+    if ((oflag & 3) === O_RDONLY) access = GENERIC_READ;
+    else if ((oflag & 3) === O_WRONLY) access = GENERIC_WRITE;
+    else if ((oflag & 3) === O_RDWR) access = GENERIC_READ | GENERIC_WRITE;
+
+    let creation = 3; // OPEN_EXISTING
+    if (oflag & O_CREAT) creation = (oflag & O_TRUNC) ? 2 : 4; // CREATE_ALWAYS or OPEN_ALWAYS
+
+    // Call CreateFileA internally
+    const resolved = emu.resolvePath(filename);
+    const upper = resolved.toUpperCase();
+    const fs = emu.fs;
+    const existing = fs.findFile(resolved, emu.additionalFiles);
+
+    if (creation === 3 /* OPEN_EXISTING */ && !existing) {
+      if (emu.traceApi) console.log(`[MSVCRT] _open("${filename}") → not found`);
+      return -1;
+    }
+
+    let syncData: Uint8Array | null = null;
+    let size = 0;
+    if (existing) {
+      if (existing.source === 'additional') {
+        const ab = emu.additionalFiles.get(existing.name);
+        if (ab) { syncData = new Uint8Array(ab); size = syncData.length; }
+      } else if (existing.source === 'external') {
+        const ext = fs.externalFiles.get(upper);
+        if (ext) { syncData = ext.data ?? null; size = ext.data?.length ?? existing.size; }
+      }
+    }
+
+    const hFile = emu.handles.alloc('file', {
+      path: upper, access, pos: 0,
+      data: syncData, size, modified: false,
+    });
+
+    const fd = nextCrtFd++;
+    fdToHandle.set(fd, hFile);
+    handleToFd.set(hFile >>> 0, fd);
+    console.log(`[MSVCRT] _open("${filename}") → fd=${fd} handle=0x${hFile.toString(16)} size=${size}`);
+    return fd;
+  });
+
+  // _read(fd, buf, count) → bytes read or -1
+  msvcrt.register('_read', 0, () => {
+    const fd = emu.readArg(0);
+    const bufPtr = emu.readArg(1);
+    const count = emu.readArg(2);
+    const hFile = fdToHandle.get(fd);
+    if (hFile === undefined) return -1;
+    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    if (!f || !f.data) return 0;
+    const available = f.data.length - f.pos;
+    const toRead = Math.min(count, available);
+    if (toRead <= 0) return 0;
+    for (let i = 0; i < toRead; i++) {
+      emu.memory.writeU8(bufPtr + i, f.data[f.pos + i]);
+    }
+    f.pos += toRead;
+    return toRead;
+  });
+
+  // _write(fd, buf, count) → bytes written or -1
+  msvcrt.register('_write', 0, () => {
+    const fd = emu.readArg(0);
+    const bufPtr = emu.readArg(1);
+    const count = emu.readArg(2);
+    if (fd === 1 || fd === 2) {
+      let s = '';
+      for (let i = 0; i < count; i++) s += String.fromCharCode(emu.memory.readU8(bufPtr + i));
+      if (s.trim()) console.log(`[MSVCRT] _write(fd=${fd}): ${s.trimEnd()}`);
+      return count;
+    }
+    const hFile = fdToHandle.get(fd);
+    if (hFile === undefined) return -1;
+    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    if (!f) return -1;
+    return count;
+  });
+
+  // _lseek(fd, offset, origin) → new position or -1
+  msvcrt.register('_lseek', 0, () => {
+    const fd = emu.readArg(0);
+    const offset = emu.readArg(1) | 0;
+    const origin = emu.readArg(2);
+    const hFile = fdToHandle.get(fd);
+    if (hFile === undefined) return -1;
+    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    if (!f) return -1;
+    if (origin === 0) f.pos = offset;
+    else if (origin === 1) f.pos += offset;
+    else if (origin === 2) f.pos = f.size + offset;
+    if (f.pos < 0) f.pos = 0;
+    return f.pos;
+  });
+
+  // _filelength(fd) → file size or -1
+  msvcrt.register('_filelength', 0, () => {
+    const fd = emu.readArg(0);
+    const hFile = fdToHandle.get(fd);
+    if (hFile === undefined) return -1;
+    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    if (!f) return -1;
+    return f.size;
+  });
+
+  // _tell(fd) → current position or -1
+  msvcrt.register('_tell', 0, () => {
+    const fd = emu.readArg(0);
+    const hFile = fdToHandle.get(fd);
+    if (hFile === undefined) return -1;
+    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    if (!f) return -1;
+    return f.pos;
+  });
+
   // _iob — array of FILE structs (stdin, stdout, stderr)
   const iobBase = emu.allocHeap(3 * 32); // 3 FILE structs, 32 bytes each
   msvcrt.register('_iob', 0, () => iobBase);
@@ -1270,8 +1396,198 @@ export function registerMsvcrt(emu: Emulator): void {
   msvcrt.register('strtoul', 0, () => strtolImpl(a => emu.memory.readCString(a), 1) >>> 0);
   msvcrt.register('wcstol', 0, () => strtolImpl(a => emu.memory.readUTF16String(a), 2));
 
-  // fopen — return NULL (file not found)
-  msvcrt.register('fopen', 0, () => 0);
+  // FILE I/O: fopen, fread, fwrite, fclose, fseek, ftell, feof, fflush, fgetc, fputc, fgets, fputs
+  interface CrtFile {
+    filePtr: number;  // address of FILE struct in emulated memory
+    data: Uint8Array;
+    pos: number;
+    writable: boolean;
+    path: string;
+  }
+  const crtFiles = new Map<number, CrtFile>();
+
+  msvcrt.register('fopen', 0, () => {
+    const pathPtr = emu.readArg(0);
+    const modePtr = emu.readArg(1);
+    const path = emu.memory.readCString(pathPtr);
+    const mode = emu.memory.readCString(modePtr);
+
+    console.log(`[MSVCRT] fopen("${path}", "${mode}")`);
+
+    // Resolve file from additionalFiles or file system
+    const resolved = path.replace(/\\/g, '/');
+    const baseName = resolved.split('/').pop()?.toUpperCase() || '';
+
+    // Try to find file in additionalFiles
+    let fileData: ArrayBuffer | undefined;
+    for (const [name, ab] of emu.additionalFiles) {
+      if (name.toUpperCase() === baseName) {
+        fileData = ab;
+        break;
+      }
+    }
+
+    if (!fileData) {
+      // Try file system (findFile + sync data)
+      const resolvedPath = emu.resolvePath(path);
+      const fileInfo = emu.fs.findFile(resolvedPath, emu.additionalFiles);
+      if (fileInfo) {
+        if (fileInfo.source === 'additional') {
+          fileData = emu.additionalFiles.get(fileInfo.name) ?? undefined;
+        } else if (fileInfo.source === 'external') {
+          const ext = emu.fs.externalFiles.get(resolvedPath.toUpperCase());
+          if (ext) fileData = ext.data.buffer.slice(ext.data.byteOffset, ext.data.byteOffset + ext.data.byteLength) as ArrayBuffer;
+        }
+      }
+    }
+
+    const writable = mode.includes('w') || mode.includes('a') || mode.includes('+');
+
+    if (!fileData && !writable) {
+      console.log(`[MSVCRT] fopen: file not found: ${path}`);
+      return 0; // NULL — file not found
+    }
+
+    // Allocate FILE struct (32 bytes)
+    const fileStructPtr = emu.allocHeap(32);
+    const data = fileData ? new Uint8Array(fileData) : new Uint8Array(0);
+    crtFiles.set(fileStructPtr, {
+      filePtr: fileStructPtr,
+      data,
+      pos: mode.includes('a') ? data.length : 0,
+      writable,
+      path,
+    });
+
+    console.log(`[MSVCRT] fopen: opened ${path} (${data.length} bytes) => 0x${fileStructPtr.toString(16)}`);
+    return fileStructPtr;
+  });
+
+  msvcrt.register('fread', 0, () => {
+    const bufPtr = emu.readArg(0);
+    const size = emu.readArg(1);
+    const count = emu.readArg(2);
+    const streamPtr = emu.readArg(3);
+    const file = crtFiles.get(streamPtr);
+    if (!file) return 0;
+    const totalBytes = size * count;
+    const available = file.data.length - file.pos;
+    const toRead = Math.min(totalBytes, available);
+    for (let i = 0; i < toRead; i++) {
+      emu.memory.writeU8(bufPtr + i, file.data[file.pos + i]);
+    }
+    file.pos += toRead;
+    return Math.floor(toRead / size); // return number of complete items read
+  });
+
+  msvcrt.register('fwrite', 0, () => {
+    const bufPtr = emu.readArg(0);
+    const size = emu.readArg(1);
+    const count = emu.readArg(2);
+    const streamPtr = emu.readArg(3);
+    const file = crtFiles.get(streamPtr);
+    if (!file) return 0;
+    const totalBytes = size * count;
+    // Extend data if needed
+    const newSize = Math.max(file.data.length, file.pos + totalBytes);
+    if (newSize > file.data.length) {
+      const newData = new Uint8Array(newSize);
+      newData.set(file.data);
+      file.data = newData;
+    }
+    for (let i = 0; i < totalBytes; i++) {
+      file.data[file.pos + i] = emu.memory.readU8(bufPtr + i);
+    }
+    file.pos += totalBytes;
+    return count;
+  });
+
+  msvcrt.register('fclose', 0, () => {
+    const streamPtr = emu.readArg(0);
+    crtFiles.delete(streamPtr);
+    return 0;
+  });
+
+  msvcrt.register('fseek', 0, () => {
+    const streamPtr = emu.readArg(0);
+    const offset = emu.readArg(1) | 0; // signed
+    const origin = emu.readArg(2);
+    const file = crtFiles.get(streamPtr);
+    if (!file) return -1;
+    const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
+    if (origin === SEEK_SET) file.pos = offset;
+    else if (origin === SEEK_CUR) file.pos += offset;
+    else if (origin === SEEK_END) file.pos = file.data.length + offset;
+    file.pos = Math.max(0, Math.min(file.pos, file.data.length));
+    return 0;
+  });
+
+  msvcrt.register('ftell', 0, () => {
+    const streamPtr = emu.readArg(0);
+    const file = crtFiles.get(streamPtr);
+    return file ? file.pos : -1;
+  });
+
+  msvcrt.register('feof', 0, () => {
+    const streamPtr = emu.readArg(0);
+    const file = crtFiles.get(streamPtr);
+    return file ? (file.pos >= file.data.length ? 1 : 0) : 1;
+  });
+
+  msvcrt.register('fgetc', 0, () => {
+    const streamPtr = emu.readArg(0);
+    const file = crtFiles.get(streamPtr);
+    if (!file || file.pos >= file.data.length) return -1; // EOF
+    return file.data[file.pos++];
+  });
+
+  msvcrt.register('fputc', 0, () => {
+    const ch = emu.readArg(0);
+    const streamPtr = emu.readArg(1);
+    const file = crtFiles.get(streamPtr);
+    if (!file) return -1;
+    if (file.pos >= file.data.length) {
+      const newData = new Uint8Array(file.data.length + 1024);
+      newData.set(file.data);
+      file.data = newData;
+    }
+    file.data[file.pos++] = ch & 0xFF;
+    return ch & 0xFF;
+  });
+
+  msvcrt.register('fgets', 0, () => {
+    const bufPtr = emu.readArg(0);
+    const maxCount = emu.readArg(1);
+    const streamPtr = emu.readArg(2);
+    const file = crtFiles.get(streamPtr);
+    if (!file || file.pos >= file.data.length) return 0; // NULL on EOF
+    let i = 0;
+    while (i < maxCount - 1 && file.pos < file.data.length) {
+      const ch = file.data[file.pos++];
+      emu.memory.writeU8(bufPtr + i, ch);
+      i++;
+      if (ch === 0x0A) break; // newline
+    }
+    emu.memory.writeU8(bufPtr + i, 0); // null-terminate
+    return bufPtr;
+  });
+
+  msvcrt.register('fputs', 0, () => {
+    const strPtr = emu.readArg(0);
+    const streamPtr = emu.readArg(1);
+    const file = crtFiles.get(streamPtr);
+    if (!file) return -1;
+    const str = emu.memory.readCString(strPtr);
+    for (let i = 0; i < str.length; i++) {
+      if (file.pos >= file.data.length) {
+        const newData = new Uint8Array(file.data.length + 1024);
+        newData.set(file.data);
+        file.data = newData;
+      }
+      file.data[file.pos++] = str.charCodeAt(i);
+    }
+    return 0;
+  });
 
   // sscanf — cdecl varargs: sscanf(str, fmt, ...)
   msvcrt.register('sscanf', 0, () => {

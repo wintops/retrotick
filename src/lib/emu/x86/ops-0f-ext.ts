@@ -178,12 +178,29 @@ export function exec0FExt(
     }
 
     // CPUID
-    case 0xA2:
-      cpu.reg[EAX] = 0;
-      cpu.reg[EBX] = 0;
-      cpu.reg[ECX] = 0;
-      cpu.reg[EDX] = 0;
+    case 0xA2: {
+      const leaf = cpu.reg[EAX] >>> 0;
+      if (leaf === 0) {
+        // Max leaf + vendor string "RetroTickYes"
+        cpu.reg[EAX] = 1;
+        cpu.reg[EBX] = 0x72746552; // "Retr"
+        cpu.reg[EDX] = 0x6369546F; // "oTic"
+        cpu.reg[ECX] = 0x7365596B; // "kYes"
+      } else if (leaf === 1) {
+        // Family 5 (Pentium), Model 2, Stepping 0
+        cpu.reg[EAX] = 0x0520; // family=5, model=2
+        cpu.reg[EBX] = 0;
+        cpu.reg[ECX] = 0;
+        // EDX feature flags: FPU(0), TSC(4), CX8(8), CMOV(15)
+        cpu.reg[EDX] = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 15);
+      } else {
+        cpu.reg[EAX] = 0;
+        cpu.reg[EBX] = 0;
+        cpu.reg[ECX] = 0;
+        cpu.reg[EDX] = 0;
+      }
       return true;
+    }
 
     // XADD r/m32, r32
     case 0xC1: {

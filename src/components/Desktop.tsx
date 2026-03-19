@@ -248,6 +248,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
             storePath={f.name}
             iconUrl={f.iconUrl}
             isFolder={f.isFolder}
+            isExe={f.isExe}
             selected={selected === f.name}
             editing={editingName === f.name}
             onSelect={() => setSelected(f.name)}

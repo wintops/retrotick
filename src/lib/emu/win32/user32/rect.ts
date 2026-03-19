@@ -13,6 +13,7 @@ export function registerRect(emu: Emulator): void {
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
     const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+    //if (hwnd === emu.mainWindow) console.log(`[GetClientRect] mainWindow ${wnd.width}x${wnd.height} style=0x${wnd.style.toString(16)} => client ${cw}x${ch}`);
     emu.memory.writeU32(rectPtr, 0);
     emu.memory.writeU32(rectPtr + 4, 0);
     emu.memory.writeU32(rectPtr + 8, cw);

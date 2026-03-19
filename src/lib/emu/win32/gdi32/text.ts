@@ -11,7 +11,13 @@ export function registerText(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     if (!dc) return 13;
     const font = emu.handles.get<{ height: number }>(dc.selectedFont);
-    if (font && font.height) return Math.abs(font.height);
+    if (font && font.height) {
+      const h = Math.abs(font.height);
+      // Negative lfHeight = character height (excludes internal leading).
+      // Estimate cell height (tmHeight) by adding ~20% for internal leading.
+      if (font.height < 0) return Math.round(h * 1.2);
+      return h; // positive lfHeight = cell height directly
+    }
     return 13;
   };
 
