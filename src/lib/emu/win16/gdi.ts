@@ -2,7 +2,6 @@ import type { Emulator } from '../emulator';
 import type { DCInfo, BitmapInfo, BrushInfo, PenInfo, PaletteInfo } from '../win32/gdi32/types';
 import { OPAQUE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
-import { adjustCanvasSaveDepth } from '../emu-window';
 import { decodeDib } from '../../pe/decode-dib';
 
 function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
@@ -753,9 +752,9 @@ export function registerWin16Gdi(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     if (dc) {
       dc.ctx.save();
-      if (dc.ctx === emu.canvasCtx) adjustCanvasSaveDepth(1);
+      dc.saveLevel = (dc.saveLevel || 0) + 1;
     }
-    return 1;
+    return dc?.saveLevel ?? 1;
   }, 30);
 
   // Ordinal 31: SetPixel(hdc, x, y, crColor_long) — pascal, 10 bytes (2+2+2+4)
@@ -914,8 +913,22 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
     } else if (rop === 0xe20746) {
-      // ROP: DSPDxax = (D AND NOT S) OR (P AND S)
-      // Transform-aware pixel read/write for child window DCs
+      // ROP 0xE20746: DSPDxax = (Dst ^ (Src & (Pat ^ Dst)))
+      //   equivalent to: (D AND NOT S) OR (P AND S)
+      //   Where S=1 (white in mask): result = P (pattern applied)
+      //   Where S=0 (black in mask): result = D (destination preserved)
+      //
+      // Used by Win3.1 COMMCTRL in TOOLBAR_DrawMasked (Wine: toolbar.c:736)
+      // for disabled/etched button icons: draws a mask with COLOR_3DHILIGHT
+      // offset +1,+1, then with COLOR_3DSHADOW at the original position,
+      // creating a 3D embossed effect.
+      //
+      // Also used by COMMCTRL for checked button dithered overlay with the
+      // 55AA pattern brush (hbrMonoDither): applies a checkerboard pattern
+      // through a mono mask to dim the button background.
+      //
+      // Uses transform-aware getImageData/putImageData because child window
+      // DCs share the main canvas with a translate+clip transform.
       const tf = dstDC.ctx.getTransform();
       const cX = Math.round(tf.e + xDst * tf.a);
       const cY = Math.round(tf.f + yDst * tf.d);
@@ -1036,11 +1049,21 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   // Ordinal 39: RestoreDC(hdc, nSavedDC) — pascal -ret16, 4 bytes
   gdi.register('RestoreDC', 4, () => {
-    const [hdc] = emu.readPascalArgs16([2, 2]);
+    const [hdc, nSavedDC] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
-    if (dc) {
-      dc.ctx.restore();
-      if (dc.ctx === emu.canvasCtx) adjustCanvasSaveDepth(-1);
+    if (dc && (dc.saveLevel || 0) > 0) {
+      const n = (nSavedDC << 16) >> 16; // sign-extend
+      if (n === -1) {
+        // Restore most recent save
+        dc.ctx.restore();
+        dc.saveLevel = (dc.saveLevel || 0) - 1;
+      } else {
+        // Restore to specific level: pop until saveLevel <= n
+        while ((dc.saveLevel || 0) > 0 && (dc.saveLevel || 0) >= n) {
+          dc.ctx.restore();
+          dc.saveLevel!--;
+        }
+      }
     }
     return 1;
   }, 39);

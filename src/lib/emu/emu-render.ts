@@ -237,15 +237,12 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
-      if (className === 'TOOLBARWINDOW' && emu.isNE) {
-        // Win16 COMMCTRL toolbar painting accumulates canvas save() calls across
-        // multiple WM_PAINT cycles (via SaveDC/RestoreDC mismatches in the x86 code).
-        // The stale save stack carries old clip regions that prevent new draws from
-        // being visible. Popping all accumulated saves before each paint ensures a
-        // clean canvas state with no stale clips.
-        if (emu.canvasCtx) {
-          for (let i = 0; i < 200; i++) emu.canvasCtx.restore();
-        }
+      // Safety net: pop any leaked ctx.save() from previous child paints.
+      // releaseChildDC uses dc.saveLevel to pop x86 SaveDC saves, but some
+      // saves may slip through (e.g. StretchBlt internal save/restore on the
+      // shared canvas). Popping stale saves prevents clip accumulation.
+      if (emu.canvasCtx) {
+        for (let i = 0; i < 20; i++) emu.canvasCtx.restore();
       }
       if (emu.isNE) {
         emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win16 PASCAL)

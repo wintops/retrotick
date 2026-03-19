@@ -10,15 +10,8 @@ import { emuFindResourceEntryForModule } from './emu-load';
 
 // Track DCs that have canvas state saved (child window translate)
 const childDCSet = new Set<number>();
-// Track the canvas save depth when each child DC was created, so we can
-// restore to the correct level even if x86 code called SaveDC in between.
-const childDCSaveDepth = new Map<number, number>();
 // Track DCs that have WS_CLIPCHILDREN state saved
 const clipChildrenDCSet = new Set<number>();
-// Global canvas save depth counter (incremented on save, decremented on restore)
-// Exported so SaveDC/RestoreDC in GDI can update it when operating on the main canvas.
-export let canvasSaveDepth = 0;
-export function adjustCanvasSaveDepth(delta: number): void { canvasSaveDepth += delta; }
 
 // A special thunk for SEH handler dispatch return
 const SEH_DISPATCH_RETURN_THUNK = 0x00FE0004;
@@ -202,7 +195,6 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
       ccsYOffset = Math.round((internalH - wnd.height) / 2);
     }
     ctx.save();
-    canvasSaveDepth++;
     ctx.setTransform(1, 0, 0, 1, origin.x, origin.y + ccsYOffset);
     ctx.beginPath();
     ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
@@ -215,7 +207,6 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
       ctx.fillRect(0, -ccsYOffset, wnd.width, wnd.height);
     }
     childDCSet.add(hdc);
-    childDCSaveDepth.set(hdc, canvasSaveDepth);
   }
   return hdc;
 }
@@ -237,7 +228,6 @@ function applyClipChildren(emu: Emulator, hwnd: number, wnd: WindowInfo | null, 
   if (childRects.length === 0) return;
 
   dc.ctx.save();
-  canvasSaveDepth++;
   clipChildrenDCSet.add(hdc);
 
   // Create a clip path that is the canvas rect minus child rects
@@ -300,7 +290,7 @@ export function endPaint(emu: Emulator, hwnd: number, _hdc: number): void {
   const hdc = emu.windowDCs.get(hwnd);
   if (hdc && clipChildrenDCSet.has(hdc)) {
     const dc = getDC(emu, hdc);
-    if (dc) { dc.ctx.restore(); canvasSaveDepth--; }
+    if (dc) dc.ctx.restore();
     clipChildrenDCSet.delete(hdc);
   }
   // Restore canvas state for child windows
@@ -326,17 +316,17 @@ export function releaseChildDC(emu: Emulator, hdc: number): void {
   if (childDCSet.has(hdc)) {
     const dc = getDC(emu, hdc);
     if (dc) {
-      // Restore ALL saves back to the level when this DC was created.
-      // The x86 code may have called SaveDC without matching RestoreDC,
-      // leaving extra saves on the shared canvas context stack.
-      const targetDepth = childDCSaveDepth.get(hdc) ?? canvasSaveDepth;
-      while (canvasSaveDepth >= targetDepth && canvasSaveDepth > 0) {
-        dc.ctx.restore();
-        canvasSaveDepth--;
-      }
+      // Like Wine's reset_dc_state: pop ALL saves made via SaveDC on this DC,
+      // then pop the one from getWindowDC (translate+clip).
+      // The x86 code may call SaveDC without matching RestoreDC — Windows
+      // automatically discards all saved states when the DC is released.
+      const extraSaves = dc.saveLevel || 0;
+      for (let i = 0; i < extraSaves; i++) dc.ctx.restore();
+      dc.saveLevel = 0;
+      // Pop the getWindowDC's own save (translate + clip)
+      dc.ctx.restore();
     }
     childDCSet.delete(hdc);
-    childDCSaveDepth.delete(hdc);
   }
 }
 
