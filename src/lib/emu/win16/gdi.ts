@@ -949,27 +949,32 @@ export function registerWin16Gdi(emu: Emulator): void {
         patPixels = patCtx.getImageData(0, 0, patW, patH).data;
       }
 
+      // Apply Wine's formula per-channel: Dst ^ (Src & (Pat ^ Dst))
       for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
           const i = (py * w + px) * 4;
-          const sr = srcData.data[i];
-          if (sr > 128) {
-            // Mask white → apply pattern
-            let pR: number, pG: number, pB: number;
-            if (patPixels) {
-              const tileX = ((cX + px) % patW + patW) % patW;
-              const tileY = ((cY + py) % patH + patH) % patH;
-              const isBlack = patPixels[(tileY * patW + tileX) * 4] === 0;
-              pR = isBlack ? txR : bkR;
-              pG = isBlack ? txG : bkG;
-              pB = isBlack ? txB : bkB;
-            } else {
-              pR = txR; pG = txG; pB = txB;
-            }
-            dstData.data[i] = pR; dstData.data[i+1] = pG; dstData.data[i+2] = pB;
-            dstData.data[i+3] = 255;
+          // Source (mask) pixel
+          const sr = srcData.data[i], sg = srcData.data[i+1], sb = srcData.data[i+2];
+          // Pattern pixel (from brush, colorized with textColor/bkColor for mono)
+          let pR: number, pG: number, pB: number;
+          if (patPixels) {
+            const tileX = ((cX + px) % patW + patW) % patW;
+            const tileY = ((cY + py) % patH + patH) % patH;
+            const isBlack = patPixels[(tileY * patW + tileX) * 4] === 0;
+            pR = isBlack ? txR : bkR;
+            pG = isBlack ? txG : bkG;
+            pB = isBlack ? txB : bkB;
+          } else {
+            pR = brush ? (brush.color & 0xFF) : 0;
+            pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
+            pB = brush ? ((brush.color >> 16) & 0xFF) : 0;
           }
-          // sr <= 128 → mask black → destination preserved (icon)
+          // Dst ^ (Src & (Pat ^ Dst))  — exact Wine formula (bitwise per channel)
+          const dr = dstData.data[i], dg = dstData.data[i+1], db = dstData.data[i+2];
+          dstData.data[i]   = dr ^ (sr & (pR ^ dr));
+          dstData.data[i+1] = dg ^ (sg & (pG ^ dg));
+          dstData.data[i+2] = db ^ (sb & (pB ^ db));
+          dstData.data[i+3] = 255;
         }
       }
       dstDC.ctx.putImageData(dstData, cX, cY);
