@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, WS_THICKFRAME } from './win2k/Window';
 import { MenuDropdown } from './win2k/MenuBar';
-import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
+import { DesktopIcon, INTERNAL_MIME, FOLDER_ICON_16 } from './DesktopIcon';
 import {
   getItemsInFolder, addFolder, deleteFolder, deleteFile, renameEntry,
   isFolder, displayName, addFile, getAllFiles, readDroppedItems,
@@ -297,6 +297,7 @@ export function FolderWindow({
         onTitleBarDblClick={handleMaximize}
         onResizeStart={onResizeStart}
         iconUrl={null}
+        iconElement={FOLDER_ICON_16}
       >
         <div
           style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white' }}
@@ -319,6 +320,7 @@ export function FolderWindow({
                 storePath={item.name}
                 iconUrl={item.iconUrl}
                 isFolder={item.isFolder}
+                isExe={item.isExe}
                 selected={selected === item.name}
                 editing={editingName === item.name}
                 onSelect={() => setSelected(item.name)}

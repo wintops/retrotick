@@ -6,7 +6,35 @@ export function registerOle32(emu: Emulator): void {
   ole32.register('OleInitialize', 1, () => 0);     // S_OK
   ole32.register('OleUninitialize', 0, () => 0);
   ole32.register('OleBuildVersion', 0, () => 0);
-  ole32.register('CoCreateInstance', 5, () => 0x80004002); // E_NOINTERFACE
+  ole32.register('CoCreateInstance', 5, () => {
+    const rclsid = emu.readArg(0);
+    const ppv = emu.readArg(4);
+    // Check CLSID for DirectSound: {47D4D946-62E8-11CF-93BC-444553540000}
+    if (rclsid) {
+      const d1 = emu.memory.readU32(rclsid);
+      const d2 = emu.memory.readU16(rclsid + 4);
+      const d3 = emu.memory.readU16(rclsid + 6);
+      if (d1 === 0x47D4D946 && d2 === 0x62E8 && d3 === 0x11CF) {
+        // Create DirectSound via DirectSoundCreate
+        const dsCreate = emu.apiDefs.get('DSOUND.DLL:DirectSoundCreate');
+        if (dsCreate) {
+          // Push args for DirectSoundCreate(NULL, ppv, NULL)
+          const saved0 = emu.memory.readU32(emu.cpu.reg[4] + 4);
+          const saved1 = emu.memory.readU32(emu.cpu.reg[4] + 8);
+          const saved2 = emu.memory.readU32(emu.cpu.reg[4] + 12);
+          emu.memory.writeU32(emu.cpu.reg[4] + 4, 0);     // lpGuid = NULL
+          emu.memory.writeU32(emu.cpu.reg[4] + 8, ppv);   // ppDS
+          emu.memory.writeU32(emu.cpu.reg[4] + 12, 0);    // pUnkOuter = NULL
+          const result = dsCreate.handler(emu);
+          emu.memory.writeU32(emu.cpu.reg[4] + 4, saved0);
+          emu.memory.writeU32(emu.cpu.reg[4] + 8, saved1);
+          emu.memory.writeU32(emu.cpu.reg[4] + 12, saved2);
+          return result;
+        }
+      }
+    }
+    return 0x80004002; // E_NOINTERFACE
+  });
   ole32.register('CoRegisterClassObject', 5, () => 0);
   ole32.register('CoRevokeClassObject', 1, () => 0);
   ole32.register('CoLockObjectExternal', 3, () => 0);

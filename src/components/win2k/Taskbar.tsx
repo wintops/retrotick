@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import type { MenuItem } from '../../lib/pe/types';
 import { MenuDropdown } from './MenuBar';
 import { t } from '../../lib/regional-settings';
@@ -7,6 +8,7 @@ interface TaskbarApp {
   id: number;
   title: string;
   iconUrl?: string | null;
+  iconElement?: ComponentChildren;
   minimized?: boolean;
   lang?: string;
 }
@@ -161,9 +163,11 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
                 fontWeight: 'normal',
               }}
             >
-              {app.iconUrl && (
+              {app.iconUrl ? (
                 <img src={app.iconUrl} style={{ width: '16px', height: '16px', flexShrink: 0, imageRendering: 'pixelated' }} />
-              )}
+              ) : app.iconElement ? (
+                <span style={{ display: 'inline-flex', width: '16px', height: '16px', flexShrink: 0 }}>{app.iconElement}</span>
+              ) : null}
               <span lang={app.lang} style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, lineHeight: '16px' }}>
                 {app.title || t().untitled}
               </span>

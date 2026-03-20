@@ -3,7 +3,7 @@ import type { WindowInfo } from './types';
 import { getClientSize, clampToMinTrackSize } from './_helpers';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
-  WM_SIZE, WM_ACTIVATE, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
+  WM_SIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
   WM_NCDESTROY, WM_WINDOWPOSCHANGED,
   CW_USEDEFAULT,
 } from '../types';
@@ -380,6 +380,7 @@ export function registerCreateWindow(emu: Emulator): void {
     emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0,
       ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
     if (wnd.visible) {
+      emu.callWndProc(wnd.wndProc, hwnd, WM_ACTIVATEAPP, 1, 0);
       emu.callWndProc(wnd.wndProc, hwnd, WM_ACTIVATE, 1, 0);
       // Mark window as needing paint (WM_PAINT synthesized by GetMessage)
       wnd.needsPaint = true;

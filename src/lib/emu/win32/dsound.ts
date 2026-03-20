@@ -2,11 +2,12 @@ import type { Emulator } from '../emulator';
 
 const DS_OK = 0x00000000;
 
-// IDirectSound vtable (8 methods):
+// IDirectSound8 vtable (11 methods):
 // 0x00 QueryInterface, 0x04 AddRef, 0x08 Release
 // 0x0C CreateSoundBuffer, 0x10 GetCaps, 0x14 DuplicateSoundBuffer
 // 0x18 SetCooperativeLevel, 0x1C Compact
-const DS_VTABLE_SIZE = 8;
+// 0x20 GetSpeakerConfig, 0x24 SetSpeakerConfig, 0x28 Initialize
+const DS_VTABLE_SIZE = 11;
 
 // IDirectSoundBuffer vtable (14 methods):
 // 0x00 QueryInterface, 0x04 AddRef, 0x08 Release
@@ -51,22 +52,63 @@ function allocComObject(emu: Emulator, prefix: string, methodCount: number,
   return objAddr;
 }
 
-function createSoundBuffer(emu: Emulator): number {
+function createSoundBuffer(emu: Emulator, bufferSize: number = 4096,
+    sampleRate: number = 22050, channels: number = 1, bitsPerSample: number = 8): number {
+  // Allocate the actual buffer memory once
+  const bufferAddr = emu.allocHeap(bufferSize);
   const handlers: Record<number, () => number> = {};
   handlers[0] = () => DS_OK; // QI - return same object
   handlers[1] = () => 2;     // AddRef
   handlers[2] = () => 0;     // Release
+  // GetCaps (3) - this, pDSBufferCaps
+  handlers[3] = () => {
+    const capsPtr = emu.readArg(1);
+    if (capsPtr) {
+      emu.memory.writeU32(capsPtr, 20); // dwSize
+      emu.memory.writeU32(capsPtr + 4, 0); // dwFlags
+      emu.memory.writeU32(capsPtr + 8, bufferSize); // dwBufferBytes
+      emu.memory.writeU32(capsPtr + 12, 0); // dwUnlockTransferRate
+      emu.memory.writeU32(capsPtr + 16, 0); // dwPlayCpuOverhead
+    }
+    return DS_OK;
+  };
+  // GetFormat (5) - this, pwfxFormat, dwSizeAllocated, pdwSizeWritten
+  handlers[5] = () => {
+    const fmtPtr = emu.readArg(1);
+    const sizeAlloc = emu.readArg(2);
+    const sizeWrittenPtr = emu.readArg(3);
+    const blockAlign = channels * (bitsPerSample / 8);
+    const avgBytes = sampleRate * blockAlign;
+    if (fmtPtr && sizeAlloc >= 16) {
+      emu.memory.writeU16(fmtPtr + 0, 1);           // wFormatTag = WAVE_FORMAT_PCM
+      emu.memory.writeU16(fmtPtr + 2, channels);
+      emu.memory.writeU32(fmtPtr + 4, sampleRate);
+      emu.memory.writeU32(fmtPtr + 8, avgBytes);    // nAvgBytesPerSec
+      emu.memory.writeU16(fmtPtr + 12, blockAlign);
+      emu.memory.writeU16(fmtPtr + 14, bitsPerSample);
+      if (sizeAlloc >= 18) emu.memory.writeU16(fmtPtr + 16, 0); // cbSize
+    }
+    if (sizeWrittenPtr) emu.memory.writeU32(sizeWrittenPtr, 18);
+    return DS_OK;
+  };
   // Lock (11) - this, offset, bytes, ptr1, size1, ptr2, size2, flags
   handlers[11] = () => {
+    const offset = emu.readArg(1);
+    const bytes = emu.readArg(2);
     const audioPtr1 = emu.readArg(3);
     const audioSize1 = emu.readArg(4);
     const audioPtr2 = emu.readArg(5);
     const audioSize2 = emu.readArg(6);
-    const lockBuf = emu.allocHeap(4096);
-    if (audioPtr1) emu.memory.writeU32(audioPtr1, lockBuf);
-    if (audioSize1) emu.memory.writeU32(audioSize1, 4096);
-    if (audioPtr2) emu.memory.writeU32(audioPtr2, 0);
-    if (audioSize2) emu.memory.writeU32(audioSize2, 0);
+    const flags = emu.readArg(7);
+    const DSBLOCK_ENTIREBUFFER = 2;
+    const lockSize = (flags & DSBLOCK_ENTIREBUFFER) ? bufferSize : Math.min(bytes, bufferSize);
+    const lockOffset = offset % bufferSize;
+    const size1 = Math.min(lockSize, bufferSize - lockOffset);
+    const size2 = lockSize - size1;
+    if (audioPtr1) emu.memory.writeU32(audioPtr1, bufferAddr + lockOffset);
+    if (audioSize1) emu.memory.writeU32(audioSize1, size1);
+    if (audioPtr2) emu.memory.writeU32(audioPtr2, size2 > 0 ? bufferAddr : 0);
+    if (audioSize2) emu.memory.writeU32(audioSize2, size2);
     return DS_OK;
   };
   handlers[12] = () => DS_OK; // Play
@@ -130,8 +172,22 @@ export function registerDsound(emu: Emulator): void {
     handlers[2] = () => 0;     // Release
     // CreateSoundBuffer (3) - this, desc, outBuffer, outer
     handlers[3] = () => {
+      const descPtr = emu.readArg(1);
       const outPtr = emu.readArg(2);
-      const buf = createSoundBuffer(emu);
+      // DSBUFFERDESC: dwSize(4), dwFlags(4), dwBufferBytes(4), dwReserved(4), lpwfxFormat(4)
+      let bufBytes = 4096;
+      let sr = 22050, ch = 1, bps = 8;
+      if (descPtr) {
+        bufBytes = emu.memory.readU32(descPtr + 8) || 4096; // dwBufferBytes
+        const fmtPtr = emu.memory.readU32(descPtr + 16); // lpwfxFormat
+        if (fmtPtr) {
+          ch = emu.memory.readU16(fmtPtr + 2) || 1;
+          sr = emu.memory.readU32(fmtPtr + 4) || 22050;
+          bps = emu.memory.readU16(fmtPtr + 14) || 8;
+        }
+      }
+      console.log(`[DSOUND] CreateSoundBuffer size=${bufBytes} ${sr}Hz ${ch}ch ${bps}bit`);
+      const buf = createSoundBuffer(emu, bufBytes, sr, ch, bps);
       if (outPtr) emu.memory.writeU32(outPtr, buf);
       return DS_OK;
     };
@@ -141,13 +197,22 @@ export function registerDsound(emu: Emulator): void {
     handlers[5] = () => {
       const outPtr = emu.readArg(2);
       const buf = createSoundBuffer(emu);
-      if (outPtr) emu.memory.writeU32(outPtr, buf);
       return DS_OK;
     };
     // SetCooperativeLevel (6) - this, hwnd, level
     handlers[6] = () => DS_OK;
     // Compact (7)
     handlers[7] = () => DS_OK;
+    // GetSpeakerConfig (8) - this, pdwSpeakerConfig
+    handlers[8] = () => {
+      const outPtr = emu.readArg(1);
+      if (outPtr) emu.memory.writeU32(outPtr, 0x00000200); // DSSPEAKER_STEREO
+      return DS_OK;
+    };
+    // SetSpeakerConfig (9) - this, dwSpeakerConfig
+    handlers[9] = () => DS_OK;
+    // Initialize (10) - this, pcGuidDevice
+    handlers[10] = () => DS_OK;
 
     const stackBytesMap: Record<number, number> = {
       0: 3, 1: 1, 2: 1,
@@ -156,6 +221,9 @@ export function registerDsound(emu: Emulator): void {
       5: 3, // DuplicateSoundBuffer(this, src, out)
       6: 3, // SetCooperativeLevel(this, hwnd, level)
       7: 1, // Compact(this)
+      8: 2, // GetSpeakerConfig(this, out)
+      9: 2, // SetSpeakerConfig(this, config)
+      10: 2, // Initialize(this, guid)
     };
 
     const dsObj = allocComObject(emu, 'DS', DS_VTABLE_SIZE, handlers, stackBytesMap);

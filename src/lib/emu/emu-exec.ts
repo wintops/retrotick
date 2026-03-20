@@ -2,6 +2,7 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
+import { tryFastLoop } from './fast-loops';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -83,9 +84,32 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  const MAX_STEPS = (emu as any)._callStdcallMaxSteps ?? 20000000;
-  while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted && steps < MAX_STEPS) {
+  // Tight loop detection: two consecutive-match samplers at different periods.
+  // P=256 catches loops of length 1,2,4,8,16... (powers of 2).
+  // P=252 catches loops of length 1,2,3,4,6,7,9,12,14... (highly composite).
+  // Together they cover all common loop lengths 1-12.
+  let csEipA = 0, csHitA = 0;  // period 256
+  let csEipB = 0, csHitB = 0, csNextB = 252;  // period 252
+  while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
+
+    let csTry = false;
+    if ((steps & 0xFF) === 0 && steps > 0) {
+      if (eip === csEipA) { if (++csHitA >= 2) csTry = true; } else { csEipA = eip; csHitA = 0; }
+    }
+    if (steps >= csNextB) {
+      csNextB = steps + 252;
+      if (eip === csEipB) { if (++csHitB >= 2) csTry = true; }
+      else {
+          csEipB = eip; csHitB = 0;
+      }
+    }
+    if (csTry) {
+      const iters = tryFastLoop(emu.cpu, emu.memory);
+      if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      csHitA = csHitB = 0;
+    }
+
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
     if (thunk) {
       const key = `${thunk.dll}:${thunk.name}`;
@@ -147,10 +171,6 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
   }
   if (emu._wndProcSetupPending) {
     return undefined;
-  }
-
-  if (steps >= MAX_STEPS) {
-    console.warn(`callStdcall exceeded max steps, EIP=0x${(emu.cpu.eip >>> 0).toString(16)}`);
   }
 
   // Zero out the stale WNDPROC_RETURN_THUNK from stack memory to prevent
@@ -440,13 +460,17 @@ export function emuTick(emu: Emulator): void {
     const now = Date.now();
     for (const [id, t] of emu._mmTimers) {
       if (now >= t.nextFire) {
-        // Save CPU state — callStdcall leaves EIP at the return thunk
+        // Save ALL CPU state — the timer callback runs via callStdcall which
+        // clobbers general-purpose registers. Without saving them, long-running
+        // computations (e.g. CRC loops) that span multiple ticks get corrupted.
         const savedEIP = emu.cpu.eip;
-        const savedESP = emu.cpu.reg[4];
+        const savedRegs = [...emu.cpu.reg]; // EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
+        const savedFlags = emu.cpu.getFlags();
         emuCallTimerProc(emu, t.callback, id, t.dwUser);
         // Restore CPU state after callback
         emu.cpu.eip = savedEIP;
-        emu.cpu.reg[4] = savedESP;
+        for (let ri = 0; ri < 8; ri++) emu.cpu.reg[ri] = savedRegs[ri];
+        emu.cpu.setFlags(savedFlags);
         if (t.periodic) {
           t.nextFire = now + t.delay;
         } else {
@@ -456,6 +480,8 @@ export function emuTick(emu: Emulator): void {
       }
     }
   }
+
+  let tkEipA = 0, tkHitA = 0, tkEipB = 0, tkHitB = 0, tkNextB = 252;
 
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
@@ -669,6 +695,23 @@ export function emuTick(emu: Emulator): void {
         break;
       }
       continue;
+    }
+
+    // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
+    {
+      let tkTry = false;
+      if ((stepCount & 0xFF) === 0 && stepCount > 0) {
+        if (eip === tkEipA) { if (++tkHitA >= 2) tkTry = true; } else { tkEipA = eip; tkHitA = 0; }
+      }
+      if (stepCount >= tkNextB) {
+        tkNextB = stepCount + 252;
+        if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
+      }
+      if (tkTry) {
+        const it = tryFastLoop(emu.cpu, emu.memory);
+        if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        tkHitA = tkHitB = 0;
+      }
     }
 
     const prevEip = eip;

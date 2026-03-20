@@ -59,6 +59,32 @@ export function registerFile(emu: Emulator): void {
       } else if (existing.source === 'additional') {
         const ab = emu.additionalFiles.get(existing.name);
         if (ab) syncData = new Uint8Array(ab);
+      } else if (existing.source === 'virtual') {
+        // Check in-memory cache for virtual files (IndexedDB-backed)
+        const cached = fs.virtualFileCache?.get(existing.name.toUpperCase());
+        if (cached) {
+          syncData = new Uint8Array(cached);
+        } else if (fs.onFileRequest) {
+          // Async fetch: pause execution, create handle when data arrives
+          const stackBytes = emu._currentThunkStackBytes;
+          emu.waitingForMessage = true;
+          const fileSize = existing.size;
+          const fileName = existing.name;
+          fs.fetchFileData(existing, emu.additionalFiles, resolved).then(buf => {
+            emu.waitingForMessage = false;
+            if (buf) fs.virtualFileCache?.set(fileName.toUpperCase(), buf);
+            const data = buf ? new Uint8Array(buf) : null;
+            const handle = emu.handles.alloc('file', {
+              path: upper, access: dwDesiredAccess, pos: 0,
+              data, size: data ? data.length : fileSize, modified: false,
+            } satisfies OpenFile);
+            emuCompleteThunk(emu, handle, stackBytes);
+            if (emu.running && !emu.halted) {
+              requestAnimationFrame(emu.tick);
+            }
+          });
+          return undefined as any;
+        }
       }
       return emu.handles.alloc('file', {
         path: upper, access: dwDesiredAccess, pos: 0,
@@ -970,8 +996,19 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('RemoveDirectoryW', 1, () => doRemoveDirectory(true));
 
   // ---- Drive / disk APIs ----
-  kernel32.register('GetDriveTypeW', 1, () => 3);
-  kernel32.register('GetDriveTypeA', 1, () => 3);
+  const DRIVE_FIXED = 3;
+  const DRIVE_CDROM = 5;
+  function getDriveType(wide: boolean) {
+    const ptr = emu.readArg(0);
+    if (ptr) {
+      const ch = wide ? emu.memory.readU16(ptr) : emu.memory.readU8(ptr);
+      // D: is the virtual file drive — report as CD-ROM for games that scan for their CD
+      if (ch === 0x44 || ch === 0x64) return DRIVE_CDROM; // 'D' or 'd'
+    }
+    return DRIVE_FIXED;
+  }
+  kernel32.register('GetDriveTypeW', 1, () => getDriveType(true));
+  kernel32.register('GetDriveTypeA', 1, () => getDriveType(false));
   kernel32.register('GetLogicalDrives', 0, () => 0x0200000C);
   kernel32.register('GetFileAttributesExW', 3, () => 0);
 

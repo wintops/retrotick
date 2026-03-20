@@ -94,6 +94,21 @@ export function registerInput(emu: Emulator): void {
   });
   user32.register('GetKeyNameTextA', 3, () => 0);
 
+  // VkKeyScanA(ch) → low byte = VK code, high byte = shift state; -1 if not found
+  user32.register('VkKeyScanA', 1, () => {
+    const ch = emu.readArg(0) & 0xFF;
+    // Map ASCII characters to virtual key codes
+    if (ch >= 0x61 && ch <= 0x7A) return ch - 0x20; // a-z → VK_A-VK_Z (0x41-0x5A)
+    if (ch >= 0x41 && ch <= 0x5A) return 0x0100 | ch; // A-Z → shift + VK_A-VK_Z
+    if (ch >= 0x30 && ch <= 0x39) return ch; // 0-9
+    if (ch === 0x20) return 0x20; // space
+    if (ch === 0x0D) return 0x0D; // enter
+    if (ch === 0x1B) return 0x1B; // escape
+    if (ch === 0x09) return 0x09; // tab
+    if (ch === 0x08) return 0x08; // backspace
+    return -1;
+  });
+
   // GetKeyboardLayout(idThread) — return HKL for configured layout
   user32.register('GetKeyboardLayout', 1, () => {
     const layout = getKeyboardLayout(loadSettings().keyboardLayout);

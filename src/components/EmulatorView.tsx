@@ -13,6 +13,7 @@ import { AboutDialog } from './win2k/AboutDialog';
 import { ConsoleView } from './ConsoleView';
 import { renderControlOverlay, effectiveClass } from './ControlOverlay';
 import { EmulatorDialog } from './EmulatorDialog';
+import { EXE_ICON_16 } from './DesktopIcon';
 import { FindDialog } from './FindDialog';
 import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
@@ -1274,6 +1275,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         clientW={isConsole ? 640 : canvasSize.w}
         clientH={isConsole ? 480 : canvasSize.h}
         iconUrl={iconUrl}
+        iconElement={!iconUrl ? EXE_ICON_16 : undefined}
         focused={parentFocused}
         maximized={maximized}
         minimized={false}
