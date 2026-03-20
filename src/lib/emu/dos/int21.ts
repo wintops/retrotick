@@ -972,6 +972,19 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg8(EAX, emu._dosVerifyFlag ? 1 : 0);
       break;
 
+    case 0x55: { // Create child PSP (DX=segment for new PSP)
+      const newPspSeg = cpu.getReg16(EDX);
+      const newPspLin = newPspSeg * 16;
+      const srcPspLin = (emu._dosPSP || 0x100) * 16;
+      // Copy 256 bytes from current PSP to new PSP
+      for (let i = 0; i < 256; i++) {
+        cpu.mem.writeU8(newPspLin + i, cpu.mem.readU8(srcPspLin + i));
+      }
+      // Update parent PSP pointer (offset 0x16) to point to current PSP
+      cpu.mem.writeU16(newPspLin + 0x16, emu._dosPSP || 0x100);
+      break;
+    }
+
     case 0x56: // Rename file (DS:DX=old, ES:DI=new)
       dosRenameFile(cpu, emu);
       break;
