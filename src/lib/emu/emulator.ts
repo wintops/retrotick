@@ -1695,7 +1695,17 @@ export class Emulator {
       } else {
         // AH=00/10: read — consume key, put in AX
         const key = this.dosKeyBuffer.shift()!;
-        this.cpu.setReg16(0, (key.scan << 8) | key.ascii);
+        // For INT 21h AH=07/08 path: only set AL (not full AX)
+        // and handle extended keys (ascii=0) by queueing scan for next call
+        if (this._dosWaitingForKey === false) {
+          // Already cleared above — this is the INT 21h path
+        }
+        let ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        this.cpu.setReg8(0, ascii); // Set AL only
+        if (ascii === 0) {
+          // Extended key: save scan code for the next INT 21h AH=07/08 call
+          this._dosExtKeyPending = key.scan;
+        }
       }
       this.waitingForMessage = false;
       while (this._dosPendingSoftwareIret > 0) {
