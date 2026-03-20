@@ -5,6 +5,7 @@ import { handleInt10 } from './video';
 import { handleInt21 } from './int21';
 import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
 import { handleXms, XMS_INT } from './xms';
+import { handleInt67 } from './ems';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -128,6 +129,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       cpu.setReg16(EAX, 0x0002);
       return true;
     }
+    case 0x67: return handleInt67(cpu, emu); // EMS (Expanded Memory)
     case 0x79: return handleInt79(cpu, emu);
     case 0x7F: return handleInt7F(cpu, emu);
     case XMS_INT: return handleXms(cpu, emu);
