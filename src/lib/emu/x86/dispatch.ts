@@ -220,6 +220,7 @@ export function cpuStep(cpu: CPU): void {
       break;
     case 0x17:
       cpu.ss = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
+      cpu._inhibitTF = true; // POP SS suppresses TF trap
       break;
     case 0x1F:
       cpu.ds = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
@@ -706,7 +707,7 @@ export function cpuStep(cpu: CPU): void {
         switch (d.regField) {
           case 0: cpu.es = d.val & 0xFFFF; break;
           case 1: cpu.cs = d.val & 0xFFFF; break;
-          case 2: cpu.ss = d.val & 0xFFFF; break;
+          case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; break; // MOV SS suppresses TF
           case 3: cpu.ds = d.val & 0xFFFF; break;
         }
       }
@@ -1097,6 +1098,7 @@ export function cpuStep(cpu: CPU): void {
 
     // INT 3 — dispatch like any software interrupt (UCDOS uses this as API entry)
     case 0xCC:
+      cpu._inhibitTF = true; // INT suppresses TF trap
       if (cpu.emu && handleDosInt(cpu, 3, cpu.emu)) {
         break;
       }
@@ -1109,6 +1111,7 @@ export function cpuStep(cpu: CPU): void {
     // INTO — INT 4 if OF=1
     case 0xCE:
       if (cpu.getFlag(OF)) {
+        cpu._inhibitTF = true;
         if (cpu.emu && cpu.emu.cpuSteps > 70000000) {
           const csBase_into = (cpu.cs << 4) >>> 0;
           const ip_into = (instrEip - csBase_into) & 0xFFFF;
@@ -1120,6 +1123,7 @@ export function cpuStep(cpu: CPU): void {
 
     // INT imm8
     case 0xCD: {
+      cpu._inhibitTF = true; // INT suppresses TF trap
       const num = cpu.fetch8();
       // Try DOS/BIOS handler first if emulator is available
       if (cpu.emu && handleDosInt(cpu, num, cpu.emu)) {
@@ -1135,6 +1139,7 @@ export function cpuStep(cpu: CPU): void {
 
     // IRET (0xCF) — return from interrupt
     case 0xCF: {
+      cpu._inhibitTF = true; // IRET suppresses TF trap
       if (!cpu.use32) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();

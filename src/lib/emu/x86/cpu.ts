@@ -78,6 +78,7 @@ export class CPU {
   ss = 0; // stack segment selector
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
+  _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
 
   constructor(mem: Memory) {
     this.mem = mem;
@@ -382,10 +383,11 @@ export class CPU {
   step(): void {
     // Check if TF was set BEFORE this instruction (single-step trap fires after)
     const tfBefore = this.getFlags() & TF;
+    this._inhibitTF = false;
     cpuStep(this);
     // If TF was set before the instruction, fire INT 1 (single-step exception)
-    // But not if the instruction itself was an INT/IRET (Intel behavior: no trap after MOV SS/POP SS either)
-    if (tfBefore && !this.halted && this.emu) {
+    // Intel: no trap after INT/IRET/MOV SS/POP SS instructions
+    if (tfBefore && !this._inhibitTF && !this.halted && this.emu) {
       // Clear TF before firing INT 1 (processor clears it on interrupt entry)
       const flags = this.getFlags();
       this.setFlags(flags & ~TF);
