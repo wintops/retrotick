@@ -103,6 +103,68 @@ export function exec0F(
       break;
     }
 
+    // 0F 01 — privileged/system instructions (SGDT, SIDT, LGDT, LIDT, SMSW, LMSW)
+    case 0x01: {
+      const modrm = cpu.mem.readU8(cpu.eip);
+      const reg = (modrm >> 3) & 7;
+      switch (reg) {
+        case 0: { // SGDT m — Store GDT register
+          const d = cpu.decodeModRM(opSize);
+          if (!d.isReg) {
+            const emu = cpu.emu;
+            cpu.mem.writeU16(d.addr, emu?._gdtLimit ?? 0);
+            cpu.mem.writeU32((d.addr + 2) >>> 0, emu?._gdtBase ?? 0);
+          }
+          break;
+        }
+        case 1: { // SIDT m — Store IDT register
+          const d = cpu.decodeModRM(opSize);
+          if (!d.isReg) {
+            const emu = cpu.emu;
+            cpu.mem.writeU16(d.addr, emu?._idtLimit ?? 0x3FF);
+            cpu.mem.writeU32((d.addr + 2) >>> 0, emu?._idtBase ?? 0);
+          }
+          break;
+        }
+        case 2: { // LGDT m — Load GDT register
+          const d = cpu.decodeModRM(opSize);
+          if (!d.isReg && cpu.emu) {
+            cpu.emu._gdtLimit = cpu.mem.readU16(d.addr);
+            cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+          }
+          break;
+        }
+        case 3: { // LIDT m — Load IDT register
+          const d = cpu.decodeModRM(opSize);
+          if (!d.isReg && cpu.emu) {
+            cpu.emu._idtLimit = cpu.mem.readU16(d.addr);
+            cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+          }
+          break;
+        }
+        case 4: { // SMSW r/m16 — Store Machine Status Word (low 16 bits of CR0)
+          const d = cpu.decodeModRM(16);
+          const cr0 = cpu.emu?._cr0 ?? 0x0000;
+          cpu.writeModRM(d, cr0 & 0xFFFF, 16);
+          break;
+        }
+        case 6: { // LMSW r/m16 — Load Machine Status Word
+          const d = cpu.decodeModRM(16);
+          if (cpu.emu) {
+            // LMSW can set PE but cannot clear it
+            const val = d.val & 0xFFFF;
+            cpu.emu._cr0 = (cpu.emu._cr0 & ~0x000E) | (val & 0x000F);
+            if (cpu.emu._cr0 & 1) cpu.realMode = false;
+          }
+          break;
+        }
+        default:
+          console.warn(`Unimplemented 0F 01 /${reg} at EIP=0x${(cpu.eip - 2).toString(16)}`);
+          break;
+      }
+      break;
+    }
+
     // LAR r, r/m16 — Load Access Rights (always fails in real mode: clear ZF)
     case 0x02: {
       const d = cpu.decodeModRM(opSize);
@@ -113,6 +175,36 @@ export function exec0F(
     // NOP (0F 1F /0 — multi-byte NOP)
     case 0x1F: {
       cpu.decodeModRM(opSize);
+      break;
+    }
+
+    // MOV r32, CRn (0F 20 /r) — Read control register
+    case 0x20: {
+      const d = cpu.decodeModRM(32);
+      const crn = d.regField;
+      let val = 0;
+      if (crn === 0) val = cpu.emu?._cr0 ?? 0;
+      // CR2 (page fault address), CR3 (page dir base), CR4 (extensions) — return 0
+      cpu.writeModRM(d, val, 32);
+      break;
+    }
+
+    // MOV CRn, r32 (0F 22 /r) — Write control register
+    case 0x22: {
+      const d = cpu.decodeModRM(32);
+      const crn = d.regField;
+      if (crn === 0 && cpu.emu) {
+        const oldPE = cpu.emu._cr0 & 1;
+        cpu.emu._cr0 = d.val >>> 0;
+        const newPE = cpu.emu._cr0 & 1;
+        if (!oldPE && newPE) {
+          // Transition to protected mode — set up segment bases from GDT
+          cpu.realMode = false;
+        } else if (oldPE && !newPE) {
+          // Back to real mode
+          cpu.realMode = true;
+        }
+      }
       break;
     }
 
