@@ -142,6 +142,13 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.isConsole = true;
     emu.initConsoleBuffer();
 
+    // Make the executable itself available for self-reading (overlay data access)
+    // Extract just the filename from exePath for DOS file lookup
+    const exeName = emu.exePath.replace(/^.*[\\\/]/, '');
+    if (exeName && !emu.additionalFiles.has(exeName)) {
+      emu.additionalFiles.set(exeName, arrayBuffer);
+    }
+
     const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
     setupDosEnvironment(emu, mz);
     console.log(`[EMU] MZ loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
