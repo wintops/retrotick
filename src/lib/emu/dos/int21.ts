@@ -465,7 +465,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         const termIP = cpu.mem.readU16(pspLin + 0x0A);
         const termCS = cpu.mem.readU16(pspLin + 0x0C);
         const parentPSP = cpu.mem.readU16(pspLin + 0x16);
-        console.log(`[INT 21h] AH=4C: PSP=0x${(emu._dosPSP||0x100).toString(16)} termAddr=${termCS.toString(16)}:${termIP.toString(16)} parent=0x${parentPSP.toString(16)}`);
+        console.warn(`[INT 21h] AH=4C: PSP=0x${(emu._dosPSP||0x100).toString(16)} termAddr=${termCS.toString(16)}:${termIP.toString(16)} parent=0x${parentPSP.toString(16)}`);
         // If terminate address points to real code (not BIOS stub) and parent PSP differs
         if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
           console.log(`[INT 21h] AH=4C: child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
