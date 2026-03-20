@@ -13,6 +13,7 @@ const CF = 0x001;
 const PF = 0x004;
 const ZF = 0x040;
 const SF = 0x080;
+const TF = 0x100;
 const DF = 0x400;
 const OF = 0x800;
 
@@ -69,10 +70,49 @@ export class CPU {
     this.mem = mem;
   }
 
+  fs = 0; // FS segment selector
+  gs = 0; // GS segment selector
+
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
     if (this.realMode) return (sel * 16) >>> 0;
-    return this.segBases.get(sel) ?? 0;
+    const cached = this.segBases.get(sel);
+    if (cached !== undefined) return cached;
+    // Look up in GDT if available
+    const base = this.loadGdtDescriptorBase(sel);
+    if (base !== undefined) {
+      this.segBases.set(sel, base);
+      return base;
+    }
+    return 0;
+  }
+
+  /** Read a GDT descriptor and return the base address */
+  loadGdtDescriptorBase(sel: number): number | undefined {
+    if (!this.emu || !this.emu._gdtBase) return undefined;
+    const index = (sel & 0xFFF8) >>> 3; // selector index (ignore RPL and TI)
+    if (index === 0) return 0; // null selector
+    const descAddr = this.emu._gdtBase + index * 8;
+    if (index * 8 + 7 > this.emu._gdtLimit) return undefined;
+    const lo = this.mem.readU32(descAddr);
+    const hi = this.mem.readU32(descAddr + 4);
+    // Base: bits 31:24 of hi, bits 7:0 of hi, bits 31:16 of lo
+    const baseLo = (lo >>> 16) & 0xFFFF;
+    const baseMid = hi & 0xFF;
+    const baseHi = (hi >>> 24) & 0xFF;
+    return (baseHi << 24) | (baseMid << 16) | baseLo;
+  }
+
+  /** Read a GDT descriptor and return whether it's a 32-bit segment */
+  loadGdtDescriptorIs32(sel: number): boolean {
+    if (!this.emu || !this.emu._gdtBase) return false;
+    const index = (sel & 0xFFF8) >>> 3;
+    if (index === 0) return false;
+    const descAddr = this.emu._gdtBase + index * 8;
+    if (index * 8 + 7 > this.emu._gdtLimit) return false;
+    const hi = this.mem.readU32(descAddr + 4);
+    // D/B bit is bit 22 of hi dword
+    return (hi & (1 << 22)) !== 0;
   }
 
   // Register accessors for 8/16 bit subregisters
@@ -320,6 +360,27 @@ export class CPU {
 
   // Execute one instruction — delegated to cpu-step.ts
   step(): void {
+    // Check if TF was set BEFORE this instruction (single-step trap fires after)
+    const tfBefore = this.getFlags() & TF;
     cpuStep(this);
+    // If TF was set before the instruction, fire INT 1 (single-step exception)
+    // But not if the instruction itself was an INT/IRET (Intel behavior: no trap after MOV SS/POP SS either)
+    if (tfBefore && !this.halted && this.emu) {
+      // Clear TF before firing INT 1 (processor clears it on interrupt entry)
+      const flags = this.getFlags();
+      this.setFlags(flags & ~TF);
+      // Push flags (with TF still set, as saved), CS, IP — then jump to INT 1 handler
+      if (!this.use32) {
+        this.push16(flags);
+        this.push16(this.cs);
+        this.push16((this.eip - this.segBase(this.cs)) & 0xFFFF);
+        // Look up INT 1 vector from IVT
+        const vec = this.mem.readU32(1 * 4);
+        const newIP = vec & 0xFFFF;
+        const newCS = (vec >>> 16) & 0xFFFF;
+        this.cs = newCS;
+        this.eip = this.segBase(newCS) + newIP;
+      }
+    }
   }
 }

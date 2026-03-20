@@ -24,7 +24,7 @@ export function materializeFlags(cpu: CPU): void {
   const res = cpu.lazyResult;
   const a = cpu.lazyA;
   const b = cpu.lazyB;
-  let f = cpu.flagsCache & DF; // preserve DF
+  let f = cpu.flagsCache & (DF | 0x0300); // preserve DF, TF, IF
   f |= 0x0002; // bit 1 always set
 
   switch (cpu.lazyOp) {

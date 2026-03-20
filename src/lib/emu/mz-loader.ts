@@ -88,6 +88,8 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
+  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
@@ -195,6 +197,8 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
+  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
