@@ -159,14 +159,14 @@ export function cpuStep(cpu: CPU): void {
       if (opSize === 16) {
         const v = (cpu.getReg16(r) + 1) & 0xFFFF;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF16 = cpu.flagsCache & DF;
+        const savedDF16 = cpu.flagsCache & (DF | 0x0300);
         cpu.setReg16(r, v);
         cpu.setLazy(LazyOp.INC16, v, 0, 0);
         cpu.flagsCache = savedCF | savedDF16;
       } else {
         const v = (cpu.reg[r] + 1) | 0;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF32 = cpu.flagsCache & DF;
+        const savedDF32 = cpu.flagsCache & (DF | 0x0300);
         cpu.reg[r] = v;
         cpu.setLazy(LazyOp.INC32, v, 0, 0);
         cpu.flagsCache = savedCF | savedDF32;
@@ -181,14 +181,14 @@ export function cpuStep(cpu: CPU): void {
       if (opSize === 16) {
         const v = (cpu.getReg16(r) - 1) & 0xFFFF;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF = cpu.flagsCache & DF;
+        const savedDF = cpu.flagsCache & (DF | 0x0300);
         cpu.setReg16(r, v);
         cpu.setLazy(LazyOp.DEC16, v, 0, 0);
         cpu.flagsCache = savedCF | savedDF;
       } else {
         const v = (cpu.reg[r] - 1) | 0;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF = cpu.flagsCache & DF;
+        const savedDF = cpu.flagsCache & (DF | 0x0300);
         cpu.reg[r] = v;
         cpu.setLazy(LazyOp.DEC32, v, 0, 0);
         cpu.flagsCache = savedCF | savedDF;
@@ -1227,10 +1227,17 @@ export function cpuStep(cpu: CPU): void {
         const selector = cpu.fetch16();
         cpu.cs = selector;
         cpu.eip = (cpu.segBase(selector)) + offset;
+        // In protected mode, check if new CS is a 32-bit segment
+        if (!cpu.realMode) {
+          const is32 = cpu.loadGdtDescriptorIs32(selector);
+          cpu.use32 = is32;
+          cpu._addrSize16 = !is32;
+        }
       } else {
         const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
-        cpu.fetch16(); // segment selector — consumed and ignored in flat model
-        cpu.eip = offset;
+        const selector = cpu.fetch16();
+        cpu.cs = selector;
+        cpu.eip = (cpu.segBase(selector)) + offset;
       }
       break;
     }
@@ -1515,14 +1522,14 @@ export function cpuStep(cpu: CPU): void {
       if (d.regField === 0) {
         const result = (d.val + 1) & 0xFF;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF8i = cpu.flagsCache & DF;
+        const savedDF8i = cpu.flagsCache & (DF | 0x0300);
         cpu.writeModRM(d, result, 8);
         cpu.setLazy(LazyOp.INC8, result, 0, 0);
         cpu.flagsCache = savedCF | savedDF8i;
       } else if (d.regField === 1) {
         const result = (d.val - 1) & 0xFF;
         const savedCF = cpu.getFlag(CF) ? CF : 0;
-        const savedDF8d = cpu.flagsCache & DF;
+        const savedDF8d = cpu.flagsCache & (DF | 0x0300);
         cpu.writeModRM(d, result, 8);
         cpu.setLazy(LazyOp.DEC8, result, 0, 0);
         cpu.flagsCache = savedCF | savedDF8d;
@@ -1537,14 +1544,14 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) {
             const result = (d.val + 1) & 0xFFFF;
             const savedCF = cpu.getFlag(CF) ? CF : 0;
-            const savedDFi16 = cpu.flagsCache & DF;
+            const savedDFi16 = cpu.flagsCache & (DF | 0x0300);
             cpu.writeModRM(d, result, 16);
             cpu.setLazy(LazyOp.INC16, result, 0, 0);
             cpu.flagsCache = savedCF | savedDFi16;
           } else {
             const result = (d.val + 1) | 0;
             const savedCF = cpu.getFlag(CF) ? CF : 0;
-            const savedDFi32 = cpu.flagsCache & DF;
+            const savedDFi32 = cpu.flagsCache & (DF | 0x0300);
             cpu.writeModRM(d, result, 32);
             cpu.setLazy(LazyOp.INC32, result, 0, 0);
             cpu.flagsCache = savedCF | savedDFi32;
@@ -1555,14 +1562,14 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) {
             const result = (d.val - 1) & 0xFFFF;
             const savedCF = cpu.getFlag(CF) ? CF : 0;
-            const savedDFd16 = cpu.flagsCache & DF;
+            const savedDFd16 = cpu.flagsCache & (DF | 0x0300);
             cpu.writeModRM(d, result, 16);
             cpu.setLazy(LazyOp.DEC16, result, 0, 0);
             cpu.flagsCache = savedCF | savedDFd16;
           } else {
             const result = (d.val - 1) | 0;
             const savedCF = cpu.getFlag(CF) ? CF : 0;
-            const savedDFd32 = cpu.flagsCache & DF;
+            const savedDFd32 = cpu.flagsCache & (DF | 0x0300);
             cpu.writeModRM(d, result, 32);
             cpu.setLazy(LazyOp.DEC32, result, 0, 0);
             cpu.flagsCache = savedCF | savedDFd32;

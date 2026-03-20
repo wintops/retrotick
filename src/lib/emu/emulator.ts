@@ -342,6 +342,11 @@ export class Emulator {
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
+  _cr0 = 0;           // Control Register 0 (PE bit etc.)
+  _gdtBase = 0;       // GDT linear base address
+  _gdtLimit = 0;      // GDT limit
+  _idtBase = 0;       // IDT linear base address
+  _idtLimit = 0;      // IDT limit
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
