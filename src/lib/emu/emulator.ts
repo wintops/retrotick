@@ -1582,6 +1582,22 @@ export class Emulator {
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
     // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
     if ((this.waitingForMessage || this._dosHalted) && this.running && !this.halted) {
+      // If DOS is waiting for a key via INT 21h AH=01/07/08 and this is a make code
+      // (not E0 prefix, not break code), push directly to dosKeyBuffer for immediate delivery
+      if (this._dosWaitingForKey && scancode !== 0xE0 && !(scancode & 0x80)) {
+        // Convert scancode to ASCII using the BIOS scan-to-ASCII table
+        const SCAN_TO_ASCII: (number|undefined)[] = [
+          undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
+          0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
+          0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
+          0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
+        ];
+        // Nav keys (0x47-0x53) and F-keys (0x3B-0x44) are always extended
+        const isExtended = this._kbdE0Prefix || scancode >= 0x3B;
+        const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
+        this.dosKeyBuffer.push({ ascii, scan: scancode });
+        this._kbdE0Prefix = false;
+      }
       this.waitingForMessage = false;
       this._dosHalted = false;
       requestAnimationFrame(this.tick);

@@ -22,12 +22,6 @@ function isFromSyntheticBiosStub(cpu: CPU, biosDefault: number): boolean {
 
 /** Handle DOS/BIOS interrupts. Returns true if handled, false if not. */
 export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
-  // Temporary trace for INT FCh (DIS service calls)
-  if (intNum === 0xFC) {
-    const bx = cpu.reg[3] & 0xFFFF;
-    const ax = cpu.reg[0] & 0xFFFF;
-    console.log(`[INT FCh] BX=${bx.toString(16)} AX=${ax.toString(16)} at EIP=0x${(cpu.eip>>>0).toString(16)} CS=${cpu.cs.toString(16)}`);
-  }
   // When UCDOS is active and no custom INT 3 handler installed,
   // handle INT 3 in JS as UCDOS runtime API.
   if (intNum === 3 && emu._dosUcdosStubSeg) {

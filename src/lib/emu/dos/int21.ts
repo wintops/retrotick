@@ -97,10 +97,31 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         const ascii = key.ascii === 0xE0 ? 0 : key.ascii;
         cpu.setReg8(EAX, ascii);
         if (ascii === 0) {
-          // Extended key: save scan code for next call
           emu._dosExtKeyPending = key.scan;
         }
       } else {
+        // Also check BDA keyboard buffer (keys from INT 09h / injectHwKey)
+        const BDA = 0x400;
+        const head = cpu.mem.readU16(BDA + 0x1A);
+        const tail = cpu.mem.readU16(BDA + 0x1C);
+        if (head !== tail) {
+          const keyWord = cpu.mem.readU16(BDA + head);
+          let ascii2 = keyWord & 0xFF;
+          const scan2 = (keyWord >> 8) & 0xFF;
+          // Advance BDA head
+          const bufStart = cpu.mem.readU16(BDA + 0x80);
+          const bufEnd = cpu.mem.readU16(BDA + 0x82);
+          let newHead = head + 2;
+          if (newHead >= bufEnd) newHead = bufStart;
+          cpu.mem.writeU16(BDA + 0x1A, newHead);
+          // Convert E0 prefix to 0 for legacy callers
+          if (ascii2 === 0xE0) ascii2 = 0;
+          cpu.setReg8(EAX, ascii2);
+          if (ascii2 === 0) {
+            emu._dosExtKeyPending = scan2;
+          }
+          break;
+        }
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
       }
