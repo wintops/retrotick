@@ -546,7 +546,12 @@ export function emuTick(emu: Emulator): void {
   emu._tickRunning = true;
 
   try {
-  // If waiting for DOS key (INT 21h AH=01/07/08), check BDA for keys from INT 09h
+  // If waiting for DOS key (INT 21h AH=01/07/08), deliver pending keys
+  if (emu._dosWaitingForKey && emu.dosKeyBuffer.length > 0) {
+    emu.deliverDosKey();
+    emu._tickRunning = false;
+    return;
+  }
   if (emu._dosWaitingForKey && emu.dosKeyBuffer.length === 0) {
     const BDA = 0x400;
     const head = emu.memory.readU16(BDA + 0x1A);

@@ -206,7 +206,7 @@ if (!globalThis._oplRegistered) {
     if (port === 0x389 || port === 0x229) return 0; // data read not meaningful
 
     // Sound Blaster DSP ports (base 0x220)
-    if (port === 0x22A) return this.sbDsp.readData();
+    if (port === 0x22A) { const v = this.sbDsp.readData(); console.log(`[SB] DSP Read Data: 0x${v.toString(16)}`); return v; }
     if (port === 0x22E) {
       if (this.sbDsp.irqPending) this.sbDsp.ackIRQ();
       return this.sbDsp.readStatus();
@@ -239,7 +239,7 @@ if (!globalThis._oplRegistered) {
     if (port === 0x389 || port === 0x229) { this.opl2.writeData(value); return true; }
 
     // Sound Blaster DSP ports (base 0x220)
-    if (port === 0x226) { this.sbDsp.writeReset(value); return true; }
+    if (port === 0x226) { console.log(`[SB] DSP Reset write: ${value}`); this.sbDsp.writeReset(value); return true; }
     if (port === 0x22C) { this.sbDsp.writeCommand(value); return true; }
 
     // DMA controller ports (channels 0-3)
