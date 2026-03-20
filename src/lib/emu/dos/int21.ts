@@ -61,10 +61,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x01: { // Read character with echo (blocking)
-      if (emu.dosKeyBuffer.length > 0) {
+      if (emu._dosExtKeyPending !== undefined) {
+        cpu.setReg8(EAX, emu._dosExtKeyPending);
+        emu._dosExtKeyPending = undefined;
+      } else if (emu.dosKeyBuffer.length > 0) {
         const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg8(EAX, key.ascii);
-        teletypeOutput(cpu, emu, key.ascii);
+        const ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        cpu.setReg8(EAX, ascii);
+        if (ascii === 0) {
+          emu._dosExtKeyPending = key.scan;
+        } else {
+          teletypeOutput(cpu, emu, ascii);
+        }
       } else {
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
@@ -80,9 +88,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x07: // Direct char input without echo (blocking, no Ctrl-C check)
     case 0x08: { // Char input without echo (blocking, Ctrl-C check)
-      if (emu.dosKeyBuffer.length > 0) {
+      if (emu._dosExtKeyPending !== undefined) {
+        // Second call after extended key: return the scan code
+        cpu.setReg8(EAX, emu._dosExtKeyPending);
+        emu._dosExtKeyPending = undefined;
+      } else if (emu.dosKeyBuffer.length > 0) {
         const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg8(EAX, key.ascii);
+        const ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        cpu.setReg8(EAX, ascii);
+        if (ascii === 0) {
+          // Extended key: save scan code for next call
+          emu._dosExtKeyPending = key.scan;
+        }
       } else {
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;

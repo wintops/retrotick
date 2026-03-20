@@ -332,6 +332,7 @@ export class Emulator {
   isDOS = false;
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
   _dosWaitingForKey: false | 'read' | 'peek' = false;
+  _dosExtKeyPending?: number; // scan code pending for second getch() call on extended keys
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;

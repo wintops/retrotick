@@ -206,10 +206,11 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       const fg = cell ? (cell.attr & 0x0F) : 7;
       const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
       const isCursor = row === emu.consoleCursorY && col === emu.consoleCursorX;
-      const ch = (cell && cell.char > 0x20)
-        ? (emu.isDOS && cell.char <= 0xFF ? cp437ToChar(cell.char) : String.fromCharCode(cell.char))
+      const charCode = cell ? cell.char : 0;
+      const ch = (charCode > 0 && charCode !== 0x20)
+        ? (emu.isDOS && charCode <= 0xFF ? cp437ToChar(charCode) : String.fromCharCode(charCode))
         : '\u00A0';
-      const wide = cell && cell.char > 0x20 && isFullwidth(cell.char);
+      const wide = charCode > 0x20 && isFullwidth(charCode);
 
       if (isCursor && cursorActive) {
         flushRun();
