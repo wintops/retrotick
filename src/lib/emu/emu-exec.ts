@@ -81,8 +81,30 @@ export function emuCompleteThunk16(emu: Emulator, retVal: number, stackBytes: nu
 export function emuResume(emu: Emulator): void {
   // Legacy: only used for DOS keyboard resume (INT 16h)
   if (!emu.waitingForMessage) return;
-  if (emu._dosWaitingForKey && emu.dosKeyBuffer.length > 0) {
-    emu.deliverDosKey();
+  if (emu._dosWaitingForKey) {
+    // If dosKeyBuffer has keys, deliver directly
+    if (emu.dosKeyBuffer.length > 0) {
+      emu.deliverDosKey();
+      return;
+    }
+    // Also check BDA keyboard buffer — keys injected via INT 09h go there
+    const BDA = 0x400;
+    const head = emu.memory.readU16(BDA + 0x1A);
+    const tail = emu.memory.readU16(BDA + 0x1C);
+    if (head !== tail) {
+      // Copy key from BDA to dosKeyBuffer so deliverDosKey can process it
+      const keyWord = emu.memory.readU16(BDA + head);
+      const ascii = keyWord & 0xFF;
+      const scan = (keyWord >> 8) & 0xFF;
+      emu.dosKeyBuffer.push({ ascii, scan });
+      // Advance BDA head
+      const bufStart = emu.memory.readU16(BDA + 0x80);
+      const bufEnd = emu.memory.readU16(BDA + 0x82);
+      let newHead = head + 2;
+      if (newHead >= bufEnd) newHead = bufStart;
+      emu.memory.writeU16(BDA + 0x1A, newHead);
+      emu.deliverDosKey();
+    }
   }
 }
 
@@ -524,6 +546,27 @@ export function emuTick(emu: Emulator): void {
   emu._tickRunning = true;
 
   try {
+  // If waiting for DOS key (INT 21h AH=01/07/08), check BDA for keys from INT 09h
+  if (emu._dosWaitingForKey && emu.dosKeyBuffer.length === 0) {
+    const BDA = 0x400;
+    const head = emu.memory.readU16(BDA + 0x1A);
+    const tail = emu.memory.readU16(BDA + 0x1C);
+    if (head !== tail) {
+      const keyWord = emu.memory.readU16(BDA + head);
+      const ascii = keyWord & 0xFF;
+      const scan = (keyWord >> 8) & 0xFF;
+      emu.dosKeyBuffer.push({ ascii, scan });
+      const bufStart = emu.memory.readU16(BDA + 0x80);
+      const bufEnd = emu.memory.readU16(BDA + 0x82);
+      let newHead = head + 2;
+      if (newHead >= bufEnd) newHead = bufStart;
+      emu.memory.writeU16(BDA + 0x1A, newHead);
+      emu.deliverDosKey();
+      emu._tickRunning = false;
+      return;
+    }
+  }
+
   const tickStart = performance.now();
   let stepCount = 0;
   const DOS_TICK_MS = 14; // run close to one frame (~16ms) for throughput
