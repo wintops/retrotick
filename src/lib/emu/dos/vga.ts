@@ -142,8 +142,10 @@ export class VGAState {
   /** Initialize VGA register values for a given video mode */
   initRegsForMode(mode: number): void {
     // Attribute Controller defaults (16 palette entries + 5 control regs)
-    // Palette: identity mapping 0-15 for text mode
-    for (let i = 0; i < 16; i++) this.atcRegs[i] = i;
+    // Standard EGA/VGA ATC palette: maps 4-bit attribute to 6-bit DAC index
+    // Colors 0-5,7 = dark, 6 = brown (20h), 8-15 = bright (38h-3Fh)
+    const egaAtcPalette = [0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F];
+    for (let i = 0; i < 16; i++) this.atcRegs[i] = egaAtcPalette[i];
     this.atcRegs[0x10] = 0x0C; // Mode Control: blink enable, line graphics enable
     this.atcRegs[0x11] = 0x00; // Overscan Color
     this.atcRegs[0x12] = 0x0F; // Color Plane Enable (all planes)
