@@ -82,6 +82,18 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
     dosExecReturnFromInt20(cpu, emu);
     return true;
   }
+  // Check PSP terminate address (used by custom loaders like Second Reality's runexe)
+  const pspLin = (emu._dosPSP || 0x100) * 16;
+  const termIP = cpu.mem.readU16(pspLin + 0x0A);
+  const termCS = cpu.mem.readU16(pspLin + 0x0C);
+  const parentPSP = cpu.mem.readU16(pspLin + 0x16);
+  if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
+    console.log(`[INT 20h] child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
+    emu._dosPSP = parentPSP;
+    cpu.cs = termCS;
+    cpu.eip = cpu.segBase(termCS) + termIP;
+    return true;
+  }
   emu.exitedNormally = true;
   emu.halted = true;
   cpu.halted = true;
