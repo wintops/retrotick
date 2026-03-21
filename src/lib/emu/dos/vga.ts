@@ -619,7 +619,11 @@ export function syncMode13h(emu: Emulator): void {
 
   // CRTC Start Address: display starts at this byte offset in VRAM
   // Used for hardware scrolling and double-buffering
-  const displayStart = ((vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D]) * 4;
+  // In mode 13h chain-4, CRTC word mode: register * 2 gives byte offset
+  // (CRTC 0x17 bit 6 = 0 means word addressing)
+  const startReg = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
+  const wordMode = !(vga.crtcRegs[0x17] & 0x40); // bit 6 clear = word mode
+  const displayStart = wordMode ? startReg * 2 : startReg;
 
   for (let i = 0; i < 64000; i++) {
     buf32[i] = lut[mem.readU8(0xA0000 + ((displayStart + i) & 0xFFFF)) & vga.dacPixelMask];
