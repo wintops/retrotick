@@ -354,8 +354,45 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x48: { // Allocate memory (BX=paragraphs)
       const paras = cpu.getReg16(EBX);
-      // Walk MCB chain to find a free block large enough
+      if (paras !== 0xFFFF && emu.cpuSteps > 3000000) {
+        // Log MCB chain during late allocations (STARTMUS loading)
+        const fMcb = emu._dosMcbFirstSeg || 0x0060;
+        let seg = fMcb;
+        const chain: string[] = [];
+        for (let it = 0; it < 50; it++) {
+          const lin = seg * 16;
+          const t = String.fromCharCode(cpu.mem.readU8(lin));
+          const o = cpu.mem.readU16(lin + 1);
+          const s = cpu.mem.readU16(lin + 3);
+          chain.push(`${seg.toString(16)}:${t}/${o.toString(16)}/${s.toString(16)}`);
+          if (t === 'Z') break;
+          seg += s + 1;
+        }
+        console.warn(`[MCB] Alloc ${paras.toString(16)} paras. Chain: ${chain.join(' → ')}`);
+      }
+      // Walk MCB chain: first merge adjacent free blocks
       const firstMcb = emu._dosMcbFirstSeg || 0x0060;
+      for (let ms = firstMcb, it2 = 0; it2 < 1000; it2++) {
+        const ml = ms * 16;
+        const mt = cpu.mem.readU8(ml);
+        const mo = cpu.mem.readU16(ml + 1);
+        const msz = cpu.mem.readU16(ml + 3);
+        if (mt === 0x5A) break;
+        if (mo === 0) { // free block — try to merge with next
+          const nextSeg = ms + msz + 1;
+          const nextLin = nextSeg * 16;
+          const nextType = cpu.mem.readU8(nextLin);
+          const nextOwner = cpu.mem.readU16(nextLin + 1);
+          const nextSize = cpu.mem.readU16(nextLin + 3);
+          if (nextOwner === 0) { // next is also free — merge
+            cpu.mem.writeU16(ml + 3, msz + nextSize + 1); // absorb next MCB
+            cpu.mem.writeU8(ml, nextType); // inherit 'M' or 'Z'
+            continue; // retry from same position (may merge more)
+          }
+        }
+        ms += msz + 1;
+      }
+      // Now walk to find a free block large enough
       let mcbSeg = firstMcb;
       let allocated = false;
       let largestFree = 0;
@@ -382,6 +419,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           cpu.setReg16(EAX, blockSeg);
           cpu.setFlag(CF, false);
           allocated = true;
+          if (emu.cpuSteps > 3000000) console.warn(`[AH=48] Alloc ${paras.toString(16)} → seg ${blockSeg.toString(16)}`);
           break;
         }
         if (owner === 0 && size > largestFree) largestFree = size;
@@ -1055,6 +1093,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       // Update parent PSP pointer (offset 0x16) to point to current PSP
       cpu.mem.writeU16(newPspLin + 0x16, emu._dosPSP || 0x100);
+      // Also store SI as the top-of-memory in the new PSP (offset 0x02)
+      // runexe passes SI = exeldr_pspsi (top segment for the child)
+      const pspSi = cpu.getReg16(ESI);
+      if (pspSi > newPspSeg) {
+        cpu.mem.writeU16(newPspLin + 0x02, pspSi);
+      }
+      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)}) SI=${pspSi.toString(16)}`);
       break;
     }
 
