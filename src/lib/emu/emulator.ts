@@ -1677,6 +1677,17 @@ export class Emulator {
   }
 
   deliverDosKey(): void {
+    // Handle pending extended key scan code (second getch() call)
+    if (this._dosWaitingForKey && this._dosExtKeyPending !== undefined) {
+      this._dosWaitingForKey = false;
+      this.cpu.setReg8(0, this._dosExtKeyPending);
+      this._dosExtKeyPending = undefined;
+      this.waitingForMessage = false;
+      if (this.running && !this.halted) {
+        requestAnimationFrame(this.tick);
+      }
+      return;
+    }
     if (this._dosWaitingForKey && this.dosKeyBuffer.length > 0) {
       const mode = this._dosWaitingForKey;
       this._dosWaitingForKey = false;
