@@ -780,6 +780,16 @@ export function emuTick(emu: Emulator): void {
       }
       prevBdaKeyHead = curBdaKeyHead;
     }
+    // Detect stack corruption (ESP < 0x10 is abnormally low)
+    if ((emu.cpu.reg[4] & 0xFFFF) < 0x10 && (emu.cpu.reg[4] & 0xFFFF) > 0 && emu.isDOS && !emu.cpu.halted) {
+      const sp = emu.cpu.reg[4] & 0xFFFF;
+      const eip = emu.cpu.eip >>> 0;
+      const bytes: string[] = [];
+      for (let j = -4; j < 8; j++) bytes.push(emu.memory.readU8(((prevEip + j) >>> 0)).toString(16).padStart(2, '0'));
+      console.warn(`[STACK-CORRUPT] SP=0x${sp.toString(16)} at prev EIP=0x${prevEip.toString(16)} new EIP=0x${eip.toString(16)} CS=${emu.cpu.cs.toString(16)} SS=${emu.cpu.ss.toString(16)} bytes@prevEIP-4: ${bytes.join(' ')}`);
+      emu.cpu.halted = true;
+      emu.cpu.haltReason = 'stack corruption';
+    }
     if (emu.cpu.halted) {
       const hBytes: string[] = [];
       for (let j = 0; j < 8; j++) hBytes.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
