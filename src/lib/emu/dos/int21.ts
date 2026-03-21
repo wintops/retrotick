@@ -132,10 +132,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           }
           break;
         }
-        // Rewind EIP to before the INT 21h (CD 21 = 2 bytes) so it re-executes
-        // when a key becomes available. This is simpler and more robust than
-        // trying to patch registers via deliverDosKey().
-        cpu.eip -= 2;
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
       }
