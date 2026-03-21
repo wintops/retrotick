@@ -617,8 +617,12 @@ export function syncMode13h(emu: Emulator): void {
   const lut = buildRGBLookup(vga.palette);
   const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
 
+  // CRTC Start Address: display starts at this byte offset in VRAM
+  // Used for hardware scrolling and double-buffering
+  const displayStart = ((vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D]) * 4;
+
   for (let i = 0; i < 64000; i++) {
-    buf32[i] = lut[mem.readU8(0xA0000 + i) & vga.dacPixelMask];
+    buf32[i] = lut[mem.readU8(0xA0000 + ((displayStart + i) & 0xFFFF)) & vga.dacPixelMask];
   }
 
   vga.dirty = false;
