@@ -546,11 +546,11 @@ export function emuTick(emu: Emulator): void {
   emu._tickRunning = true;
 
   try {
-  // If waiting for DOS key (INT 21h AH=01/07/08) and key available, just resume
-  // (the INT 21h was rewound and will re-execute, finding the key in dosKeyBuffer)
+  // If waiting for DOS key (INT 21h AH=01/07/08) and key available, deliver it
   if (emu._dosWaitingForKey && (emu.dosKeyBuffer.length > 0 || emu._dosExtKeyPending !== undefined)) {
-    emu._dosWaitingForKey = false;
-    emu.waitingForMessage = false;
+    emu.deliverDosKey();
+    emu._tickRunning = false;
+    return;
   }
   if (emu._dosWaitingForKey && emu.dosKeyBuffer.length === 0) {
     const BDA = 0x400;
