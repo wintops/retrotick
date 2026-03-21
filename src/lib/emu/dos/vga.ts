@@ -107,10 +107,10 @@ export class VGAState {
 
   // Planar memory: 4 bit planes × 64KB each (for modes 0D-12)
   planes: Uint8Array[] = [
-    new Uint8Array(65536),
-    new Uint8Array(65536),
-    new Uint8Array(65536),
-    new Uint8Array(65536),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
   ];
   latchRegs = new Uint8Array(4); // VGA latch registers (one per plane)
 
@@ -650,7 +650,9 @@ export function syncModeX(emu: Emulator): void {
   // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
   const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
   const height = Math.floor(totalScanlines / (maxScanLine + 1));
-  const width = 320; // Mode X is always 320 pixels wide
+  // Display width is always 320 pixels in Mode X (the CRTC offset register
+  // controls memory pitch, not display width — wider pitch is for virtual scrolling)
+  const width = 320;
 
   // Reinit framebuffer if resolution changed
   if (!vga.framebuffer || vga.framebuffer.width !== width || vga.framebuffer.height !== height) {
@@ -676,7 +678,7 @@ export function syncModeX(emu: Emulator): void {
     const px = y * width;
     for (let x = 0; x < width; x++) {
       const plane = x & 3;
-      const offset = (rowStart + (x >> 2)) & 0xFFFF;
+      const offset = (rowStart + (x >> 2)) & 0x1FFFF; // 128KB plane mask
       let colorIdx: number;
       switch (plane) {
         case 0: colorIdx = p0[offset]; break;
