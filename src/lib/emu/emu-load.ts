@@ -37,7 +37,7 @@ import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16
 import { setupXmsStub } from './dos/xms';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
-import { parsePE, extractExports } from '../pe';
+import { parsePE, extractExports, extractMenus } from '../pe';
 import type { ExportFunction } from '../pe';
 import { buildNEThunkTable } from './emu-thunks-ne';
 import { handleSehDispatchReturn } from './emu-window';
@@ -237,6 +237,20 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     rebuildThunkPages(emu);
 
+    // Pre-load menu items from NE resources so GetMenuState works during init
+    if (!emu.menuItems) {
+      const menus = extractMenus(peInfo, arrayBuffer);
+      if (menus.length > 0) {
+        emu.menuItems = menus[0].menu.items;
+      }
+    }
+
+    // Create main thread BEFORE DLL init so thread-delegated getters/setters
+    // (wndProcResult, wndProcDepth, etc.) work during callWndProc16
+    const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
+    emu.threads.push(mainThread);
+    emu.currentThread = mainThread;
+
     // Call NE DLL entry points (LibEntry → LibMain) to initialize DLLs
     // The standard LIBENTRY stub expects: CX=heapSize, DI=hInstance(=dataSegSelector),
     // DS=autoDataSeg, ES:SI=cmdLine. It calls LocalInit then LibMain.
@@ -273,11 +287,6 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
       emu.cpu.reg[7] = savedEDI;
       emu.cpu.reg[6] = savedESI;
     }
-
-    // Create a dummy thread for NE apps so thread-delegated getters/setters work
-    const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
-    emu.threads.push(mainThread);
-    emu.currentThread = mainThread;
 
     // NE (Win16) programs expect C: as the current drive
     emu.currentDrive = 'C';
@@ -689,6 +698,17 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
     // Store DLL resources for cross-module resource loading (LoadBitmap etc.)
     if (dll.resources.length > 0) {
       emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf });
+    }
+
+    // Record static data end for the DLL's auto-data segment
+    // so LocalInit can avoid clobbering initialized global variables
+    if (dll.dataSegSelector && dll.autoDataStaticSize > 0) {
+      emu.segStaticEnd.set(dll.dataSegSelector, dll.autoDataStaticSize);
+    }
+
+    // Track DLL data segment selectors for correct DS in wndProc dispatch
+    if (dll.dataSegSelector) {
+      emu.neDllDataSegs.add(dll.dataSegSelector);
     }
 
     // Merge DLL's API thunks (its imports from KERNEL/USER/etc) into the main apiMap

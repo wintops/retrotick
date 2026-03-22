@@ -49,6 +49,16 @@ npm run dev
 npm run build     # プロダクションビルド → dist/
 ```
 
+## テスト
+
+ヘッドレステストは、モック Canvas を使用して Node.js で実行ファイルを実行します：
+
+```bash
+timeout 2 npx tsx tests/test-<name>.mjs
+```
+
+詳細は [`tests/`](./tests/) をご覧ください。
+
 ## コントリビュート
 
 PR 歓迎です！主な目標はより多くの実行ファイルを正しく動作させることです。具体的には、不足している Win32/Win16 API スタブの実装、レンダリングの修正、GDI の忠実度向上です。ステップバイステップのワークフローは `CLAUDE.md` をご覧ください。

@@ -32,6 +32,9 @@ export interface DCInfo {
   brushOrgY?: number;
   /** Palette index buffer for palette animation: stores palette index per pixel (0 = no palette) */
   palIndexBuf?: Uint8Array;
+  /** Number of unmatched SaveDC calls on this DC (like Wine's save_level).
+   *  Used by releaseChildDC to pop all remaining saves when the DC is released. */
+  saveLevel?: number;
 }
 
 export interface BitmapInfo {

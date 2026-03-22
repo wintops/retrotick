@@ -39,7 +39,7 @@ export function MenuDropdown({ items, onCommand, onClose, isSubmenu, x, y }: {
       style={{
         position: hasAbsPos ? 'fixed' : 'absolute',
         ...posStyle,
-        zIndex: 100,
+        zIndex: 10000,
         background: '#D4D0C8', minWidth: '160px',
         border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF',
         boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080, 2px 2px 4px rgba(0,0,0,0.25)',

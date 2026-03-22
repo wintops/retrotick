@@ -22,6 +22,7 @@ export interface KernelState {
   globalLockCount: Map<number, number>;
   localSizes: Map<number, number>;
   localLockCounts: Map<number, number>;
+  localRelocations?: Map<number, number>;
   atomTable: Map<number, string>;
   nextAtom: number;
   moduleHandles: Map<string, number>;

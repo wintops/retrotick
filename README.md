@@ -47,6 +47,16 @@ Open `http://localhost:5173` and drop a `.exe` file onto the page, or pick one f
 npm run build     # Production build → dist/
 ```
 
+## Testing
+
+Headless tests run executables in Node.js with a mock Canvas:
+
+```bash
+timeout 2 npx tsx tests/test-<name>.mjs
+```
+
+See [`tests/`](./tests/) for details.
+
 ## Contributing
 
 PRs welcome! The main goal is to make more executables run correctly, which typically means implementing missing Win32/Win16 API stubs, fixing rendering issues, and improving GDI fidelity. See `CLAUDE.md` for the step-by-step workflow.

@@ -37,22 +37,216 @@ const LB16_GETITEMRECT   = 0x0422;
 const LB16_FINDSTRINGEXACT = 0x0423;
 const LB16_ERR = -1;
 
+// Win16 CB_ messages (WM_USER + offset, different from Win32 0x014x!)
+const CB16_GETEDITSEL      = 0x0400;
+const CB16_LIMITTEXT       = 0x0401;
+const CB16_SETEDITSEL      = 0x0402;
+const CB16_ADDSTRING       = 0x0403;
+const CB16_DELETESTRING    = 0x0404;
+const CB16_DIR             = 0x0405;
+const CB16_GETCOUNT        = 0x0406;
+const CB16_GETCURSEL       = 0x0407;
+const CB16_GETLBTEXT       = 0x0408;
+const CB16_GETLBTEXTLEN    = 0x0409;
+const CB16_INSERTSTRING    = 0x040A;
+const CB16_RESETCONTENT    = 0x040B;
+const CB16_FINDSTRING      = 0x040C;
+const CB16_SELECTSTRING    = 0x040D;
+const CB16_SETCURSEL       = 0x040E;
+const CB16_SHOWDROPDOWN    = 0x040F;
+const CB16_GETITEMDATA     = 0x0410;
+const CB16_SETITEMDATA     = 0x0411;
+const CB16_SETITEMHEIGHT   = 0x0413;
+const CB16_GETITEMHEIGHT   = 0x0414;
+const CB16_SETEXTENDEDUI   = 0x0415;
+const CB16_GETEXTENDEDUI   = 0x0416;
+const CB16_GETDROPPEDSTATE = 0x0417;
+const CB16_FINDSTRINGEXACT = 0x0418;
+const CB16_ERR = -1;
+
+// CBS style flags
+const CBS_OWNERDRAWFIXED    = 0x0010;
+const CBS_OWNERDRAWVARIABLE = 0x0020;
+const CBS_HASSTRINGS        = 0x0200;
+
+export function handleComboBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
+  if (!wnd.cbItems) { wnd.cbItems = []; wnd.cbItemData = []; }
+  const style = wnd.style ?? 0;
+  const isOwnerDrawNoStrings = ((style & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE)) !== 0)
+    && ((style & CBS_HASSTRINGS) === 0);
+
+  // Helper: generate display text for owner-draw items (drive indices → "C:", etc.)
+  function ownerDrawDisplayText(data: number): string {
+    if (data >= 0 && data <= 25) return String.fromCharCode(65 + data) + ':';
+    return `#${data}`;
+  }
+
+  if (message === CB16_ADDSTRING) {
+    if (isOwnerDrawNoStrings) {
+      wnd.cbItems.push(ownerDrawDisplayText(lParam));
+      wnd.cbItemData!.push(lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.cbItems.push(text);
+      wnd.cbItemData!.push(0);
+    }
+    return wnd.cbItems.length - 1;
+  }
+  if (message === CB16_INSERTSTRING) {
+    const idx = wParam === 0xFFFF || wParam >= wnd.cbItems.length ? wnd.cbItems.length : wParam;
+    if (isOwnerDrawNoStrings) {
+      wnd.cbItems.splice(idx, 0, ownerDrawDisplayText(lParam));
+      wnd.cbItemData!.splice(idx, 0, lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.cbItems.splice(idx, 0, text);
+      wnd.cbItemData!.splice(idx, 0, 0);
+    }
+    return idx;
+  }
+  if (message === CB16_DELETESTRING) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    wnd.cbItems.splice(wParam, 1);
+    wnd.cbItemData!.splice(wParam, 1);
+    return wnd.cbItems.length;
+  }
+  if (message === CB16_RESETCONTENT) {
+    wnd.cbItems.length = 0;
+    wnd.cbItemData!.length = 0;
+    wnd.cbSelectedIndex = undefined;
+    return 0;
+  }
+  if (message === CB16_GETCOUNT) return wnd.cbItems.length;
+  if (message === CB16_GETCURSEL) return wnd.cbSelectedIndex ?? CB16_ERR;
+  if (message === CB16_SETCURSEL) {
+    wnd.cbSelectedIndex = wParam === 0xFFFF ? undefined : wParam;
+    return wParam === 0xFFFF ? CB16_ERR : wParam;
+  }
+  if (message === CB16_GETLBTEXT) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    const addr = emu.resolveFarPtr(lParam);
+    if (isOwnerDrawNoStrings) {
+      if (addr) emu.memory.writeU32(addr, wnd.cbItemData![wParam] ?? 0);
+      return 4;
+    }
+    const text = wnd.cbItems[wParam];
+    if (addr) emu.memory.writeCString(addr, text);
+    return text.length;
+  }
+  if (message === CB16_GETLBTEXTLEN) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    if (isOwnerDrawNoStrings) return 4;
+    return wnd.cbItems[wParam].length;
+  }
+  if (message === CB16_SETITEMDATA) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    wnd.cbItemData![wParam] = lParam;
+    return 0;
+  }
+  if (message === CB16_GETITEMDATA) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    return wnd.cbItemData![wParam] ?? 0;
+  }
+  if (message === CB16_FINDSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase().startsWith(search)) return i;
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_FINDSTRINGEXACT) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase() === search) return i;
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_SELECTSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase().startsWith(search)) {
+        wnd.cbSelectedIndex = i;
+        return i;
+      }
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_DIR) {
+    const DDL_DRIVES = 0x4000;
+    const addr = emu.resolveFarPtr(lParam);
+    const attrs = wParam & 0xFFFF;
+    if (attrs & DDL_DRIVES) {
+      wnd.cbItems.push('[-c-]'); wnd.cbItemData!.push(0);
+      wnd.cbItems.push('[-d-]'); wnd.cbItemData!.push(0);
+      wnd.cbItems.push('[-e-]'); wnd.cbItemData!.push(0);
+    }
+    return wnd.cbItems.length > 0 ? wnd.cbItems.length - 1 : CB16_ERR;
+  }
+  if (message === CB16_SHOWDROPDOWN) return 0;
+  if (message === CB16_SETITEMHEIGHT) { wnd.cbItemHeight = lParam & 0xFFFF; return 0; }
+  if (message === CB16_GETITEMHEIGHT) return wnd.cbItemHeight ?? 16;
+  if (message === CB16_SETEXTENDEDUI) return 0;
+  if (message === CB16_GETEXTENDEDUI) return 0;
+  if (message === CB16_GETDROPPEDSTATE) return 0;
+  if (message === CB16_GETEDITSEL) return 0;
+  if (message === CB16_LIMITTEXT) return 0;
+  if (message === CB16_SETEDITSEL) return 0;
+  // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH
+  if (message === 0x000C) { // WM_SETTEXT
+    const addr = emu.resolveFarPtr(lParam);
+    wnd.title = addr ? emu.memory.readCString(addr) : '';
+    return 1;
+  }
+  if (message === 0x000E) return wnd.title?.length || 0; // WM_GETTEXTLENGTH
+  return 0;
+}
+
 export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
   if (!wnd.lbItems) { wnd.lbItems = []; wnd.lbItemData = []; }
 
+  // Owner-draw without LBS_HASSTRINGS: items are DWORD data, not strings
+  const LBS_OWNERDRAWFIXED = 0x0010;
+  const LBS_OWNERDRAWVARIABLE = 0x0020;
+  const LBS_HASSTRINGS = 0x0040;
+  const style = wnd.style ?? 0;
+  const isOwnerDrawNoStrings = ((style & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) !== 0)
+    && ((style & LBS_HASSTRINGS) === 0);
+
   if (message === LB16_ADDSTRING) {
-    const addr = emu.resolveFarPtr(lParam);
-    const text = addr ? emu.memory.readCString(addr) : '';
-    wnd.lbItems.push(text);
-    wnd.lbItemData!.push(0);
+    if (isOwnerDrawNoStrings) {
+      // lParam IS the data value, not a string pointer
+      wnd.lbItems.push('');
+      wnd.lbItemData!.push(lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.lbItems.push(text);
+      wnd.lbItemData!.push(0);
+    }
     return wnd.lbItems.length - 1;
   }
   if (message === LB16_INSERTSTRING) {
-    const addr = emu.resolveFarPtr(lParam);
-    const text = addr ? emu.memory.readCString(addr) : '';
     const idx = wParam === 0xFFFF || wParam >= wnd.lbItems.length ? wnd.lbItems.length : wParam;
-    wnd.lbItems.splice(idx, 0, text);
-    wnd.lbItemData!.splice(idx, 0, 0);
+    if (isOwnerDrawNoStrings) {
+      wnd.lbItems.splice(idx, 0, '');
+      wnd.lbItemData!.splice(idx, 0, lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.lbItems.splice(idx, 0, text);
+      wnd.lbItemData!.splice(idx, 0, 0);
+    }
     return idx;
   }
   if (message === LB16_DELETESTRING) {
@@ -74,8 +268,13 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
   }
   if (message === LB16_GETTEXT) {
     if (wParam >= wnd.lbItems.length) return LB16_ERR;
-    const text = wnd.lbItems[wParam];
     const addr = emu.resolveFarPtr(lParam);
+    if (isOwnerDrawNoStrings) {
+      // Write DWORD item data (4 bytes)
+      if (addr) emu.memory.writeU32(addr, wnd.lbItemData![wParam] ?? 0);
+      return 4;
+    }
+    const text = wnd.lbItems[wParam];
     if (addr) {
       for (let i = 0; i < text.length; i++) emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
       emu.memory.writeU8(addr + text.length, 0);
@@ -84,6 +283,7 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
   }
   if (message === LB16_GETTEXTLEN) {
     if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    if (isOwnerDrawNoStrings) return 4; // sizeof(DWORD)
     return wnd.lbItems[wParam].length;
   }
   if (message === LB16_SETITEMDATA) {
@@ -516,8 +716,116 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   user.register('SendMessage', 10, () => {
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
+    // Intercept statusbar messages BEFORE x86 wndProc to capture text for DOM overlay
     if (wnd?.wndProc) {
-      return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      const ucnPre = wnd.classInfo?.className?.toUpperCase();
+      if (ucnPre === 'MSCTLS_STATUSBAR' || ucnPre === 'MSCTLS_STATUSBAR32') {
+        const SB_SETTEXT = 0x0401, SB_SETPARTS = 0x0404;
+        if (message === SB_SETTEXT) {
+          const part = wParam & 0xFF;
+          if (!wnd.statusTexts) wnd.statusTexts = [];
+          const addr = emu.resolveFarPtr(lParam);
+          wnd.statusTexts[part] = addr ? emu.memory.readCString(addr) : '';
+        } else if (message === SB_SETPARTS) {
+          wnd.statusParts = [];
+          const addr = emu.resolveFarPtr(lParam);
+          for (let i = 0; i < wParam; i++) {
+            wnd.statusParts.push(emu.memory.readI16(addr + i * 2));
+          }
+          if (!wnd.statusTexts) wnd.statusTexts = [];
+        }
+      }
+    }
+    // Track TB_CHECKBUTTON for toolbar windows
+    const TB_CHECKBUTTON = 0x0402;
+    if (wnd?.wndProc && wnd.classInfo?.className?.toUpperCase() === 'TOOLBARWINDOW') {
+      if (message === TB_CHECKBUTTON) {
+        if (!wnd.toolbarChecked) wnd.toolbarChecked = new Set();
+        if (lParam) wnd.toolbarChecked.add(wParam);
+        else wnd.toolbarChecked.delete(wParam);
+        // Force main window repaint so renderChildControls re-renders the
+        // toolbar through the same code path as the initial startup rendering
+        if (emu.mainWindow) {
+          const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+          if (mainWnd) mainWnd.needsPaint = true;
+        }
+      }
+    }
+    if (wnd?.wndProc) {
+      // CCS controls (toolbar/statusbar): reposition BEFORE calling the x86 wndProc
+      // so that GetWindowRect returns the correct position during WM_SIZE processing.
+      // The controls start at (-100,-100) and rely on WM_SIZE to dock them.
+      const WM_SIZE = 0x0005;
+      if (message === WM_SIZE && wnd.parent) {
+        const ucn = wnd.classInfo?.className?.toUpperCase();
+        if (ucn === 'TOOLBARWINDOW' || ucn === 'MSCTLS_STATUSBAR') {
+          const parent = emu.handles.get<WindowInfo>(wnd.parent);
+          if (parent) {
+            let parentCW: number, parentCH: number;
+            if (wnd.parent === emu.mainWindow && emu.canvas) {
+              parentCW = emu.canvas.width;
+              parentCH = emu.canvas.height;
+            } else {
+              const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+              parentCW = cs.cw; parentCH = cs.ch;
+            }
+            if (ucn === 'TOOLBARWINDOW') {
+              // CCS_TOP: dock to top of parent, full width
+              wnd.x = 0; wnd.y = 0;
+              wnd.width = parentCW;
+            } else {
+              // Statusbar: dock to bottom of parent, full width
+              // Don't override height — let x86 code compute it
+              wnd.x = 0; wnd.y = parentCH - wnd.height;
+              wnd.width = parentCW;
+            }
+          }
+        }
+      }
+      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      // CCS controls: re-fix position AFTER the wndProc in case x86 code overrode it
+      // via SetWindowPos. Keep the height the x86 code set, but enforce x/y/width.
+      if (message === WM_SIZE && wnd.parent) {
+        const ucn = wnd.classInfo?.className?.toUpperCase();
+        if (ucn === 'TOOLBARWINDOW' || ucn === 'MSCTLS_STATUSBAR') {
+          const parent = emu.handles.get<WindowInfo>(wnd.parent);
+          if (parent) {
+            let parentCW: number, parentCH: number;
+            if (wnd.parent === emu.mainWindow && emu.canvas) {
+              parentCW = emu.canvas.width;
+              parentCH = emu.canvas.height;
+            } else {
+              const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+              parentCW = cs.cw; parentCH = cs.ch;
+            }
+            if (ucn === 'TOOLBARWINDOW') {
+              wnd.x = 0; wnd.y = 0;
+              wnd.width = parentCW;
+              // Cap toolbar height: x86 COMMCTRL uses full bitmap height (55px)
+              // instead of one button-state row (~18px). Real Win3.1 toolbar = ~27px.
+              if (wnd.height > 30) wnd.height = 27;
+            } else {
+              // Statusbar: the x86 COMMCTRL computes height using GetWindowRect
+              // instead of GetClientRect(parent) / internal WND struct rcClient.
+              // This causes a feedback loop (height grows: 10→26→39) because
+              // SetWindowPos applies new sizes that GetWindowRect reflects back.
+              // Recompute correct height using Wine's formula:
+              //   max(tmHeight + margin + 2*SM_CYBORDER, minHeight) + verticalBorder
+              // tmHeight=13 (default font), margin=2 (no internal leading),
+              // SM_CYBORDER=1, verticalBorder≈2 (3D sunken border)
+              const SM_CYBORDER = 1;
+              const tmHeight = 13; // default system font
+              const margin = 2;    // tmInternalLeading == 0 → default 2
+              const verticalBorder = 2;
+              const correctHeight = tmHeight + margin + 2 * SM_CYBORDER + verticalBorder;
+              wnd.height = correctHeight;
+              wnd.x = 0; wnd.y = parentCH - wnd.height;
+              wnd.width = parentCW;
+            }
+          }
+        }
+      }
+      return result;
     }
     // Handle messages for built-in EDIT controls (no wndProc, backed by HTML overlay)
     const cn = wnd?.classInfo?.className;
@@ -731,6 +1039,54 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return handleListBoxMessage16(emu, wnd, message, wParam, lParam);
     }
 
+    // Handle messages for built-in COMBOBOX controls
+    if (wnd && cn && cn.toUpperCase() === 'COMBOBOX') {
+      return handleComboBoxMessage16(emu, wnd, message, wParam, lParam);
+    }
+
+    // Handle messages for status bar controls (MSCTLS_STATUSBAR / MSCTLS_STATUSBAR32)
+    const ucn = cn?.toUpperCase();
+    if (wnd && ucn && (ucn === 'MSCTLS_STATUSBAR32' || ucn === 'MSCTLS_STATUSBAR')) {
+      const WM_SIZE = 0x0005;
+      const SB_SETTEXT  = 0x0401; // Win16: WM_USER+1 (ANSI)
+      const SB_SETPARTS = 0x0404; // Win16: WM_USER+4
+      const SB_SIMPLE   = 0x0409; // Win16: WM_USER+9
+      if (message === WM_SIZE) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const { cw, ch } = getClientSize(parentWnd.style, parentWnd.hMenu !== 0, parentWnd.width, parentWnd.height, true);
+          const statusH = wnd.height || 20;
+          wnd.x = 0;
+          wnd.y = ch - statusH;
+          wnd.width = cw;
+        }
+        return 0;
+      }
+      if (message === SB_SETPARTS) {
+        wnd.statusParts = [];
+        const addr = emu.resolveFarPtr(lParam);
+        // Win16 SB_SETPARTS: array of INT (16-bit signed) right-edge positions.
+        // Value -1 means the part extends to the right edge of the window.
+        // These are ABSOLUTE positions, not widths (Wine: status.c STATUSBAR_SetPartBounds).
+        for (let i = 0; i < wParam; i++) {
+          wnd.statusParts.push(emu.memory.readI16(addr + i * 2));
+        }
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === SB_SETTEXT) {
+        const part = wParam & 0xFF;
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        const addr = emu.resolveFarPtr(lParam);
+        wnd.statusTexts[part] = addr ? emu.memory.readCString(addr) : '';
+        emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === SB_SIMPLE) return 1;
+      if (message >= 0x0400 && message < 0x0500) return 0;
+    }
+
     // Handle WM_MDICREATE for MDICLIENT windows
     const WM_MDICREATE = 0x0220;
     const WM_MDIGETACTIVE = 0x0229;
@@ -777,9 +1133,10 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const mdiDefaultStyle = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
         const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | mdiDefaultStyle;
 
-        // Auto-size to MDIClient area when dimensions are 0 or CW_USEDEFAULT
-        const clientW = wnd.width || (emu.canvas?.width ?? 320);
-        const clientH = wnd.height || (emu.canvas?.height ?? 200);
+        // Auto-size to MDIClient's CLIENT area (not window area — MDICLIENT has WS_BORDER)
+        const { cw: mdiCW, ch: mdiCH } = getClientSize(wnd.style, false, wnd.width, wnd.height, true);
+        const clientW = mdiCW || (emu.canvas?.width ?? 320);
+        const clientH = mdiCH || (emu.canvas?.height ?? 200);
         const childHwnd = emu.handles.alloc('window', {
           classInfo: classInfo || { className: mdiClassName, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
           title: mdiTitle,
@@ -803,16 +1160,23 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         if (!wnd.childList) wnd.childList = [];
         wnd.childList.push(childHwnd);
 
-        // Track active MDI child on the MDIClient
+        // Track active MDI child on the MDIClient; remember the old one
+        const prevActiveChild = (wnd as any).mdiActiveChild || 0;
         (wnd as any).mdiActiveChild = childHwnd;
 
         // Send WM_CREATE to child if it has a wndProc
         if (classInfo?.wndProc) {
           const savedSP = emu.cpu.reg[4] & 0xFFFF;
-          // Build a minimal Win16 CREATESTRUCT on the heap for WM_CREATE lParam
+          // Build CREATESTRUCT on the stack (SS == DS in Win16 DGROUP).
+          // Must NOT use allocHeap — heap addresses are outside the DS segment,
+          // so converting to DS:offset far pointer would give a bogus pointer.
           // CREATESTRUCT16: lpCreateParams(4), hInstance(2), hMenu(2), hWndParent(2),
           //   cy(2), cx(2), y(2), x(2), style(4), lpszName(4), lpszClass(4), dwExStyle(4)
-          const csAddr = emu.allocHeap(34);
+          const sp = emu.cpu.reg[4] & 0xFFFF;
+          const csOffset = (sp - 36) & 0xFFFF; // 34 bytes + 2 alignment
+          emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | csOffset;
+          const dsBase = emu.cpu.segBase(emu.cpu.ss); // SS == DS in DGROUP
+          const csAddr = dsBase + csOffset;
           emu.memory.writeU32(csAddr + 0, mdiLParam);     // lpCreateParams = MDICREATESTRUCT.lParam
           emu.memory.writeU16(csAddr + 4, hOwner);         // hInstance
           emu.memory.writeU16(csAddr + 6, 0);              // hMenu
@@ -826,10 +1190,12 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           emu.memory.writeU32(csAddr + 22, szTitlePtr);    // lpszName
           emu.memory.writeU32(csAddr + 26, szClassPtr);    // lpszClass
           emu.memory.writeU32(csAddr + 30, 0);             // dwExStyle
-          // Convert to far pointer (DS:offset)
-          const csOff = csAddr - (emu.cpu.segBases.get(emu.cpu.ds) ?? 0);
-          const csFarPtr = ((emu.cpu.ds & 0xFFFF) << 16) | (csOff & 0xFFFF);
-          emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, csFarPtr);
+          // Far pointer: DS:offset (SS == DS in DGROUP)
+          const csFarPtr = ((emu.cpu.ds & 0xFFFF) << 16) | (csOffset & 0xFFFF);
+          const WM_NCCREATE = 0x0081;
+          const WM_CREATE = 0x0001;
+          emu.callWndProc16(classInfo.wndProc, childHwnd, WM_NCCREATE, 0, csFarPtr);
+          emu.callWndProc16(classInfo.wndProc, childHwnd, WM_CREATE, 0, csFarPtr);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
 
           // Send WM_SIZE with client area dimensions
@@ -838,6 +1204,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           const sizeLParam = ((sizeH & 0xFFFF) << 16) | (sizeW & 0xFFFF);
           emu.callWndProc16(classInfo.wndProc, childHwnd, WM_SIZE, 0, sizeLParam);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
+        }
+
+        // Send WM_MDIACTIVATE to old and new children (Win16 format):
+        //   wParam = TRUE if activating, FALSE if deactivating
+        //   lParam = MAKELONG(hwndActivating, hwndDeactivating)
+        const WM_MDIACTIVATE_MSG = 0x0222;
+        const activateLParam = ((prevActiveChild & 0xFFFF) << 16) | (childHwnd & 0xFFFF);
+        if (prevActiveChild) {
+          const prevWnd = emu.handles.get<WindowInfo>(prevActiveChild);
+          if (prevWnd?.wndProc) {
+            emu.callWndProc16(prevWnd.wndProc, prevActiveChild, WM_MDIACTIVATE_MSG, 0, activateLParam);
+          }
+        }
+        {
+          const newWnd = emu.handles.get<WindowInfo>(childHwnd);
+          if (newWnd?.wndProc) {
+            emu.callWndProc16(newWnd.wndProc, childHwnd, WM_MDIACTIVATE_MSG, 1, activateLParam);
+          }
         }
 
         // Invalidate mainWindow so next WM_PAINT cycle picks up the new MDI child
@@ -857,13 +1241,29 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       const WM_MDIICONARRANGE = 0x0228;
       const WM_MDISETMENU = 0x0230;
       if (message === WM_MDIACTIVATE) {
-        (wnd as any).mdiActiveChild = wParam;
+        const prevActive = (wnd as any).mdiActiveChild || 0;
+        const newActive = wParam & 0xFFFF;
+        (wnd as any).mdiActiveChild = newActive;
         // Move to end of childList for z-ordering (top = last)
         if (wnd.childList) {
-          const idx = wnd.childList.indexOf(wParam);
+          const idx = wnd.childList.indexOf(newActive);
           if (idx >= 0) {
             wnd.childList.splice(idx, 1);
-            wnd.childList.push(wParam);
+            wnd.childList.push(newActive);
+          }
+        }
+        // Forward WM_MDIACTIVATE to old and new children (Win16 format)
+        const actLParam = ((prevActive & 0xFFFF) << 16) | (newActive & 0xFFFF);
+        if (prevActive && prevActive !== newActive) {
+          const prevWnd = emu.handles.get<WindowInfo>(prevActive);
+          if (prevWnd?.wndProc) {
+            emu.callWndProc16(prevWnd.wndProc, prevActive, WM_MDIACTIVATE, 0, actLParam);
+          }
+        }
+        if (newActive) {
+          const newWnd = emu.handles.get<WindowInfo>(newActive);
+          if (newWnd?.wndProc) {
+            emu.callWndProc16(newWnd.wndProc, newActive, WM_MDIACTIVATE, 1, actLParam);
           }
         }
         const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);

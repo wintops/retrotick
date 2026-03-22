@@ -6,6 +6,61 @@ import type { Win16UserHelpers } from './index';
 // Win16 USER module — Window creation & properties
 // Ordinal mappings from Wine's user.exe16.spec
 
+// Fix CCS control (toolbar/statusbar) position at creation time.
+// The x86 COMMCTRL.DLL creates these at wrong positions, but
+// GetEffectiveClientRect reads them before WM_SIZE fires.
+const WS_VISIBLE_BIT = 0x10000000;
+function fixCcsPosition(emu: Emulator, hwnd: number, hWndParent: number): void {
+  const wnd = emu.handles.get<WindowInfo>(hwnd);
+  if (!wnd || !hWndParent) return;
+  const ucn = wnd.classInfo?.className?.toUpperCase();
+  if (ucn !== 'TOOLBARWINDOW' && ucn !== 'MSCTLS_STATUSBAR') return;
+  const parent = emu.handles.get<WindowInfo>(hWndParent);
+  if (!parent) return;
+  let parentCW: number, parentCH: number;
+  if (hWndParent === emu.mainWindow && emu.canvas) {
+    parentCW = emu.canvas.width; parentCH = emu.canvas.height;
+  } else {
+    const cs = getClientSize(parent.style, !!parent.hMenu, parent.width, parent.height, true);
+    parentCW = cs.cw; parentCH = cs.ch;
+  }
+  // Store the offset between original and fixed position.
+  // The x86 COMMCTRL code reads position from Win16's internal WND struct
+  // (which we don't expose in memory), so it positions children relative to
+  // the original (-100,-100) coordinates. We'll apply this offset in MoveWindow.
+  const origX = wnd.x;
+  const origY = wnd.y;
+  // CCS controls must be visible and have WS_VISIBLE in style bits
+  // (x86 code reads style bits directly to check visibility)
+  wnd.visible = true;
+  wnd.style |= WS_VISIBLE_BIT;
+  if (ucn === 'TOOLBARWINDOW') {
+    wnd.x = 0; wnd.y = 0;
+    wnd.width = parentCW;
+  } else {
+    wnd.x = 0; wnd.y = parentCH - wnd.height;
+    wnd.width = parentCW;
+  }
+  // Compute the delta and apply it to existing children.
+  // Children created during WM_CREATE were positioned using coordinates based on
+  // the original CCS position (e.g. GetWindowRect returning (-100,-100)).
+  // Now that we've moved the CCS window, adjust children by the same delta
+  // and clamp to y>=0 so nothing extends above the toolbar.
+  const dx = wnd.x - origX;
+  const dy = wnd.y - origY;
+  if (dx !== 0 || dy !== 0) {
+    (wnd as any)._ccsChildOffsetY = dy;
+    if (wnd.childList) {
+      for (const childHwnd of wnd.childList) {
+        const child = emu.handles.get<WindowInfo>(childHwnd);
+        if (child) {
+          child.y = Math.max(0, child.y + dy);
+        }
+      }
+    }
+  }
+}
+
 // Build a Win16 CREATESTRUCT on the stack and return its linear address.
 // Win16 CREATESTRUCT layout (34 bytes):
 //   +0:  lpCreateParams (4, far ptr)
@@ -58,8 +113,10 @@ function sendCreateMessages16(
 ): void {
   const WM_NCCREATE = 0x0081;
   const WM_CREATE = 0x0001;
-  // lParam must be a far pointer (DS:offset) packed as seg<<16 | offset
-  const lParam = (emu.cpu.ds << 16) | (createStructDsOffset & 0xFFFF);
+  // lParam must be a far pointer to the CREATESTRUCT on the stack.
+  // Use SS (not DS) because buildCreateStruct16 allocates on SS,
+  // and SS != DS when called from DLL code (e.g. COMMCTRL CreateToolbar).
+  const lParam = (emu.cpu.ss << 16) | (createStructDsOffset & 0xFFFF);
   emu.callWndProc16(wndProc, hwnd, WM_NCCREATE, 0, lParam);
   emu.callWndProc16(wndProc, hwnd, WM_CREATE, 0, lParam);
 }
@@ -141,9 +198,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyle,
       exStyle: 0,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sx === CW_USEDEFAULT ? 0 : sy,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -189,6 +246,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
     }
 
+    // Fix CCS_TOP/CCS_BOTTOM position AFTER WM_CREATE.
+    // The x86 code reads position from Win16's internal WND struct (which we don't
+    // expose), so it uses the original (-100,-100). We fix the toolbar position AND
+    // adjust any children that were positioned relative to the original coordinates.
+    fixCcsPosition(emu, hwnd, hWndParent);
+
     if (hWndParent === emu.mainWindow && emu.mainWindow && emu.canvas && emu.ne) {
       const dsBase = emu.cpu.segBase(emu.ne.dataSegSelector);
       emu.memory.writeU16(dsBase + 0x240, 0);
@@ -197,6 +260,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.postMessage(emu.mainWindow, 0x0005, 0, lParam);
     }
 
+    fixCcsPosition(emu, hwnd, hWndParent);
     return hwnd;
   }, 41);
 
@@ -208,11 +272,16 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) { console.log(`[WIN16] ShowWindow: wnd not found!`); return 0; }
 
+    const WS_VISIBLE = 0x10000000;
     const wasVisible = wnd.visible;
     wnd.visible = nCmdShow !== 0;
+    // Sync WS_VISIBLE style bit so x86 code reading style directly sees correct state
+    if (wnd.visible) wnd.style |= WS_VISIBLE;
+    else wnd.style &= ~WS_VISIBLE;
 
-    if (hWnd === emu.mainWindow && (wnd.style & 0x10000000) && nCmdShow === 0) {
+    if (hWnd === emu.mainWindow && (wnd.style & WS_VISIBLE) && nCmdShow === 0) {
       wnd.visible = true;
+      wnd.style |= WS_VISIBLE;
     }
 
     // When transitioning from hidden to visible, mark window as needing paint
@@ -342,7 +411,21 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const [hWnd, x, y, w, height, bRepaint] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
-      wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
+      let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      // If parent is a CCS control, adjust Y coordinate only: the x86 COMMCTRL code
+      // computes Y positions using GetWindowRect which returns screen coords based on
+      // the old CCS position (-100,-100). X is already parent-client-relative.
+      if (wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const oy = (parentWnd as any)._ccsChildOffsetY;
+          if (oy !== undefined) {
+            my = my + oy;
+            my = Math.max(0, my);
+          }
+        }
+      }
+      wnd.x = mx; wnd.y = my;
       const sizeChanged = wnd.width !== w || wnd.height !== height;
       wnd.width = w; wnd.height = height;
       if (sizeChanged) {
@@ -403,7 +486,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       const lpszClassName = h.resolveFarPtr(emu.memory.readU32(lpWndClass + 22));
 
       const className = lpszClassName ? emu.memory.readCString(lpszClassName) : 'UNKNOWN';
-      // console.log(`[WIN16] RegisterClass "${className}" wndProc=0x${wndProc.toString(16)} raw=0x${rawWndProc.toString(16)}`);
+      // console.log(`[WIN16] RegisterClass "${className}" wndProc=0x${wndProc.toString(16)} hInstance=0x${hInstance.toString(16)} DS=0x${emu.cpu.ds.toString(16)}`);
 
       emu.windowClasses.set(className.toUpperCase(), {
         className,
@@ -412,7 +495,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         style,
         cbClsExtra: 0,
         cbWndExtra,
-        hInstance: 0,
+        hInstance,
         hbrBackground,
         hIcon,
         hCursor,
@@ -450,11 +533,17 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   user.register('GetWindowWord', 4, () => {
     const [hWnd, nIndex] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
-    if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
+    if (!wnd) return 0;
+    if (wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
       return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex + 1] << 8);
     }
-    // GWW_HINSTANCE = -6
-    if (nIndex === 0xFFFA || nIndex === -6) return 1;
+    const signed = (nIndex << 16) >> 16;
+    const GWW_HINSTANCE = -6;
+    const GWW_HWNDPARENT = -8;
+    const GWW_ID = -12;
+    if (signed === GWW_HINSTANCE) return 1;
+    if (signed === GWW_HWNDPARENT) return wnd.parent || 0;
+    if (signed === GWW_ID) return wnd.controlId ?? 0;
     return 0;
   }, 133);
 
@@ -489,8 +578,14 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
     if (signedIndex === -16 && wnd) return wnd.style || 0;
     if (signedIndex === -20 && wnd) return wnd.exStyle || 0;
-    if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 4 <= wnd.extraBytes.length) {
-      return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+    if (wnd && wnd.extraBytes && nIndex >= 0) {
+      if (nIndex + 4 <= wnd.extraBytes.length) {
+        return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+      }
+      // Win16: if only 2 bytes remain, read as WORD (compatible with SetWindowWord)
+      if (nIndex + 2 <= wnd.extraBytes.length) {
+        return wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8);
+      }
     }
     return 0;
   }, 135);
@@ -505,12 +600,19 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     let old = 0;
     if (signedIndex === -4 && wnd) { old = wnd.rawWndProc || wnd.wndProc || 0; wnd.rawWndProc = dwNewLong; wnd.wndProc = h.resolveFarPtr(dwNewLong); }
     else if (signedIndex === -16 && wnd) { old = wnd.style || 0; wnd.style = dwNewLong; }
-    else if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 4 <= wnd.extraBytes.length) {
-      old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
-      wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
-      wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
-      wnd.extraBytes[nIndex+2] = (dwNewLong >> 16) & 0xFF;
-      wnd.extraBytes[nIndex+3] = (dwNewLong >> 24) & 0xFF;
+    else if (wnd && wnd.extraBytes && nIndex >= 0) {
+      if (nIndex + 4 <= wnd.extraBytes.length) {
+        old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8) | (wnd.extraBytes[nIndex+2]<<16) | (wnd.extraBytes[nIndex+3]<<24);
+        wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
+        wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
+        wnd.extraBytes[nIndex+2] = (dwNewLong >> 16) & 0xFF;
+        wnd.extraBytes[nIndex+3] = (dwNewLong >> 24) & 0xFF;
+      } else if (nIndex + 2 <= wnd.extraBytes.length) {
+        // Win16: if only 2 bytes remain, write as WORD (matches SetWindowWord behavior)
+        old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex+1]<<8);
+        wnd.extraBytes[nIndex] = dwNewLong & 0xFF;
+        wnd.extraBytes[nIndex+1] = (dwNewLong >> 8) & 0xFF;
+      }
     }
     return old;
   }, 136);
@@ -528,14 +630,34 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     let sizeChanged = false;
 
     if (!(uFlags & SWP_NOMOVE)) {
-      wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
+      let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      if (wnd.parent) {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd) {
+          const oy = (parentWnd as any)._ccsChildOffsetY;
+          if (oy !== undefined) {
+            my = my + oy;
+            my = Math.max(0, my);
+          }
+        }
+      }
+      wnd.x = mx; wnd.y = my;
     }
     if (!(uFlags & SWP_NOSIZE)) {
       if (wnd.width !== cx || wnd.height !== cy) sizeChanged = true;
+      // Track the toolbar's "internal" height — the x86 COMMCTRL code computes
+      // button positions based on this height, but the frame may force a smaller
+      // size. Store the max height the x86 code requests so we can compute the
+      // DC Y offset needed to center the painted buttons correctly.
+      const cn2 = wnd.classInfo?.className?.toUpperCase() || '';
+      if (cn2 === 'TOOLBARWINDOW' && cy > (wnd.height || 0)) {
+        (wnd as any)._ccsInternalHeight = cy;
+      }
       wnd.width = cx; wnd.height = cy;
     }
-    if (uFlags & SWP_SHOWWINDOW) wnd.visible = true;
-    if (uFlags & SWP_HIDEWINDOW) wnd.visible = false;
+    const WS_VIS = 0x10000000;
+    if (uFlags & SWP_SHOWWINDOW) { wnd.visible = true; wnd.style |= WS_VIS; }
+    if (uFlags & SWP_HIDEWINDOW) { wnd.visible = false; wnd.style &= ~WS_VIS; }
 
     if (sizeChanged) {
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height, true);
@@ -574,7 +696,22 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 258: MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints) — 10 bytes (2+2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('MapWindowPoints', 10, () => 0, 258);
+  user.register('MapWindowPoints', 10, () => {
+    const [hWndFrom, hWndTo, lpPoints, cPoints] = emu.readPascalArgs16([2, 2, 4, 2]);
+    if (!lpPoints || cPoints === 0) return 0;
+    const from = h.clientOrigin(hWndFrom);
+    const to = h.clientOrigin(hWndTo);
+    const dx = from.x - to.x;
+    const dy = from.y - to.y;
+    for (let i = 0; i < cPoints; i++) {
+      const addr = lpPoints + i * 4; // Win16 POINT = 2 x I16 = 4 bytes
+      const px = emu.memory.readI16(addr);
+      const py = emu.memory.readI16(addr + 2);
+      emu.memory.writeU16(addr, (px + dx) & 0xFFFF);
+      emu.memory.writeU16(addr + 2, (py + dy) & 0xFFFF);
+    }
+    return ((dx & 0xFFFF) | ((dy & 0xFFFF) << 16)) >>> 0;
+  }, 258);
 
   // Ordinal 259: BeginDeferWindowPos(nNumWindows) → HDWP
   user.register('BeginDeferWindowPos', 2, () => {
@@ -603,8 +740,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         if (!wnd) continue;
         if (!(e.uFlags & SWP_NOMOVE)) { wnd.x = e.x; wnd.y = e.y; }
         if (!(e.uFlags & SWP_NOSIZE)) { wnd.width = e.cx; wnd.height = e.cy; }
-        if (e.uFlags & SWP_SHOWWINDOW) wnd.visible = true;
-        if (e.uFlags & SWP_HIDEWINDOW) wnd.visible = false;
+        if (e.uFlags & SWP_SHOWWINDOW) { wnd.visible = true; wnd.style |= 0x10000000; }
+        if (e.uFlags & SWP_HIDEWINDOW) { wnd.visible = false; wnd.style &= ~0x10000000; }
         wnd.needsPaint = true;
       }
       emu.handles.free(hWinPosInfo);
@@ -623,7 +760,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       return wnd.childList?.[0] ?? 0;
     }
     if (uCmd === GW_OWNER) {
-      return wnd.parent || 0;
+      return (wnd as any).owner || 0;
     }
     // For sibling navigation, find in parent's childList
     if (wnd.parent) {
@@ -646,9 +783,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   user.register('SetMessageQueue', 2, () => 1, 266);
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Ordinal 452: CreateWindowEx — 32 bytes
+  // Ordinal 452: CreateWindowEx — 34 bytes
+  // long(4) segstr(4) segstr(4) long(4) s_word(2)*4 word(2)*3 long(4) = 34
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('CreateWindowEx', 32, () => {
+  user.register('CreateWindowEx', 34, () => {
     const lpParam = h.readFarPtr(0);
     const hInstance = emu.readArg16(4);
     const hMenu = emu.readArg16(6);
@@ -661,7 +799,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const lpWindowName = h.readFarPtr(22);
     const lpClassName = h.readFarPtr(26);
     const classNameRaw = emu.readArg16DWord(26);
-    const dwExStyle = emu.readArg16DWord(28);
+    const dwExStyle = emu.readArg16DWord(30);
 
     const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
@@ -675,6 +813,11 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     }
 
     const classInfo = emu.windowClasses.get(className.toUpperCase());
+    // If no menu handle but class has a menuName, flag that a menu exists
+    let effectiveMenu = hMenu;
+    if (!effectiveMenu && classInfo?.menuName) {
+      effectiveMenu = 1;
+    }
     // Sign-extend 16-bit values for positions (can be negative)
     const sx = (x << 16 >> 16);  // signed x
     const sy = (y << 16 >> 16);  // signed y
@@ -689,10 +832,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyleEx,
       exStyle: dwExStyle,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sx === CW_USEDEFAULT ? 0 : sy,
+      y: sy === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
-      hMenu,
+      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
       rawWndProc: classInfo?.rawWndProc || 0,
@@ -736,6 +879,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
     }
+
+    fixCcsPosition(emu, hwnd, hWndParent);
 
     return hwnd;
   }, 452);

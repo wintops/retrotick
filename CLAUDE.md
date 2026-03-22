@@ -10,7 +10,7 @@ RetroTick is a browser-based x86 emulator that runs classic Windows PE/NE/MZ exe
 
 - `npm run build` — Production build to `dist/`
 - `npm run check` — Alias for `npm run build` (catches type errors and regressions)
-- `timeout 2 npx tsx test-<name>.mjs` — Run a headless test for a specific exe
+- `timeout 2 npx tsx tests/test-<name>.mjs` — Run a headless test for a specific exe
 
 No test runner or linter scripts are configured.
 
@@ -86,10 +86,19 @@ No test runner or linter scripts are configured.
 - Language detection from PE resource language IDs, propagated as `lang` attributes for correct CJK font rendering
 - OpenGL 1.x immediate-mode pipeline mapped to WebGL2 for 3D screen savers
 
+### Generic Emulator Rule
+
+RetroTick is a **generic Windows emulator**, not an emulator for any specific application. Every fix and every API implementation must benefit **all** executables, never just one. Never add app-specific hacks or workarounds (e.g. "if this is WINFILE then..."). When something doesn't work for a particular app, find out what Windows actually does (Microsoft docs, Wine source) and implement the correct API behavior. The app's misbehavior is a symptom — fix the root cause in the emulator.
+
 ### Code Style Rules
 
 1. **File size limit**: Keep each file under 500 lines. When a file grows beyond this, split independent functionality into separate files.
 2. **Constants in shared locations**: Define Win32/Win16 constants (message codes, style flags, struct sizes, etc.) in shared `types.ts` or `constants.ts` files — not scattered across individual handler files. Import from the shared location.
+
+### Shell Command Rules
+
+1. **No multi-command bash lines**: Never chain multiple commands on a single line (`&&`, `||`, `;`, `|`). On this system, multi-command bash lines always require explicit user approval, which is slow and disruptive. Instead, write a temporary `.mjs` JavaScript script that performs all the steps, then execute it with a single `npx tsx` command. If bash is absolutely necessary, always use the same filename `temp_script.sh` so that only one approval is needed (the system remembers approved script names).
+2. **Never use `sed`**: The `sed` command requires explicit approval for write/execute operations. Use the Edit tool for file modifications, or handle text transformations in `.mjs` scripts.
 
 ## Skill: Supporting a New EXE
 
@@ -97,21 +106,21 @@ When asked to make `examples/<name>.exe` run in the emulator, follow this iterat
 
 ### Important Rules
 
-1. **Always use `timeout 2`** when test-running to save time: `timeout 2 npx tsx test-<name>.mjs 2>&1`
+1. **Always use `timeout 2`** when test-running to save time: `timeout 2 npx tsx tests/test-<name>.mjs 2>&1`
 2. **Always check Microsoft documentation or public headers** for constant value definitions, API argument counts, struct types and sizes. Never guess these — look them up in official sources.
 3. **Always fix Unimplemented APIs and missing arg counts first** before fixing other issues (unknown opcodes, WILD EIP, etc.). Most crashes and opcode errors are caused by unimplemented APIs returning bad values or missing stackBytes corrupting the stack — fix the root cause first.
 4. **Always define constant values as named `const`** — look up the correct value from Microsoft documentation or public headers, then define it as a named constant (e.g. `const WM_PAINT = 0x000F;`). Never hardcode magic numbers directly into the code.
 
 ### Step 1: Create test harness
 
-Copy an existing `test-*.mjs` (e.g. `test-calc.mjs`), change the filename to the target exe. The test file runs the emulator **headlessly via Node.js** — no dev server needed. It uses mock Canvas/OffscreenCanvas objects, loads the PE, creates an Emulator, and runs ticks until `emu.waitingForMessage` becomes true (= reached message loop = success).
+Copy an existing `tests/test-*.mjs` (e.g. `tests/test-calc.mjs`), change the filename to the target exe. The test file runs the emulator **headlessly via Node.js** — no dev server needed. It uses mock Canvas/OffscreenCanvas objects, loads the PE, creates an Emulator, and runs ticks until `emu.waitingForMessage` becomes true (= reached message loop = success).
 
 After reaching the message loop, the test can simulate user input via `emu.postMessage()` (e.g. `WM_COMMAND` for button clicks, `WM_KEYDOWN`/`WM_CHAR` for keyboard input) and verify results by inspecting window state (child windows, control text, title bar, etc.).
 
 **API tracing**: Set `emu.traceApi = true` to log every Win32/Win16 API call (prints `[API] DLL:FuncName` to console). Useful for debugging which APIs are called during specific message handling.
 
 ```bash
-timeout 2 npx tsx test-<name>.mjs 2>&1
+timeout 2 npx tsx tests/test-<name>.mjs 2>&1
 ```
 
 ### Step 2: Fix `No API definition` warnings

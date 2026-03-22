@@ -297,13 +297,27 @@ function renderMdiChildOverlay(
     emu.notifyControlOverlays();
   };
 
+  // Clip MDI child to MDICLIENT bounds so it doesn't overlap toolbar/statusbar/drivebar
+  const clipStyle: Record<string, string | number | undefined> = {
+    position: 'absolute',
+    left: `${ctrl.x}px`,
+    top: `${ctrl.y}px`,
+    zIndex: zIndex ?? 15,
+  };
+  if (ctrl.mdiClientRect) {
+    const cr = ctrl.mdiClientRect;
+    // Compute inset values: distance from each edge of the MDI child to the MDICLIENT boundary
+    const clipTop = Math.max(0, cr.y - ctrl.y);
+    const clipLeft = Math.max(0, cr.x - ctrl.x);
+    const clipBottom = Math.max(0, (ctrl.y + ctrl.height) - (cr.y + cr.h));
+    const clipRight = Math.max(0, (ctrl.x + ctrl.width) - (cr.x + cr.w));
+    if (clipTop > 0 || clipLeft > 0 || clipBottom > 0 || clipRight > 0) {
+      clipStyle.clipPath = `inset(${clipTop}px ${clipRight}px ${clipBottom}px ${clipLeft}px)`;
+    }
+  }
+
   return (
-    <div key={ctrl.childHwnd} style={{
-      position: 'absolute',
-      left: `${ctrl.x}px`,
-      top: `${ctrl.y}px`,
-      zIndex: zIndex ?? 15,
-    }}
+    <div key={ctrl.childHwnd} style={clipStyle}
     onPointerDown={activateMdiChild}
     >
       <Window
@@ -1036,7 +1050,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
     const wParam = buildMKFlags(e);
     if (emu.capturedWindow) {
-      emu.postMessage(emu.capturedWindow, msg, wParam, makeLParam(x, y));
+      // SetCapture: convert canvas coords to coords relative to captured window.
+      // Walk up the parent chain to compute absolute canvas position, stopping
+      // at the main window (canvas coords = main window's coordinate space).
+      let ox = 0, oy = 0;
+      let hwnd = emu.capturedWindow;
+      while (hwnd && hwnd !== emu.mainWindow) {
+        const w = emu.handles.get<WindowInfo>(hwnd);
+        if (!w) break;
+        ox += w.x; oy += w.y;
+        hwnd = w.parent;
+      }
+      emu.postMessage(emu.capturedWindow, msg, wParam, makeLParam(x - ox, y - oy));
     } else {
       // Hit-test to find the correct child window and convert coordinates
       const hit = emu.windowFromPoint(x, y);
@@ -1053,9 +1078,13 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const onDocMouseUp = (e: PointerEvent) => {
       if (!mouseIsDown.current || !canvasRef.current) return;
       mouseIsDown.current = false;
-      handlePointerEvent(e, WM_MOUSEMOVE);
-      if (e.button === 0) handlePointerEvent(e, WM_LBUTTONUP);
-      else if (e.button === 2) handlePointerEvent(e, WM_RBUTTONUP);
+      const btn = e.button;
+      const saved = { clientX: e.clientX, clientY: e.clientY, buttons: e.buttons } as PointerEvent;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        handlePointerEvent(saved, WM_MOUSEMOVE);
+        if (btn === 0) handlePointerEvent(saved, WM_LBUTTONUP);
+        else if (btn === 2) handlePointerEvent(saved, WM_RBUTTONUP);
+      }));
     };
     document.addEventListener('pointermove', onDocMouseMove);
     document.addEventListener('pointerup', onDocMouseUp);

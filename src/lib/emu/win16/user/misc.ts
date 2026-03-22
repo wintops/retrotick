@@ -1,6 +1,7 @@
 import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
 import type { Win16UserHelpers } from './index';
+import { findMenuItemById } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
 import { handleListBoxMessage16 } from './message';
 
@@ -89,10 +90,30 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 22);
 
   // Ordinal 28: ClientToScreen(hWnd, lpPoint_ptr) — 6 bytes
-  user.register('ClientToScreen', 6, () => 0, 28);
+  user.register('ClientToScreen', 6, () => {
+    const [hWnd, lpPoint] = emu.readPascalArgs16([2, 4]);
+    if (lpPoint) {
+      const origin = h.clientOrigin(hWnd);
+      const px = emu.memory.readI16(lpPoint);
+      const py = emu.memory.readI16(lpPoint + 2);
+      emu.memory.writeU16(lpPoint, (px + origin.x) & 0xFFFF);
+      emu.memory.writeU16(lpPoint + 2, (py + origin.y) & 0xFFFF);
+    }
+    return 1;
+  }, 28);
 
   // Ordinal 29: ScreenToClient(hWnd, lpPoint_ptr) — 6 bytes
-  user.register('ScreenToClient', 6, () => 0, 29);
+  user.register('ScreenToClient', 6, () => {
+    const [hWnd, lpPoint] = emu.readPascalArgs16([2, 4]);
+    if (lpPoint) {
+      const origin = h.clientOrigin(hWnd);
+      const px = emu.memory.readI16(lpPoint);
+      const py = emu.memory.readI16(lpPoint + 2);
+      emu.memory.writeU16(lpPoint, (px - origin.x) & 0xFFFF);
+      emu.memory.writeU16(lpPoint + 2, (py - origin.y) & 0xFFFF);
+    }
+    return 1;
+  }, 29);
 
   // Ordinal 31: IsIconic(hWnd) — 2 bytes
   user.register('IsIconic', 2, () => 0, 31);
@@ -845,6 +866,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     const lpString = emu.resolveFarPtr(lpStringRaw);
     const text = lpString ? emu.memory.readCString(lpString) : '';
     if (wnd) {
+      console.log(`[WIN16] SetWindowText(0x${hWnd.toString(16)}, "${text}") class=${wnd.classInfo?.className} prev="${wnd.title}"`);
       wnd.title = text;
       if (wnd.domInput) wnd.domInput.value = text;
       emu.notifyControlOverlays();
@@ -912,7 +934,26 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetClassLong', 4, () => 0, 131);
 
   // Ordinal 134: SetWindowWord(hWnd, nIndex, wNewWord) — 6 bytes (2+2+2)
-  user.register('SetWindowWord', 6, () => 0, 134);
+  user.register('SetWindowWord', 6, () => {
+    const [hWnd, nIndex, wNewWord] = emu.readPascalArgs16([2, 2, 2]);
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (!wnd) return 0;
+    const signedIndex = (nIndex << 16) >> 16;
+    // GWW_HINSTANCE = -6, GWW_HWNDPARENT = -8, GWW_ID = -12
+    if (signedIndex === -6) return 0; // read-only
+    if (signedIndex === -12 && wnd) {
+      const old = wnd.controlId ?? 0;
+      wnd.controlId = wNewWord;
+      return old;
+    }
+    if (wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
+      const old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex + 1] << 8);
+      wnd.extraBytes[nIndex] = wNewWord & 0xFF;
+      wnd.extraBytes[nIndex + 1] = (wNewWord >> 8) & 0xFF;
+      return old;
+    }
+    return 0;
+  }, 134);
 
   // Ordinal 137: OpenClipboard(hWnd) — 2 bytes
   user.register('OpenClipboard', 2, () => 1, 137);
@@ -976,7 +1017,22 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetUpdateRgn', 6, () => 1); // NULLREGION
 
   // Ordinal 250: GetMenuState(hMenu, uId, uFlags) — 6 bytes
-  user.register('GetMenuState', 6, () => 0xFFFFFFFF, 250); // -1 = menu item doesn't exist
+  user.register('GetMenuState', 6, () => {
+    const [_hMenu, uId, uFlags] = emu.readPascalArgs16([2, 2, 2]);
+    if (!emu.menuItems) return 0xFFFF;
+    const MF_BYPOSITION = 0x400;
+    const MF_GRAYED = 0x1;
+    const MF_CHECKED = 0x8;
+    const MF_POPUP = 0x10;
+    if (uFlags & MF_BYPOSITION) return 0xFFFF; // not implemented
+    const item = findMenuItemById(emu.menuItems, uId);
+    if (!item) return 0xFFFF;
+    let state = 0; // MF_ENABLED
+    if (item.isGrayed) state |= MF_GRAYED;
+    if (item.isChecked) state |= MF_CHECKED;
+    if (item.children && item.children.length > 0) state |= MF_POPUP;
+    return state;
+  }, 250);
 
   // Ordinal 264: GetMenuItemID(hMenu, nPos) — 4 bytes
   user.register('GetMenuItemID', 4, () => 0xFFFF, 264); // -1
@@ -1081,15 +1137,16 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
       return 0;
     }
     if (uMsg === WM_SIZE) {
-      // Forward WM_SIZE to MDICLIENT if present
+      // Forward WM_SIZE to MDICLIENT if present.
+      // Use postMessage instead of callWndProc16 to avoid stack corruption:
+      // DefFrameProc runs inside x86 code (via thunk), and a nested callWndProc16
+      // can yield in the browser, leaving uncleaned stack data that causes WILD EIP.
       if (_hWndMDIClient) {
         const mdiWnd = emu.handles.get<WindowInfo>(_hWndMDIClient);
         if (mdiWnd) {
           mdiWnd.width = lParam & 0xFFFF;
           mdiWnd.height = (lParam >>> 16) & 0xFFFF;
-          if (mdiWnd.wndProc) {
-            emu.callWndProc16(mdiWnd.wndProc, _hWndMDIClient, WM_SIZE, wParam, lParam);
-          }
+          emu.postMessage(_hWndMDIClient, WM_SIZE, wParam, lParam);
         }
       }
       return 0;
@@ -1587,8 +1644,38 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // SetWindowPlacement(hWnd, lpwndpl) — 6 bytes
   user.register('SetWindowPlacement', 6, () => 1, 371);
 
-  // SubtractRect(lprcDst, lprcSrc1, lprcSrc2) — 12 bytes
-  user.register('SubtractRect', 12, () => 0, 373);
+  // SubtractRect(lprcDst:4, lprcSrc1:4, lprcSrc2:4) — 12 bytes
+  // Computes lprcDst = lprcSrc1 minus the intersection with lprcSrc2.
+  // Only works when the result is a single rectangle (one full edge overlap).
+  user.register('SubtractRect', 12, () => {
+    const [lprcDst, lprcSrc1, lprcSrc2] = emu.readPascalArgs16([4, 4, 4]);
+    if (!lprcDst || !lprcSrc1 || !lprcSrc2) return 0;
+    // Read Win16 RECTs (4 x INT16 = 8 bytes each)
+    const s1L = emu.memory.readI16(lprcSrc1), s1T = emu.memory.readI16(lprcSrc1 + 2);
+    const s1R = emu.memory.readI16(lprcSrc1 + 4), s1B = emu.memory.readI16(lprcSrc1 + 6);
+    const s2L = emu.memory.readI16(lprcSrc2), s2T = emu.memory.readI16(lprcSrc2 + 2);
+    const s2R = emu.memory.readI16(lprcSrc2 + 4), s2B = emu.memory.readI16(lprcSrc2 + 6);
+    // Start with src1
+    let dL = s1L, dT = s1T, dR = s1R, dB = s1B;
+    // Check if src2 intersects src1
+    if (s2L < s1R && s2R > s1L && s2T < s1B && s2B > s1T) {
+      // src2 spans full width of src1 — subtract from top or bottom
+      if (s2L <= s1L && s2R >= s1R) {
+        if (s2T <= s1T) dT = Math.min(s2B, s1B);      // subtract from top
+        else if (s2B >= s1B) dB = Math.max(s2T, s1T);  // subtract from bottom
+      }
+      // src2 spans full height of src1 — subtract from left or right
+      else if (s2T <= s1T && s2B >= s1B) {
+        if (s2L <= s1L) dL = Math.min(s2R, s1R);       // subtract from left
+        else if (s2R >= s1R) dR = Math.max(s2L, s1L);   // subtract from right
+      }
+    }
+    emu.memory.writeI16(lprcDst, dL);
+    emu.memory.writeI16(lprcDst + 2, dT);
+    emu.memory.writeI16(lprcDst + 4, dR);
+    emu.memory.writeI16(lprcDst + 6, dB);
+    return (dL !== dR && dT !== dB) ? 1 : 0;
+  }, 373);
 
   // UnregisterClass(lpClassName, hInstance) — 6 bytes
   user.register('UnregisterClass', 6, () => 1, 403);

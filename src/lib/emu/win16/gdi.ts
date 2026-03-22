@@ -17,6 +17,7 @@ function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingC
   }
 }
 
+
 function colorToCSS(bgr: number): string {
   const r = bgr & 0xFF;
   const g = (bgr >> 8) & 0xFF;
@@ -84,6 +85,33 @@ function readDIBPixel(
     return [emu.memory.readU8(off + 2), emu.memory.readU8(off + 1), emu.memory.readU8(off)];
   }
   return [0, 0, 0];
+}
+
+/**
+ * Check if a DC targets a monochrome bitmap.
+ * When drawing to a monochrome DC, colors must be thresholded:
+ * color matching bkColor → white (1), otherwise → black (0).
+ */
+function isDCMonochrome(emu: Emulator, dc: DCInfo): boolean {
+  if (!dc.selectedBitmap) return false;
+  const bmp = emu.handles.get<BitmapInfo>(dc.selectedBitmap);
+  return !!bmp?.monochrome;
+}
+
+/**
+ * Convert a CSS color string to monochrome for a destination DC.
+ * In real Windows, when drawing on a monochrome DC:
+ *   color == DC bkColor → white pixel (preserved/transparent in masks)
+ *   color != DC bkColor → black pixel (opaque in masks)
+ */
+function monoThreshold(dc: DCInfo, cssColor: string): string {
+  // Parse the CSS color to BGR
+  const m = cssColor.match(/rgb\((\d+),(\d+),(\d+)\)/);
+  if (!m) return cssColor;
+  const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+  const bgr = r | (g << 8) | (b << 16);
+  // Compare with bkColor: match → white, else → black
+  return bgr === dc.bkColor ? '#fff' : '#000';
 }
 
 // Win16 ROP codes use different encoding than Win32
@@ -169,7 +197,41 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   function brushToFillStyle(dc: DCInfo, brush: BrushInfo): string | CanvasPattern | null {
     if (brush.patternBitmap) {
-      return dc.ctx.createPattern(brush.patternBitmap, 'repeat');
+      // Check if the pattern bitmap is monochrome — if so, colorize it using
+      // the DC's textColor (for black pixels) and bkColor (for white pixels).
+      // This is how Windows renders mono pattern brushes on color DCs.
+      const patCanvas = brush.patternBitmap;
+      const pw = patCanvas.width, ph = patCanvas.height;
+      if (pw > 0 && ph > 0) {
+        const patCtx = patCanvas.getContext('2d')!;
+        const patData = patCtx.getImageData(0, 0, pw, ph);
+        // Detect if pattern is monochrome (only black and white pixels)
+        let isMono = true;
+        for (let i = 0; i < patData.data.length; i += 4) {
+          const r = patData.data[i], g = patData.data[i+1], b = patData.data[i+2];
+          if (!((r === 0 && g === 0 && b === 0) || (r === 255 && g === 255 && b === 255))) {
+            isMono = false; break;
+          }
+        }
+        if (isMono) {
+          // Create a colorized copy of the pattern
+          const colorCanvas = new OffscreenCanvas(pw, ph);
+          const colorCtx = colorCanvas.getContext('2d')!;
+          const colorData = colorCtx.createImageData(pw, ph);
+          const txR = dc.textColor & 0xFF, txG = (dc.textColor >> 8) & 0xFF, txB = (dc.textColor >> 16) & 0xFF;
+          const bkR = dc.bkColor & 0xFF, bkG = (dc.bkColor >> 8) & 0xFF, bkB = (dc.bkColor >> 16) & 0xFF;
+          for (let i = 0; i < patData.data.length; i += 4) {
+            const isBlack = patData.data[i] === 0;
+            colorData.data[i] = isBlack ? txR : bkR;
+            colorData.data[i+1] = isBlack ? txG : bkG;
+            colorData.data[i+2] = isBlack ? txB : bkB;
+            colorData.data[i+3] = 255;
+          }
+          colorCtx.putImageData(colorData, 0, 0);
+          return dc.ctx.createPattern(colorCanvas, 'repeat');
+        }
+      }
+      return dc.ctx.createPattern(patCanvas, 'repeat');
     }
     return colorToCSS(brush.color);
   }
@@ -423,7 +485,9 @@ export function registerWin16Gdi(emu: Emulator): void {
         bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
       } else if (rop2 === R2_COPYPEN) {
         if (pen && pen.style !== PS_NULL) {
-          dc.ctx.fillStyle = colorToCSS(pen.color);
+          let fill = colorToCSS(pen.color);
+          if (isDCMonochrome(emu, dc)) fill = monoThreshold(dc, fill);
+          dc.ctx.fillStyle = fill;
           bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
         }
       } else {
@@ -602,14 +666,19 @@ export function registerWin16Gdi(emu: Emulator): void {
     const bottom = (bottomRaw << 16) >> 16;
     const dc = emu.getDC(hdc);
     if (dc) {
+      const mono = isDCMonochrome(emu, dc);
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        dc.ctx.fillStyle = colorToCSS(brush.color);
+        let fill = colorToCSS(brush.color);
+        if (mono) fill = monoThreshold(dc, fill);
+        dc.ctx.fillStyle = fill;
         dc.ctx.fillRect(left, top, right - left, bottom - top);
       }
       const pen = emu.getPen(dc.selectedPen);
       if (pen && pen.style !== PS_NULL) {
-        dc.ctx.strokeStyle = colorToCSS(pen.color);
+        let stroke = colorToCSS(pen.color);
+        if (mono) stroke = monoThreshold(dc, stroke);
+        dc.ctx.strokeStyle = stroke;
         dc.ctx.lineWidth = pen.width || 1;
         dc.ctx.strokeRect(left + 0.5, top + 0.5, right - left - 1, bottom - top - 1);
       }
@@ -654,7 +723,9 @@ export function registerWin16Gdi(emu: Emulator): void {
     } else if (rop === PATCOPY16) {
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        dc.ctx.fillStyle = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
+        let fill = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
+        if (isDCMonochrome(emu, dc)) fill = monoThreshold(dc, fill);
+        dc.ctx.fillStyle = fill;
         dc.ctx.fillRect(x, y, w, h);
       }
     } else if (rop === PATINVERT16) {
@@ -679,8 +750,11 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('SaveDC', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
-    if (dc) dc.ctx.save();
-    return 1;
+    if (dc) {
+      dc.ctx.save();
+      dc.saveLevel = (dc.saveLevel || 0) + 1;
+    }
+    return dc?.saveLevel ?? 1;
   }, 30);
 
   // Ordinal 31: SetPixel(hdc, x, y, crColor_long) — pascal, 10 bytes (2+2+2+4)
@@ -688,7 +762,9 @@ export function registerWin16Gdi(emu: Emulator): void {
     const [hdc, x, y, color] = emu.readPascalArgs16([2, 2, 2, 4]);
     const dc = emu.getDC(hdc);
     if (dc) {
-      dc.ctx.fillStyle = colorToCSS(color);
+      let fill = colorToCSS(color);
+      if (isDCMonochrome(emu, dc)) fill = monoThreshold(dc, fill);
+      dc.ctx.fillStyle = fill;
       dc.ctx.fillRect(x, y, 1, 1);
     }
     return color;
@@ -836,7 +912,74 @@ export function registerWin16Gdi(emu: Emulator): void {
         dstData.data[i+2] ^= srcData.data[i+2];
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
+    } else if (rop === 0xe20746) {
+      // ROP 0xE20746: DSPDxax = (Dst ^ (Src & (Pat ^ Dst)))
+      //   equivalent to: (D AND NOT S) OR (P AND S)
+      //   Where S=1 (white in mask): result = P (pattern applied)
+      //   Where S=0 (black in mask): result = D (destination preserved)
+      //
+      // Used by Win3.1 COMMCTRL in TOOLBAR_DrawMasked (Wine: toolbar.c:736)
+      // for disabled/etched button icons: draws a mask with COLOR_3DHILIGHT
+      // offset +1,+1, then with COLOR_3DSHADOW at the original position,
+      // creating a 3D embossed effect.
+      //
+      // Also used by COMMCTRL for checked button dithered overlay with the
+      // 55AA pattern brush (hbrMonoDither): applies a checkerboard pattern
+      // through a mono mask to dim the button background.
+      //
+      // Uses transform-aware getImageData/putImageData because child window
+      // DCs share the main canvas with a translate+clip transform.
+      const tf = dstDC.ctx.getTransform();
+      const cX = Math.round(tf.e + xDst * tf.a);
+      const cY = Math.round(tf.f + yDst * tf.d);
+      const dstData = dstDC.ctx.getImageData(cX, cY, w, h);
+      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+
+      // Get pattern brush colors
+      const brush = emu.getBrush(dstDC.selectedBrush);
+      const txC = dstDC.textColor, bkC = dstDC.bkColor;
+      const txR = txC & 0xFF, txG = (txC >> 8) & 0xFF, txB = (txC >> 16) & 0xFF;
+      const bkR = bkC & 0xFF, bkG = (bkC >> 8) & 0xFF, bkB = (bkC >> 16) & 0xFF;
+      let patPixels: Uint8ClampedArray | null = null;
+      let patW = 8, patH = 8;
+      if (brush?.patternBitmap) {
+        const patCtx = brush.patternBitmap.getContext('2d')!;
+        patW = brush.patternBitmap.width || 8;
+        patH = brush.patternBitmap.height || 8;
+        patPixels = patCtx.getImageData(0, 0, patW, patH).data;
+      }
+
+      // Apply Wine's formula per-channel: Dst ^ (Src & (Pat ^ Dst))
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const i = (py * w + px) * 4;
+          // Source (mask) pixel
+          const sr = srcData.data[i], sg = srcData.data[i+1], sb = srcData.data[i+2];
+          // Pattern pixel (from brush, colorized with textColor/bkColor for mono)
+          let pR: number, pG: number, pB: number;
+          if (patPixels) {
+            const tileX = ((cX + px) % patW + patW) % patW;
+            const tileY = ((cY + py) % patH + patH) % patH;
+            const isBlack = patPixels[(tileY * patW + tileX) * 4] === 0;
+            pR = isBlack ? txR : bkR;
+            pG = isBlack ? txG : bkG;
+            pB = isBlack ? txB : bkB;
+          } else {
+            pR = brush ? (brush.color & 0xFF) : 0;
+            pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
+            pB = brush ? ((brush.color >> 16) & 0xFF) : 0;
+          }
+          // Dst ^ (Src & (Pat ^ Dst))  — exact Wine formula (bitwise per channel)
+          const dr = dstData.data[i], dg = dstData.data[i+1], db = dstData.data[i+2];
+          dstData.data[i]   = dr ^ (sr & (pR ^ dr));
+          dstData.data[i+1] = dg ^ (sg & (pG ^ dg));
+          dstData.data[i+2] = db ^ (sb & (pB ^ db));
+          dstData.data[i+3] = 255;
+        }
+      }
+      dstDC.ctx.putImageData(dstData, cX, cY);
     } else {
+      // Fallback for other unimplemented ROPs.
       dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
     }
     return 1;
@@ -911,9 +1054,22 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   // Ordinal 39: RestoreDC(hdc, nSavedDC) — pascal -ret16, 4 bytes
   gdi.register('RestoreDC', 4, () => {
-    const [hdc] = emu.readPascalArgs16([2, 2]);
+    const [hdc, nSavedDC] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
-    if (dc) dc.ctx.restore();
+    if (dc && (dc.saveLevel || 0) > 0) {
+      const n = (nSavedDC << 16) >> 16; // sign-extend
+      if (n === -1) {
+        // Restore most recent save
+        dc.ctx.restore();
+        dc.saveLevel = (dc.saveLevel || 0) - 1;
+      } else {
+        // Restore to specific level: pop until saveLevel <= n
+        while ((dc.saveLevel || 0) > 0 && (dc.saveLevel || 0) >= n) {
+          dc.ctx.restore();
+          dc.saveLevel!--;
+        }
+      }
+    }
     return 1;
   }, 39);
 
@@ -1023,7 +1179,9 @@ export function registerWin16Gdi(emu: Emulator): void {
     const bw = w || 1, bh = h || 1;
     const canvas = new OffscreenCanvas(bw, bh);
     const ctx = canvas.getContext('2d')!;
-    if (lpBits && nBitCount === 1) {
+    // lpBits is a Win16 far pointer (SEG:OFF) — resolve to linear address
+    const linearBits = lpBits ? emu.resolveFarPtr(lpBits) : 0;
+    if (linearBits && nBitCount === 1) {
       // Monochrome bitmap: read bits and render
       const imgData = ctx.createImageData(bw, bh);
       const bytesPerRow = Math.ceil(bw / 16) * 2; // WORD-aligned
@@ -1031,7 +1189,7 @@ export function registerWin16Gdi(emu: Emulator): void {
         for (let x = 0; x < bw; x++) {
           const byteIdx = Math.floor(x / 8);
           const bitIdx = 7 - (x % 8);
-          const b = emu.memory.readU8(lpBits + y * bytesPerRow + byteIdx);
+          const b = emu.memory.readU8(linearBits + y * bytesPerRow + byteIdx);
           const set = (b >> bitIdx) & 1;
           const off = (y * bw + x) * 4;
           imgData.data[off] = imgData.data[off + 1] = imgData.data[off + 2] = set ? 255 : 0;
@@ -1077,6 +1235,7 @@ export function registerWin16Gdi(emu: Emulator): void {
     const [hdc, w, h] = emu.readPascalArgs16([2, 2, 2]);
     const canvas = new OffscreenCanvas(w || 1, h || 1);
     const ctx = canvas.getContext('2d')!;
+    // TODO: propagate monochrome flag from source DC when mono DC support is complete
     const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
   }, 51);

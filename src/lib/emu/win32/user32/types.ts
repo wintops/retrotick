@@ -71,6 +71,8 @@ export interface WindowInfo {
   // StatusBar state
   statusParts?: number[];
   statusTexts?: string[];
+  // Toolbar button checked state (command IDs of checked buttons)
+  toolbarChecked?: Set<number>;
   // ComboBox state
   cbItems?: string[];
   cbItemData?: number[];

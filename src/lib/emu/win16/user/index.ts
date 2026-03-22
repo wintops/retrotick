@@ -1,5 +1,7 @@
 import type { Emulator } from '../../emulator';
 import type { MenuItem } from '../../../pe/types';
+import type { WindowInfo } from '../../win32/user32/types';
+import { getNonClientMetrics } from '../../win32/user32/_helpers';
 import { registerWin16UserWindow } from './window';
 import { registerWin16UserMessage } from './message';
 import { registerWin16UserPaint } from './paint';
@@ -31,6 +33,7 @@ export interface Win16UserHelpers {
   resolveFarPtr: ResolveFarPtr;
   readRect: ReadRect;
   writeRect: WriteRect;
+  clientOrigin: (hwnd: number) => { x: number; y: number };
 }
 
 export function registerWin16User(emu: Emulator): void {
@@ -67,7 +70,23 @@ export function registerWin16User(emu: Emulator): void {
     return (emu.cpu.segBases.get(seg) ?? (seg * 16)) + off;
   };
 
-  const helpers: Win16UserHelpers = { readFarPtr, resolveFarPtr, readRect, writeRect };
+  // Compute screen coordinates of a window's client-area origin.
+  // Top-level windows (no parent): include non-client metrics (border, caption, menu).
+  // Child windows (has parent): walk parent chain accumulating positions.
+  const clientOrigin = (hwnd: number): { x: number; y: number } => {
+    const wnd = hwnd ? emu.handles.get<WindowInfo>(hwnd) : null;
+    if (!wnd) return { x: 0, y: 0 };
+    if (wnd.parent) {
+      // Has parent: walk up the chain, adding this window's position
+      const po = clientOrigin(wnd.parent);
+      return { x: po.x + (wnd.x || 0), y: po.y + (wnd.y || 0) };
+    }
+    // Top-level window (no parent): client origin = window pos + non-client area
+    const { bw, captionH, menuH } = getNonClientMetrics(wnd.style, wnd.hMenu !== 0, true);
+    return { x: (wnd.x || 0) + bw, y: (wnd.y || 0) + bw + captionH + menuH };
+  };
+
+  const helpers: Win16UserHelpers = { readFarPtr, resolveFarPtr, readRect, writeRect, clientOrigin };
 
   registerWin16UserWindow(emu, user, helpers);
   registerWin16UserMessage(emu, user, helpers);
