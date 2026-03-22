@@ -135,6 +135,21 @@ export class VGAState {
   pendingSync = false;             // set when VBlank starts; tick should sync & present
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
 
+  // Cached retrace timing — reduces performance.now() calls in tight 0x3DA poll loops
+  private _cachedNowUs = 0;        // performance.now() * 1000, refreshed every N polls
+  private _3daPollCount = 0;       // polls since last refresh
+  private _cachedVisibleLines = 200;
+  private _cachedFrameUs = 449 * 31.778;
+  private _retraceConstsDirty = true;
+
+  /** Refresh retrace constants when CRTC regs change */
+  private _updateRetraceConsts(): void {
+    this._cachedVisibleLines = this.getVisibleHeight();
+    const totalLines = (this._cachedVisibleLines <= 350) ? 449 : 525;
+    this._cachedFrameUs = totalLines * 31.778;
+    this._retraceConstsDirty = false;
+  }
+
   constructor() {
     this.initRegsForMode(0x03);
   }
@@ -389,6 +404,10 @@ export class VGAState {
       case 0x3D5: // CRTC data
         if (this.crtcIndex < this.crtcRegs.length) {
           this.crtcRegs[this.crtcIndex] = value;
+          // Invalidate cached retrace constants when vertical timing regs change
+          if (this.crtcIndex === 0x07 || this.crtcIndex === 0x09 || this.crtcIndex === 0x12) {
+            this._retraceConstsDirty = true;
+          }
         }
         break;
     }
@@ -416,28 +435,18 @@ export class VGAState {
         return this.crtcIndex;
       case 0x3D5: // CRTC data
         return this.crtcIndex < this.crtcRegs.length ? this.crtcRegs[this.crtcIndex] : 0;
-      case 0x3DA: { // Input status register 1 — time-based retrace simulation
+      case 0x3DA: { // Input status register 1 — cached retrace simulation
         this.atcFlipFlop = false; // reading 0x3DA resets ATC flip-flop
 
-        // VGA timing: 31.778 µs per scanline (31.469 kHz horizontal frequency)
-        // Mode 200 lines: 449 total lines, 70.09 Hz → frame ≈ 14.27ms, VBlank at line 200-448
-        // Mode 240 lines: 525 total lines, 59.94 Hz → frame ≈ 16.68ms, VBlank at line 240-524
-        // Mode 350 lines: 449 total lines, 70.09 Hz → frame ≈ 14.27ms, VBlank at line 350-448
-        // Mode 480 lines: 525 total lines, 59.94 Hz → frame ≈ 16.68ms, VBlank at line 480-524
-        const visibleLines = this.getVisibleHeight();
-        const totalLines = (visibleLines <= 350) ? 449 : 525;
-        const lineUs = 31.778; // µs per scanline
-        const frameUs = totalLines * lineUs;
-        const hblankStartFrac = 0.8; // HBlank occupies last ~20% of each line
+        // Refresh performance.now() every 64 polls (not every poll — too expensive)
+        if ((this._3daPollCount++ & 63) === 0) {
+          this._cachedNowUs = performance.now() * 1000;
+          if (this._retraceConstsDirty) this._updateRetraceConsts();
+        }
 
-        const nowUs = performance.now() * 1000;
-        const tInFrame = nowUs % frameUs;
-        const currentLine = (tInFrame / lineUs) | 0;
-        const tInLine = tInFrame - currentLine * lineUs;
-        const lineFrac = tInLine / lineUs;
-
-        const inVblank = currentLine >= visibleLines;
-        const inHblank = !inVblank && lineFrac >= hblankStartFrac;
+        const tInFrame = this._cachedNowUs % this._cachedFrameUs;
+        const currentLine = (tInFrame / 31.778) | 0;
+        const inVblank = currentLine >= this._cachedVisibleLines;
 
         // On VBlank entry: VRAM contains a complete frame — schedule sync.
         if (inVblank && !this.lastVblankSync) {
@@ -447,6 +456,7 @@ export class VGAState {
 
         // Bit 3: Vertical retrace (VSync)
         // Bit 0: Display disabled (HBlank or VBlank)
+        const inHblank = !inVblank && (tInFrame - currentLine * 31.778) >= 25.422;
         return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
       }
       case 0x3C9: { // DAC data read
