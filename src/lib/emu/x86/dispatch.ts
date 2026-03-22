@@ -16,21 +16,57 @@ const IF = 0x200;
 const DF = 0x400;
 const OF = 0x800;
 
+/** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
+function dispatchException(cpu: CPU, intNum: number): boolean {
+  // Try JS-handled DOS/BIOS interrupts first
+  if (cpu.emu && handleDosInt(cpu, intNum, cpu.emu)) return true;
+  // Protected mode: dispatch through IDT
+  if (!cpu.realMode && cpu.emu && cpu.emu._idtBase) {
+    const idtEntry = cpu.emu._idtBase + intNum * 8;
+    if (intNum * 8 + 7 <= cpu.emu._idtLimit) {
+      const lo = cpu.mem.readU32(idtEntry);
+      const hi = cpu.mem.readU32(idtEntry + 4);
+      const offsetLo = lo & 0xFFFF;
+      const selector = (lo >>> 16) & 0xFFFF;
+      const typeAttr = (hi >>> 8) & 0xFF;
+      const offsetHi = (hi >>> 16) & 0xFFFF;
+      const present = (typeAttr & 0x80) !== 0;
+      const gateType = typeAttr & 0x0F;
+      if (present && selector !== 0) {
+        const is32 = (gateType === 0x0E || gateType === 0x0F);
+        const offset = is32 ? ((offsetHi << 16) | offsetLo) >>> 0 : offsetLo;
+        const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & (is32 ? 0xFFFFFFFF : 0xFFFF);
+        if (is32) {
+          cpu.push32(cpu.getFlags());
+          cpu.push32(cpu.cs);
+          cpu.push32(returnIP);
+        } else {
+          cpu.push16(cpu.getFlags() & 0xFFFF);
+          cpu.push16(cpu.cs);
+          cpu.push16(returnIP & 0xFFFF);
+        }
+        if (gateType === 0x06 || gateType === 0x0E) {
+          cpu.setFlags(cpu.getFlags() & ~0x0200); // clear IF
+        }
+        cpu.setFlags(cpu.getFlags() & ~0x0100); // clear TF
+        cpu.loadCS(selector);
+        cpu.eip = cpu.segBase(selector) + offset;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function raiseDivideError(cpu: CPU, instrEip: number): void {
-  // Dispatch INT 0 (Divide Error) like a real x86 CPU.
-  // The faulting instruction's CS:IP is pushed so the handler knows where the error occurred.
   const csBase = (cpu.cs << 4) >>> 0;
   const ip = (instrEip - csBase) & 0xFFFF;
   console.warn(`[DIV ERROR] at CS:IP=${cpu.cs.toString(16)}:${ip.toString(16)} (linear 0x${instrEip.toString(16)}) AX=0x${(cpu.reg[0] & 0xFFFF).toString(16)} BX=0x${(cpu.reg[3] & 0xFFFF).toString(16)} CX=0x${(cpu.reg[1] & 0xFFFF).toString(16)} DX=0x${(cpu.reg[2] & 0xFFFF).toString(16)}`);
-  // Dump the faulting instruction bytes
   const bytes: string[] = [];
   for (let i = 0; i < 8; i++) bytes.push(cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0'));
   console.warn(`[DIV ERROR] bytes: ${bytes.join(' ')}`);
   cpu.eip = instrEip; // rewind to faulting instruction
-  if (cpu.emu && handleDosInt(cpu, 0, cpu.emu)) {
-    return; // handler installed — let it run
-  }
-  // No handler — halt
+  if (dispatchException(cpu, 0)) return;
   cpu.haltReason = 'integer divide by zero';
   cpu.halted = true;
 }
@@ -302,7 +338,7 @@ export function cpuStep(cpu: CPU): void {
         if (val < lo || val > hi) {
           // BOUND range exceeded — dispatch INT 5
           cpu.eip = instrEip;
-          if (cpu.emu && handleDosInt(cpu, 5, cpu.emu)) break;
+          if (dispatchException(cpu, 5)) break;
           cpu.haltReason = 'BOUND range exceeded';
           cpu.halted = true;
         }
@@ -313,7 +349,7 @@ export function cpuStep(cpu: CPU): void {
         const hi = cpu.mem.readI32((d.addr + 4) >>> 0);
         if (val < lo || val > hi) {
           cpu.eip = instrEip;
-          if (cpu.emu && handleDosInt(cpu, 5, cpu.emu)) break;
+          if (dispatchException(cpu, 5)) break;
           cpu.haltReason = 'BOUND range exceeded';
           cpu.halted = true;
         }
@@ -703,13 +739,13 @@ export function cpuStep(cpu: CPU): void {
     // MOV Sreg, r/m16
     case 0x8E: {
       const d = cpu.decodeModRM(16);
-      if (!cpu.use32) {
-        switch (d.regField) {
-          case 0: cpu.es = d.val & 0xFFFF; break;
-          case 1: cpu.cs = d.val & 0xFFFF; break;
-          case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; break; // MOV SS suppresses TF
-          case 3: cpu.ds = d.val & 0xFFFF; break;
-        }
+      switch (d.regField) {
+        case 0: cpu.es = d.val & 0xFFFF; break;
+        case 1: cpu.loadCS(d.val & 0xFFFF); break;
+        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; break; // MOV SS suppresses TF
+        case 3: cpu.ds = d.val & 0xFFFF; break;
+        case 4: cpu.fs = d.val & 0xFFFF; break;
+        case 5: cpu.gs = d.val & 0xFFFF; break;
       }
       break;
     }
@@ -760,13 +796,16 @@ export function cpuStep(cpu: CPU): void {
         const selector = cpu.fetch16();
         cpu.push16(cpu.cs);
         cpu.push16((cpu.eip - (cpu.segBase(cpu.cs))) & 0xFFFF);
-        cpu.cs = selector;
+        cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
         const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
-        cpu.fetch16(); // segment selector — consumed and ignored in flat model
-        cpu.push32(cpu.eip);
-        cpu.eip = offset;
+        const selector = cpu.fetch16();
+        const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
+        cpu.push32(cpu.cs);
+        cpu.push32(returnIP);
+        cpu.loadCS(selector);
+        cpu.eip = (cpu.segBase(selector)) + offset;
       }
       break;
     }
@@ -1002,12 +1041,15 @@ export function cpuStep(cpu: CPU): void {
       if (!cpu.use32) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
-        cpu.cs = cs;
+        cpu.loadCS(cs);
         cpu.eip = (cpu.segBase(cs)) + ip;
         const newSp = (cpu.reg[ESP] & 0xFFFF) + imm;
         cpu.reg[ESP] = (cpu.reg[ESP] & ~0xFFFF) | (newSp & 0xFFFF);
       } else {
-        cpu.eip = cpu.pop32();
+        const eip2 = cpu.pop32();
+        const cs = cpu.pop32() & 0xFFFF;
+        cpu.loadCS(cs);
+        cpu.eip = (cpu.segBase(cs) + eip2) >>> 0;
         cpu.reg[ESP] = (cpu.reg[ESP] + imm) | 0;
       }
       break;
@@ -1018,10 +1060,13 @@ export function cpuStep(cpu: CPU): void {
       if (!cpu.use32) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
-        cpu.cs = cs;
+        cpu.loadCS(cs);
         cpu.eip = (cpu.segBase(cs)) + ip;
       } else {
-        cpu.eip = cpu.pop32();
+        const eip2 = cpu.pop32();
+        const cs = cpu.pop32() & 0xFFFF;
+        cpu.loadCS(cs);
+        cpu.eip = (cpu.segBase(cs) + eip2) >>> 0;
       }
       break;
 
@@ -1125,10 +1170,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xCD: {
       cpu._inhibitTF = true; // INT suppresses TF trap
       const num = cpu.fetch8();
-      // Try DOS/BIOS handler first if emulator is available
-      if (cpu.emu && handleDosInt(cpu, num, cpu.emu)) {
-        break;
-      }
+      if (dispatchException(cpu, num)) break;
       if (num === 0x03) {
         // INT 3: breakpoint — treat as NOP
       } else {
@@ -1144,15 +1186,15 @@ export function cpuStep(cpu: CPU): void {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
-        cpu.cs = cs;
+        cpu.loadCS(cs);
         cpu.eip = cpu.segBase(cs) + ip;
         cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
       } else {
         const eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
         const eflags = cpu.pop32() >>> 0;
-        cpu.cs = cs2;
-        cpu.eip = eip2;
+        cpu.loadCS(cs2);
+        cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
         cpu.setFlags(eflags);
       }
       break;
@@ -1230,18 +1272,12 @@ export function cpuStep(cpu: CPU): void {
       if (!cpu.use32) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
-        cpu.cs = selector;
+        cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
-        // In protected mode, check if new CS is a 32-bit segment
-        if (!cpu.realMode) {
-          const is32 = cpu.loadGdtDescriptorIs32(selector);
-          cpu.use32 = is32;
-          cpu._addrSize16 = !is32;
-        }
       } else {
         const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
         const selector = cpu.fetch16();
-        cpu.cs = selector;
+        cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       }
       break;
@@ -1613,14 +1649,21 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 3: // CALL FAR m16:16 (FF /3)
+        case 3: // CALL FAR m16:16/32 (FF /3)
           if (!cpu.use32) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
-            const csBase = cpu.segBase(cpu.cs);
             cpu.push16(cpu.cs);
-            cpu.push16((cpu.eip - csBase) & 0xFFFF);
-            cpu.cs = farSel;
+            cpu.push16((cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF);
+            cpu.loadCS(farSel);
+            cpu.eip = (cpu.segBase(farSel)) + farOff;
+          } else {
+            const farOff = cpu.mem.readU32(d.addr);
+            const farSel = cpu.mem.readU16((d.addr + 4) >>> 0);
+            const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
+            cpu.push32(cpu.cs);
+            cpu.push32(returnIP);
+            cpu.loadCS(farSel);
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;
@@ -1632,11 +1675,16 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 5: // JMP FAR m16:16 (FF /5)
+        case 5: // JMP FAR m16:16/32 (FF /5)
           if (!cpu.use32) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
-            cpu.cs = farSel;
+            cpu.loadCS(farSel);
+            cpu.eip = (cpu.segBase(farSel)) + farOff;
+          } else {
+            const farOff = cpu.mem.readU32(d.addr);
+            const farSel = cpu.mem.readU16((d.addr + 4) >>> 0);
+            cpu.loadCS(farSel);
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;

@@ -210,15 +210,16 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
         if (emu.dosKeyBuffer.length > 0) emu.dosKeyBuffer.shift();
         const ascii = (ah === 0x00 && key.ascii === 0xE0) ? 0 : key.ascii;
         cpu.setReg16(EAX, (key.scan << 8) | ascii);
-      } else if (fromBiosStub) {
-        // BDA empty from BIOS stub: real BIOS would block (STI; HLT loop).
-        // Rewind EIP to re-execute the INT 16h instruction on next tick,
-        // simulating the blocking loop. Halt until timer or key wakes us.
+      } else if (emu.isDOS) {
+        // No key available: rewind to INT 16h instruction and halt.
+        // _dosHalted allows timer interrupts to keep firing (music, animation)
+        // while waiting for keyboard input, unlike waitingForMessage which
+        // stops everything.
         cpu.eip -= 2;
         emu._dosHalted = true;
         return true; // handled, but will re-execute
       } else {
-        // Direct INT 16h from program — block until key available
+        // Win16/Win32: block until key available
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
       }

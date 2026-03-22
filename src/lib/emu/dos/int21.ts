@@ -13,6 +13,7 @@ import {
   dosMkdir, dosRmdir,
   dosCreateTempFile, dosCreateNewFile,
   dosLockFile, dosSetHandleCount, dosFlushBuffer, dosExtendedOpen,
+  getSyncFileData,
 } from './file';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
@@ -865,18 +866,38 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         break;
       }
 
-      // Resolve path and find file data
+      // Resolve path and find file data (same logic as dosOpenFile)
       const execResolved = dosResolvePath(emu, progName);
       const fileInfo = emu.fs.findFile(execResolved, emu.additionalFiles);
       let execData: Uint8Array | null = null;
       if (fileInfo) {
-        if (fileInfo.source === 'additional') {
-          const ab = emu.additionalFiles.get(fileInfo.name);
-          if (ab) execData = new Uint8Array(ab);
-        } else if (fileInfo.source === 'external') {
-          const ext = emu.fs.externalFiles.get(execResolved.toUpperCase());
-          if (ext) execData = ext.data;
+        execData = getSyncFileData(emu.fs, fileInfo, emu, execResolved);
+      }
+      // baseName fallback in additionalFiles (same as openFileByPath)
+      if (!execData) {
+        const baseName2 = execResolved.replace(/^.*[\\\/]/, '').toUpperCase();
+        for (const [key, buf] of emu.additionalFiles) {
+          if (key.toUpperCase() === baseName2 || key.toUpperCase().endsWith('\\' + baseName2) || key.toUpperCase().endsWith('/' + baseName2)) {
+            execData = new Uint8Array(buf);
+            break;
+          }
         }
+      }
+      // Async fallback: fetch from IndexedDB/virtual FS, then replay the INT 21h
+      if (!execData && fileInfo) {
+        emu.fs.fetchFileData(fileInfo, emu.additionalFiles, execResolved).then(() => {
+          if (emu._dosFileOpenPending) {
+            emu._dosFileOpenPending = false;
+            emu.waitingForMessage = false;
+            if (emu.running && !emu.halted) {
+              requestAnimationFrame(emu.tick);
+            }
+          }
+        });
+        cpu.eip -= 2; // rewind to INT 21h
+        emu._dosFileOpenPending = true;
+        emu.waitingForMessage = true;
+        break;
       }
       if (!execData) {
         console.warn(`[INT 21h] EXEC file not found: "${progName}" resolved="${execResolved}"`);

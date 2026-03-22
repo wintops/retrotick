@@ -75,7 +75,7 @@ export function dosCreateFile(cpu: CPU, emu: Emulator): void {
 }
 
 /** Try to get file data synchronously (additionalFiles / externalFiles / cached virtual). */
-function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, resolved: string): Uint8Array | null {
+export function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, resolved: string): Uint8Array | null {
   if (fileInfo.source === 'additional') {
     const ab = emu.additionalFiles.get(fileInfo.name);
     return ab ? new Uint8Array(ab) : null;
