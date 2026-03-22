@@ -355,6 +355,8 @@ export class Emulator {
   _gdtLimit = 0;      // GDT limit
   _idtBase = 0;       // IDT linear base address
   _idtLimit = 0;      // IDT limit
+  _ldtr = 0;          // Local Descriptor Table Register (selector)
+  _tr = 0;            // Task Register (selector)
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
@@ -1397,16 +1399,14 @@ export class Emulator {
             return (val >> 8) & 0xFF;
           }
         }
-        // Not latched: return running counter estimate.
-        // In DOS mode, derive from instruction count to simulate ~33MHz CPU
-        // (prevents Turbo Pascal CRT unit fast-CPU calibration overflow).
-        // In Win32 mode, use wall-clock time.
+        // Not latched: return running counter estimate based on wall-clock time.
+        // Must use performance.now() (not instruction count) to stay consistent
+        // with the timer interrupt source, which also uses performance.now().
+        // Audio mixers (e.g. STMIK zpollme) read this to measure elapsed time.
         const freq = 1193182; // PIT base frequency
         const reload = this._pitCounters[ch] || 0x10000;
-        const INSNS_PER_PIT_TICK = 28; // ~33MHz / 1.19MHz ≈ 28
-        const count = this.isDOS
-          ? (reload - Math.floor(this._pitInsnCount / INSNS_PER_PIT_TICK) % reload) & 0xFFFF
-          : (() => { const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq); return (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF; })();
+        const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
+        const count = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) return count & 0xFF;
         if (accessMode === 2) return (count >> 8) & 0xFF;

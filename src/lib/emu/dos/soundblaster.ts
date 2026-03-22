@@ -206,7 +206,7 @@ export class SoundBlasterDSP {
     }
   }
 
-  private dmaTicks = 0; // Number of tickDMA calls since DMA started
+  private dmaStartTime = 0; // performance.now() when DMA started
 
   dma?: import('./dma').DMAController;
   readMemFn?: (addr: number) => number;
@@ -215,7 +215,7 @@ export class SoundBlasterDSP {
     this.dmaLength = length;
     this.dmaTransferred = 0;
     this.dmaActive = true;
-    this.dmaTicks = 0;
+    this.dmaStartTime = performance.now();
     if (this.dma) {
       console.log(`[SB-DMA] Start: length=${length} rate=${this.getSampleRate()}Hz autoInit=${this.dmaAutoInit}`);
     }
@@ -234,16 +234,13 @@ export class SoundBlasterDSP {
   tickDMA(dma: DMAController, readMem: (addr: number) => number): boolean {
     if (!this.dmaActive || !dma.isActive(1)) return false;
 
-    // Rate-limit transfer to match the programmed sample rate relative to
-    // emulated CPU speed. Each tickDMA call corresponds to 256 CPU instructions.
-    // At ~4.77 MHz and typical sample rates (8-22 kHz) this gives ~0.5-1.2
-    // samples per tick, preventing DMA from completing before IRQ handlers run.
-    this.dmaTicks++;
+    // Rate-limit transfer to match the programmed sample rate using wall-clock time.
+    // Must use performance.now() (not instruction count) to stay synchronized with
+    // the timer interrupt and zpollme, which also use wall-clock time.
     const sampleRate = this.getSampleRate();
-    const INSTRUCTIONS_PER_TICK = 256;
-    const CPU_FREQ = 4770000; // ~4.77 MHz (original IBM PC)
+    const elapsedMs = performance.now() - this.dmaStartTime;
     const expectedSamples = Math.min(
-      Math.floor(this.dmaTicks * INSTRUCTIONS_PER_TICK * sampleRate / CPU_FREQ),
+      Math.floor(elapsedMs * sampleRate / 1000),
       this.dmaLength
     );
     const batch = Math.min(512, expectedSamples - this.dmaTransferred);

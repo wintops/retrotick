@@ -127,7 +127,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
     }
     if (csTry) {
       const iters = tryFastLoop(emu.cpu, emu.memory);
-      if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
       csHitA = csHitB = 0;
     }
 
@@ -790,7 +790,7 @@ export function emuTick(emu: Emulator): void {
       }
       if (tkTry) {
         const it = tryFastLoop(emu.cpu, emu.memory);
-        if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
         tkHitA = tkHitB = 0;
       }
     }
