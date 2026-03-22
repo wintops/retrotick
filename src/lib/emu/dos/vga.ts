@@ -484,6 +484,14 @@ export class VGAState {
     const mapMask = this.writeMapMask;
 
     if (writeMode === 0) {
+      // Fast path: Write Mode 0, no rotation/set-reset/logicOp, full mask (most Mode X writes)
+      if (this.gcRegs[3] === 0 && this.gcRegs[1] === 0 && mask === 0xFF) {
+        if (mapMask & 1) this.planes[0][offset] = val;
+        if (mapMask & 2) this.planes[1][offset] = val;
+        if (mapMask & 4) this.planes[2][offset] = val;
+        if (mapMask & 8) this.planes[3][offset] = val;
+        return;
+      }
       // Write Mode 0: each plane gets val (optionally rotated/set-reset), masked by Bit Mask
       const enableSR = this.gcRegs[1]; // Enable Set/Reset
       const setReset = this.gcRegs[0]; // Set/Reset value
