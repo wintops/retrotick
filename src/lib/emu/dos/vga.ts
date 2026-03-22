@@ -390,22 +390,15 @@ export class VGAState {
         this.dacReadIndex = value;
         this.dacReadComponent = 0;
         break;
-      case 0x3C9: { // DAC data (write R, G, B sequentially)
+      case 0x3C9: // DAC data (write R, G, B sequentially)
         this.palette[this.dacWriteIndex * 3 + this.dacWriteComponent] = value & 0x3F;
         this.dacWriteComponent++;
         if (this.dacWriteComponent >= 3) {
           this.dacWriteComponent = 0;
-          const idx = this.dacWriteIndex;
-          const r = this.palette[idx * 3], g = this.palette[idx * 3 + 1], b = this.palette[idx * 3 + 2];
-          if (idx < 16 && (r !== g || g !== b) && !(this as any)._palLog) {
-            (this as any)._palLog = true;
-            console.warn(`[PAL] Non-grey entry ${idx}: R=${r} G=${g} B=${b}`);
-          }
           this.dacWriteIndex = (this.dacWriteIndex + 1) & 0xFF;
           this.dirty = true;
         }
         break;
-      }
         break;
       case 0x3D4: // CRTC index
         this.crtcIndex = value & 0x1F;
