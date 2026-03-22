@@ -3,6 +3,7 @@ import { useLayoutEffect } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU } from './Window';
 import { Button } from './Button';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
+import { t } from '../../lib/regional-settings';
 
 // --- Types ---
 
@@ -150,7 +151,8 @@ export function FileDialog({
   mode, filter, initialDir, initialFileName, title, fileManager, additionalFiles,
   onResult, focused = true, flashTrigger, parentRef,
 }: FileDialogProps) {
-  const defaultTitle = mode === 'open' ? 'Open' : 'Save As';
+  const s = t();
+  const defaultTitle = mode === 'open' ? s.open : s.save;
   const dialogTitle = title || defaultTitle;
   const filters = parseFilters(filter);
 
@@ -181,13 +183,15 @@ export function FileDialog({
     const parentRect = parentRef?.current?.getBoundingClientRect();
     const cx = parentRect ? parentRect.left + parentRect.width / 2 : window.innerWidth / 2;
     const cy = parentRect ? parentRect.top + parentRect.height / 2 : window.innerHeight / 2;
-    setInitialPos({ x: cx - dlgRect.width / 2, y: cy - dlgRect.height / 2 });
+    const x = Math.max(0, Math.min(cx - dlgRect.width / 2, window.innerWidth - dlgRect.width));
+    const y = Math.max(0, Math.min(cy - dlgRect.height / 2, window.innerHeight - dlgRect.height));
+    setInitialPos({ x, y });
   }, []);
 
   useEffect(() => { if (initialPos) setVisible(true); }, [initialPos]);
 
   // Refresh file list when directory or filter changes
-  useEffect(() => {
+  const refreshEntries = useCallback(() => {
     const pattern = currentDir + '*.*';
     const raw = fileManager.getVirtualDirListing(pattern, additionalFiles);
     const activePattern = filters[filterIdx]?.pattern || '*.*';
@@ -196,14 +200,20 @@ export function FileDialog({
       if (e.isDir) return true;
       return matchesFilter(e.name, activePattern);
     });
-    // Sort: directories first, then alphabetical
     filtered.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
     });
     setEntries(filtered);
     setSelectedName(null);
-  }, [currentDir, filterIdx]);
+  }, [currentDir, filterIdx, fileManager, additionalFiles, filters]);
+
+  useEffect(() => {
+    refreshEntries();
+    // Re-query after a short delay in case virtualFiles is still loading from IndexedDB
+    const timer = setTimeout(refreshEntries, 500);
+    return () => clearTimeout(timer);
+  }, [refreshEntries]);
 
   // Navigate into a directory
   const navigateTo = useCallback((dir: string) => {
@@ -221,16 +231,30 @@ export function FileDialog({
     if (lastSlash >= 2) navigateTo(trimmed.substring(0, lastSlash + 1));
   }, [currentDir, navigateTo]);
 
+  // Pre-fetch virtual file data (IndexedDB) into cache before returning result
+  const confirmOpen = useCallback((path: string) => {
+    if (mode === 'save') {
+      onResult({ path });
+      return;
+    }
+    const fileInfo = fileManager.findFile(path, additionalFiles);
+    if (fileInfo && fileInfo.source === 'virtual') {
+      fileManager.fetchFileData(fileInfo, additionalFiles, path).then(() => {
+        onResult({ path });
+      });
+    } else {
+      onResult({ path });
+    }
+  }, [mode, fileManager, additionalFiles, onResult]);
+
   // Double-click entry
   const onDoubleClick = useCallback((entry: DirEntry) => {
     if (entry.isDir) {
       navigateTo(currentDir + entry.name);
     } else {
-      // Select file and confirm
-      const path = currentDir + entry.name;
-      onResult({ path });
+      confirmOpen(currentDir + entry.name);
     }
-  }, [currentDir, navigateTo, onResult]);
+  }, [currentDir, navigateTo, confirmOpen]);
 
   // Single-click entry
   const onClickEntry = useCallback((entry: DirEntry) => {
@@ -245,11 +269,7 @@ export function FileDialog({
 
     // If the user typed a full path, use it directly
     if (/^[A-Za-z]:\\/.test(name)) {
-      if (mode === 'save') {
-        onResult({ path: name.toUpperCase() });
-      } else {
-        onResult({ path: name.toUpperCase() });
-      }
+      confirmOpen(name.toUpperCase());
       return;
     }
 
@@ -260,9 +280,8 @@ export function FileDialog({
       return;
     }
 
-    const path = currentDir + name.toUpperCase();
-    onResult({ path });
-  }, [fileName, currentDir, entries, mode, navigateTo, onResult]);
+    confirmOpen(currentDir + name.toUpperCase());
+  }, [fileName, currentDir, entries, navigateTo, confirmOpen]);
 
   // Import from PC
   const onImportFromPC = useCallback(() => {
@@ -292,7 +311,7 @@ export function FileDialog({
 
   // Create new folder
   const onNewFolder = useCallback(() => {
-    const name = prompt('New folder name:');
+    const name = prompt(s.newFolderPrompt);
     if (!name) return;
     const path = currentDir + name.toUpperCase();
     fileManager.createDirectory(path);
@@ -333,7 +352,7 @@ export function FileDialog({
 
           {/* --- Top toolbar: Look in + navigation --- */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span style={{ whiteSpace: 'nowrap', font: FONT }}>Look in:</span>
+            <span style={{ whiteSpace: 'nowrap', font: FONT }}>{mode === 'open' ? s.lookIn : s.saveIn}</span>
             {/* Drive/path combo */}
             <div style={{ flex: 1, position: 'relative' }}>
               <div onClick={() => setDriveOpen(!driveOpen)} style={{
@@ -404,7 +423,7 @@ export function FileDialog({
           >
             {entries.length === 0 && (
               <div style={{ padding: '8px', color: '#808080', font: FONT }}>
-                (empty)
+                {s.empty}
               </div>
             )}
             {entries.map(entry => {
@@ -437,7 +456,7 @@ export function FileDialog({
 
           {/* --- File name row --- */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span style={{ whiteSpace: 'nowrap', font: FONT, width: '76px' }}>File name:</span>
+            <span style={{ whiteSpace: 'nowrap', font: FONT, width: '76px' }}>{s.fileName}</span>
             <input
               type="text"
               value={fileName}
@@ -453,13 +472,13 @@ export function FileDialog({
             />
             <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }}
               onClick={onConfirm}>
-              <Button fontCSS={FONT} isDefault>{mode === 'open' ? 'Open' : 'Save'}</Button>
+              <Button fontCSS={FONT} isDefault>{mode === 'open' ? s.open : s.save}</Button>
             </div>
           </div>
 
           {/* --- Filter row --- */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span style={{ whiteSpace: 'nowrap', font: FONT, width: '76px' }}>Files of type:</span>
+            <span style={{ whiteSpace: 'nowrap', font: FONT, width: '76px' }}>{s.filesOfType}</span>
             {/* Filter combo */}
             <div style={{ flex: 1, position: 'relative' }}>
               <div onClick={() => { setFilterOpen(!filterOpen); setDriveOpen(false); }}
@@ -514,7 +533,7 @@ export function FileDialog({
             </div>
             <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }}
               onClick={() => onResult(null)}>
-              <Button fontCSS={FONT}>Cancel</Button>
+              <Button fontCSS={FONT}>{s.cancel}</Button>
             </div>
           </div>
 
@@ -531,7 +550,7 @@ export function FileDialog({
                     font: FONT, padding: '0 8px', whiteSpace: 'nowrap',
                   }}
                 >
-                  Import from PC...
+                  {s.importFromPC}
                 </button>
               </div>
             </div>

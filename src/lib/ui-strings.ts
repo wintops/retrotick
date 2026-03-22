@@ -65,6 +65,15 @@ export interface UiStrings {
   folderEmpty: string;
   dropHint: string;
   rightClickHint: string;
+  // File dialog
+  lookIn: string;
+  saveIn: string;
+  fileName: string;
+  filesOfType: string;
+  save: string;
+  importFromPC: string;
+  newFolderPrompt: string;
+  empty: string;
 }
 
 const en: UiStrings = {
@@ -127,6 +136,14 @@ const en: UiStrings = {
   folderEmpty: 'This folder is empty',
   dropHint: 'Drop EXE / DLL files to run apps or inspect resources',
   rightClickHint: 'Right-click desktop for actions',
+  lookIn: 'Look in:',
+  saveIn: 'Save in:',
+  fileName: 'File name:',
+  filesOfType: 'Files of type:',
+  save: 'Save',
+  importFromPC: 'Import from PC...',
+  newFolderPrompt: 'New folder name:',
+  empty: '(empty)',
 };
 
 const fr: UiStrings = {
@@ -189,6 +206,14 @@ const fr: UiStrings = {
   folderEmpty: 'Ce dossier est vide',
   dropHint: 'D\u00e9posez des fichiers EXE / DLL pour lancer des applis ou inspecter les ressources',
   rightClickHint: 'Clic droit sur le bureau pour les actions',
+  lookIn: 'Regarder dans :',
+  saveIn: 'Enregistrer dans :',
+  fileName: 'Nom du fichier :',
+  filesOfType: 'Type de fichiers :',
+  save: 'Enregistrer',
+  importFromPC: 'Importer depuis le PC...',
+  newFolderPrompt: 'Nom du nouveau dossier :',
+  empty: '(vide)',
 };
 
 const de: UiStrings = {
@@ -251,6 +276,14 @@ const de: UiStrings = {
   folderEmpty: 'Dieser Ordner ist leer',
   dropHint: 'EXE-/DLL-Dateien hierher ziehen, um Apps auszuf\u00fchren oder Ressourcen anzuzeigen',
   rightClickHint: 'Rechtsklick auf den Desktop f\u00fcr Aktionen',
+  lookIn: 'Suchen in:',
+  saveIn: 'Speichern in:',
+  fileName: 'Dateiname:',
+  filesOfType: 'Dateityp:',
+  save: 'Speichern',
+  importFromPC: 'Vom PC importieren...',
+  newFolderPrompt: 'Name des neuen Ordners:',
+  empty: '(leer)',
 };
 
 const es: UiStrings = {
@@ -313,6 +346,14 @@ const es: UiStrings = {
   folderEmpty: 'Esta carpeta est\u00e1 vac\u00eda',
   dropHint: 'Arrastre archivos EXE / DLL para ejecutar aplicaciones o inspeccionar recursos',
   rightClickHint: 'Clic derecho en el escritorio para acciones',
+  lookIn: 'Buscar en:',
+  saveIn: 'Guardar en:',
+  fileName: 'Nombre de archivo:',
+  filesOfType: 'Tipo de archivos:',
+  save: 'Guardar',
+  importFromPC: 'Importar desde el PC...',
+  newFolderPrompt: 'Nombre de la nueva carpeta:',
+  empty: '(vac\u00edo)',
 };
 
 const ja: UiStrings = {
@@ -375,6 +416,14 @@ const ja: UiStrings = {
   folderEmpty: '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u30fc\u306f\u7a7a\u3067\u3059',
   dropHint: 'EXE / DLL \u30d5\u30a1\u30a4\u30eb\u3092\u30c9\u30ed\u30c3\u30d7\u3057\u3066\u30a2\u30d7\u30ea\u3092\u5b9f\u884c\u307e\u305f\u306f\u30ea\u30bd\u30fc\u30b9\u3092\u8868\u793a',
   rightClickHint: '\u53f3\u30af\u30ea\u30c3\u30af\u3067\u64cd\u4f5c\u30e1\u30cb\u30e5\u30fc\u3092\u8868\u793a',
+  lookIn: '\u30d5\u30a1\u30a4\u30eb\u306e\u5834\u6240:',
+  saveIn: '\u4fdd\u5b58\u3059\u308b\u5834\u6240:',
+  fileName: '\u30d5\u30a1\u30a4\u30eb\u540d:',
+  filesOfType: '\u30d5\u30a1\u30a4\u30eb\u306e\u7a2e\u985e:',
+  save: '\u4fdd\u5b58',
+  importFromPC: 'PC\u304b\u3089\u30a4\u30f3\u30dd\u30fc\u30c8...',
+  newFolderPrompt: '\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0\u540d:',
+  empty: '(\u7a7a)',
 };
 
 const zhCN: UiStrings = {
@@ -437,6 +486,14 @@ const zhCN: UiStrings = {
   folderEmpty: '\u6b64\u6587\u4ef6\u5939\u4e3a\u7a7a',
   dropHint: '\u62d6\u653e EXE / DLL \u6587\u4ef6\u4ee5\u8fd0\u884c\u5e94\u7528\u6216\u67e5\u770b\u8d44\u6e90',
   rightClickHint: '\u53f3\u952e\u5355\u51fb\u684c\u9762\u4ee5\u6267\u884c\u64cd\u4f5c',
+  lookIn: '\u67e5\u627e\u8303\u56f4:',
+  saveIn: '\u4fdd\u5b58\u4f4d\u7f6e:',
+  fileName: '\u6587\u4ef6\u540d:',
+  filesOfType: '\u6587\u4ef6\u7c7b\u578b:',
+  save: '\u4fdd\u5b58',
+  importFromPC: '\u4ece\u7535\u8111\u5bfc\u5165...',
+  newFolderPrompt: '\u65b0\u5efa\u6587\u4ef6\u5939\u540d\u79f0:',
+  empty: '(\u7a7a)',
 };
 
 const ptBR: UiStrings = {
@@ -499,6 +556,14 @@ const ptBR: UiStrings = {
   folderEmpty: 'Esta pasta est\u00e1 vazia',
   dropHint: 'Solte arquivos EXE / DLL para executar aplicativos ou inspecionar recursos',
   rightClickHint: 'Clique com o bot\u00e3o direito na \u00e1rea de trabalho para a\u00e7\u00f5es',
+  lookIn: 'Examinar:',
+  saveIn: 'Salvar em:',
+  fileName: 'Nome do arquivo:',
+  filesOfType: 'Tipo de arquivo:',
+  save: 'Salvar',
+  importFromPC: 'Importar do PC...',
+  newFolderPrompt: 'Nome da nova pasta:',
+  empty: '(vazio)',
 };
 
 const it: UiStrings = {
@@ -561,6 +626,14 @@ const it: UiStrings = {
   folderEmpty: 'Questa cartella \u00e8 vuota',
   dropHint: 'Trascinare file EXE / DLL per eseguire applicazioni o visualizzare risorse',
   rightClickHint: 'Clic destro sul desktop per le azioni',
+  lookIn: 'Cerca in:',
+  saveIn: 'Salva in:',
+  fileName: 'Nome file:',
+  filesOfType: 'Tipo file:',
+  save: 'Salva',
+  importFromPC: 'Importa dal PC...',
+  newFolderPrompt: 'Nome della nuova cartella:',
+  empty: '(vuoto)',
 };
 
 const pl: UiStrings = {
@@ -623,6 +696,14 @@ const pl: UiStrings = {
   folderEmpty: 'Ten folder jest pusty',
   dropHint: 'Upu\u015b\u0107 pliki EXE / DLL, aby uruchomi\u0107 aplikacje lub przegl\u0105da\u0107 zasoby',
   rightClickHint: 'Kliknij prawym przyciskiem na pulpicie, aby wy\u015bwietli\u0107 akcje',
+  lookIn: 'Szukaj w:',
+  saveIn: 'Zapisz w:',
+  fileName: 'Nazwa pliku:',
+  filesOfType: 'Typ plik\u00f3w:',
+  save: 'Zapisz',
+  importFromPC: 'Importuj z PC...',
+  newFolderPrompt: 'Nazwa nowego folderu:',
+  empty: '(pusty)',
 };
 
 const ko: UiStrings = {
@@ -685,6 +766,14 @@ const ko: UiStrings = {
   folderEmpty: '\uc774 \ud3f4\ub354\ub294 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4',
   dropHint: 'EXE / DLL \ud30c\uc77c\uc744 \ub4dc\ub86d\ud558\uc5ec \uc571\uc744 \uc2e4\ud589\ud558\uac70\ub098 \ub9ac\uc18c\uc2a4\ub97c \ud655\uc778\ud558\uc138\uc694',
   rightClickHint: '\ubc14\ud0d5 \ud654\uba74\uc744 \ub9c8\uc6b0\uc2a4 \uc624\ub978\ucabd \ubc84\ud2bc\uc73c\ub85c \ud074\ub9ad\ud558\uc5ec \uc791\uc5c5 \uc218\ud589',
+  lookIn: '\ucc3e\ub294 \uc704\uce58:',
+  saveIn: '\uc800\uc7a5 \uc704\uce58:',
+  fileName: '\ud30c\uc77c \uc774\ub984:',
+  filesOfType: '\ud30c\uc77c \ud615\uc2dd:',
+  save: '\uc800\uc7a5',
+  importFromPC: 'PC\uc5d0\uc11c \uac00\uc838\uc624\uae30...',
+  newFolderPrompt: '\uc0c8 \ud3f4\ub354 \uc774\ub984:',
+  empty: '(\ube44\uc5b4 \uc788\uc74c)',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

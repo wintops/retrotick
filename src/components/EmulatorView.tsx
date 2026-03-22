@@ -553,6 +553,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // Populate virtual filesystem with desktop files (for all app types)
       getAllFiles().then(files => {
         emu.fs.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
+        // Pre-populate data cache so file reads don't need another IndexedDB round-trip
+        const cache = (emu.fs as any).virtualFileCache as Map<string, ArrayBuffer> | undefined;
+        if (cache) {
+          for (const f of files) cache.set(f.name.toUpperCase(), f.data);
+        }
       });
 
       // Listen for window changes from emulator
