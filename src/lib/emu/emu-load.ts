@@ -958,6 +958,11 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.dosAudio.onSBIRQ = () => {
     if (!emu._pendingHwInts.includes(0x0F)) emu._pendingHwInts.push(0x0F);
   };
+  // Wire GUS IRQ (IRQ 5 = INT 0x0D)
+  emu.dosAudio.onGUSIRQ = () => {
+    if (!emu._pendingHwInts.includes(0x0D)) emu._pendingHwInts.push(0x0D);
+  };
+  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

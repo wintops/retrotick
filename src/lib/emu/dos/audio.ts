@@ -10,12 +10,14 @@ import { OPL2 } from './opl2';
 import { DMAController } from './dma';
 import { SoundBlasterDSP } from './soundblaster';
 import { PCSpeaker } from './pc-speaker';
+import { GUS } from './gus';
 
 // Re-export component classes for external consumers
 export { OPL2 } from './opl2';
 export { DMAController } from './dma';
 export { SoundBlasterDSP, SB_IRQ } from './soundblaster';
 export { PCSpeaker } from './pc-speaker';
+export { GUS } from './gus';
 
 export class DosAudio {
   private opl2: OPL2;
@@ -35,6 +37,10 @@ export class DosAudio {
   writeMemory: (addr: number, val: number) => void = () => {};
   /** Callback to queue a hardware interrupt (set by emu-load). */
   onSBIRQ: () => void = () => {};
+  /** Callback to queue GUS IRQ (IRQ 5 = INT 0x0D, set by emu-load). */
+  onGUSIRQ: () => void = () => {};
+
+  readonly gus = new GUS();
 
   constructor() {
     this.opl2 = new OPL2(44100); // will be updated when AudioContext is created
@@ -52,6 +58,9 @@ export class DosAudio {
     // Give SB DSP access to DMA and memory for debugging
     this.sbDsp.dma = this.dma;
     this.sbDsp.readMemFn = (addr: number) => this.readMemory(addr);
+    // Wire GUS
+    this.gus.onIRQ = () => this.onGUSIRQ();
+    this.gus.setDma(this.dma);
   }
 
   /** Initialize audio (must be called from user gesture). */
@@ -165,6 +174,7 @@ if (!globalThis._oplRegistered) {
           const tmpR = new Float32Array(count);
           this.opl2.generateSamples(tmpL, tmpR, count);
           this.mixPCMStereo(tmpL, tmpR, count);
+          this.gus.renderSamples(tmpL, tmpR, count);
           for (let i = 0; i < count; i++) {
             const idx = ((wp + i) % RING_SIZE) * 2;
             this.sharedBuf![idx] = tmpL[i];
@@ -188,6 +198,7 @@ if (!globalThis._oplRegistered) {
           const tmpR = new Float32Array(samplesToGen);
           this.opl2.generateSamples(tmpL, tmpR, samplesToGen);
           this.mixPCMStereo(tmpL, tmpR, samplesToGen);
+          this.gus.renderSamples(tmpL, tmpR, samplesToGen);
           this.workletNode.port.postMessage({
             samplesL: Array.from(tmpL),
             samplesR: Array.from(tmpR),
@@ -232,6 +243,11 @@ if (!globalThis._oplRegistered) {
     if (port === 0x81) return this.dma.page[2];
     if (port === 0x82) return this.dma.page[3];
 
+    // GUS ports (base 0x240): 0x240-0x24F and 0x340-0x34F
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      return this.gus.portRead(port);
+    }
+
     return -1; // Not an audio port
   }
 
@@ -269,6 +285,12 @@ if (!globalThis._oplRegistered) {
     if (port === 0x81) { this.dma.page[2] = value; return true; }
     if (port === 0x82) { this.dma.page[3] = value; return true; }
 
+    // GUS ports (base 0x240): 0x240-0x24F and 0x340-0x34F
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      this.gus.portWrite(port, value);
+      return true;
+    }
+
     return false; // Not an audio port
   }
 
@@ -282,6 +304,7 @@ if (!globalThis._oplRegistered) {
       this.onSBIRQ();
     }
     this.opl2.tickTimers();
+    this.gus.tickTimers();
   }
 
   /** Mix SB PCM samples into stereo output buffers (additive, resampled, centered). */
