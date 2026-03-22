@@ -90,15 +90,11 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       // If there was a previously mapped page, save it back first
       const prevAddr = emu._emsMapping[physPage];
       if (prevAddr >= 0) {
-        for (let i = 0; i < EMS_PAGE_SIZE; i++) {
-          cpu.mem.writeU8(prevAddr + i, cpu.mem.readU8(dstAddr + i));
-        }
+        cpu.mem.copyBlock(prevAddr, dstAddr, EMS_PAGE_SIZE);
       }
 
       // Load new page into frame
-      for (let i = 0; i < EMS_PAGE_SIZE; i++) {
-        cpu.mem.writeU8(dstAddr + i, cpu.mem.readU8(srcAddr + i));
-      }
+      cpu.mem.copyBlock(dstAddr, srcAddr, EMS_PAGE_SIZE);
       emu._emsMapping[physPage] = srcAddr;
 
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000; // AH=0
@@ -132,19 +128,13 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       // Save back currently mapped pages, then restore saved mapping
       for (let p = 0; p < 4; p++) {
         const dstAddr = EMS_PAGE_FRAME_SEG * 16 + p * EMS_PAGE_SIZE;
-        // Save current page frame content back to current mapping's storage
         const curAddr = emu._emsMapping[p];
         if (curAddr >= 0) {
-          for (let i = 0; i < EMS_PAGE_SIZE; i++) {
-            cpu.mem.writeU8(curAddr + i, cpu.mem.readU8(dstAddr + i));
-          }
+          cpu.mem.copyBlock(curAddr, dstAddr, EMS_PAGE_SIZE);
         }
-        // Restore saved mapping's data to page frame
         const savedAddr = saved[p];
         if (savedAddr >= 0) {
-          for (let i = 0; i < EMS_PAGE_SIZE; i++) {
-            cpu.mem.writeU8(dstAddr + i, cpu.mem.readU8(savedAddr + i));
-          }
+          cpu.mem.copyBlock(dstAddr, savedAddr, EMS_PAGE_SIZE);
         }
         emu._emsMapping[p] = savedAddr;
       }
@@ -217,13 +207,9 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           const dstAddr = EMS_PAGE_FRAME_SEG * 16 + physPage * EMS_PAGE_SIZE;
           const prevAddr = emu._emsMapping[physPage];
           if (prevAddr >= 0) {
-            for (let j = 0; j < EMS_PAGE_SIZE; j++) {
-              cpu.mem.writeU8(prevAddr + j, cpu.mem.readU8(dstAddr + j));
-            }
+            cpu.mem.copyBlock(prevAddr, dstAddr, EMS_PAGE_SIZE);
           }
-          for (let j = 0; j < EMS_PAGE_SIZE; j++) {
-            cpu.mem.writeU8(dstAddr + j, cpu.mem.readU8(srcAddr + j));
-          }
+          cpu.mem.copyBlock(dstAddr, srcAddr, EMS_PAGE_SIZE);
           emu._emsMapping[physPage] = srcAddr;
         }
       }
