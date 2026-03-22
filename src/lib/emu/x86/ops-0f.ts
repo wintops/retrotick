@@ -103,6 +103,52 @@ export function exec0F(
       break;
     }
 
+    // 0F 00 — SLDT/STR/LLDT/LTR/VERR/VERW
+    case 0x00: {
+      const modrm = cpu.mem.readU8(cpu.eip);
+      const reg = (modrm >> 3) & 7;
+      switch (reg) {
+        case 0: { // SLDT r/m16
+          const d = cpu.decodeModRM(16);
+          cpu.writeModRM(d, cpu.emu?._ldtr ?? 0, 16);
+          break;
+        }
+        case 1: { // STR r/m16
+          const d = cpu.decodeModRM(16);
+          cpu.writeModRM(d, cpu.emu?._tr ?? 0, 16);
+          break;
+        }
+        case 2: { // LLDT r/m16
+          const d = cpu.decodeModRM(16);
+          if (cpu.emu) cpu.emu._ldtr = d.val & 0xFFFF;
+          break;
+        }
+        case 3: { // LTR r/m16
+          const d = cpu.decodeModRM(16);
+          if (cpu.emu) cpu.emu._tr = d.val & 0xFFFF;
+          break;
+        }
+        case 4: { // VERR r/m16 — set ZF if segment is readable
+          const d = cpu.decodeModRM(16);
+          // In our emulator, all segments are accessible — set ZF
+          cpu.setFlags(cpu.getFlags() | ZF);
+          break;
+        }
+        case 5: { // VERW r/m16 — set ZF if segment is writable
+          const d = cpu.decodeModRM(16);
+          // In our emulator, all segments are writable — set ZF
+          cpu.setFlags(cpu.getFlags() | ZF);
+          break;
+        }
+        default: {
+          const d = cpu.decodeModRM(16);
+          console.warn(`Unimplemented 0F 00 /${reg} at EIP=0x${(cpu.eip - 2).toString(16)}`);
+          break;
+        }
+      }
+      break;
+    }
+
     // 0F 01 — privileged/system instructions (SGDT, SIDT, LGDT, LIDT, SMSW, LMSW)
     case 0x01: {
       const modrm = cpu.mem.readU8(cpu.eip);
