@@ -1,6 +1,6 @@
 # RetroTick
 
-<a lang="zh-Hans" href="./README.zh-Hans.md">简体中文</a> | <a lang="ja" href="./README.ja.md">日本語</a>
+<a lang="fr" href="./README.fr.md">Français</a> | <a lang="zh-Hans" href="./README.zh-Hans.md">简体中文</a> | <a lang="ja" href="./README.ja.md">日本語</a>
 
 **Run classic Windows and DOS executables directly in your browser.** No OS emulation. Just an x86 CPU emulator with reimplemented Windows/DOS APIs. Drag, drop, and play.
 
@@ -14,8 +14,8 @@ RetroTick is an x86 CPU emulator and Windows/DOS API compatibility layer built f
 
 | Category | Programs |
 |----------|----------|
-| Games | FreeCell, Solitaire, Minesweeper, SkiFree, Prince of Persia (DOS), Chinese Paladin (DOS) |
-| Programs | Calculator, Clock, Command Prompt, Task Manager, Sound Recorder, QBasic, GLX Gears |
+| Games | FreeCell, Solitaire, Minesweeper, SkiFree, Prince of Persia (DOS), Chinese Paladin (DOS), Moktar (DOS) |
+| Programs | Calculator, Clock, Command Prompt, Task Manager, Sound Recorder, Notepad (Win 3.1x), QBasic, GLX Gears |
 | Screen Savers | 3D Maze (OpenGL), 3D Pipes (OpenGL), Mystify, Starfield, Bezier, Flower Box, Marquee |
 
 Most programs have rendering glitches or missing features. This is a work in progress.
@@ -24,11 +24,14 @@ Most programs have rendering glitches or missing features. This is a work in pro
 
 - **x86 CPU emulator** — x87 FPU, lazy flag evaluation, 32-bit protected mode (flat model) and 16-bit real mode with segment:offset addressing, IVT, and PSP
 - **PE/NE/MZ binary loader** — Parses headers, maps sections, resolves imports, extracts resources
-- **Win32 API compatibility layer** — kernel32, user32, gdi32, advapi32, comctl32, comdlg32, shell32, msvcrt, opengl32, glu32, ddraw, ole32, oleaut32, winmm, winspool, ws2_32, version, psapi, shlwapi, iphlpapi, msacm32, and more
+- **Win32 API compatibility layer** — kernel32, user32, gdi32, advapi32, comctl32, comdlg32, shell32, msvcrt, opengl32, glu32, ddraw, dsound, ole32, oleaut32, winmm, winspool, ws2_32, version, psapi, shlwapi, iphlpapi, msacm32, and more
 - **Win16 API compatibility layer** — KERNEL, USER, GDI, SHELL, COMMDLG, COMMCTRL, MMSYSTEM, KEYBOARD, DDEML, LZEXPAND, SOUND, VER, SCONFIG, WIN87EM
-- **DOS interrupt emulation** — INT 21h services for MZ executables
+- **DOS interrupt emulation** — INT 21h file/process services, INT 10h video BIOS, INT 08h/1Ch timer, INT 09h/16h keyboard, INT 1Ah real-time clock, INT 15h system services, INT 33h mouse, INT 2Fh multiplex, EMS (INT 67h) and XMS extended memory
+- **VGA emulation** — 14 video modes (text, CGA, EGA, VGA, Mode 13h, Mode X), full CRTC/Sequencer/GC/ATC register emulation, 256-color palette, planar memory
+- **Sound Blaster / OPL2 audio** — Sound Blaster 2.0 DSP with 8-bit DMA playback, OPL2 (YM3812) 9-channel FM synthesis, PC Speaker square wave, Intel 8237A DMA controller, AudioWorklet real-time output
 - **OpenGL 1.x → WebGL2 translation** — Full immediate-mode pipeline mapped to WebGL2, powering 3D screen savers
-- **Window manager** — Multiple windows, z-order, focus, taskbar, message dispatch, common dialogs
+- **DirectDraw / DirectSound** — COM-based surface and audio buffer management for DOS-era Windows games
+- **Window manager** — Multiple windows, z-order, focus, MDI (Multiple Document Interface), taskbar, message dispatch, common dialogs
 - **GDI rendering engine** — Bitmaps, brushes, pens, regions, text, DIB-to-Canvas mapping
 - **Virtual filesystem** — IndexedDB-backed persistent storage for uploaded files
 
