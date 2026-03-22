@@ -63,7 +63,7 @@ export class CPU {
   ds = 0; // data segment selector
   es = 0; // extra segment selector
   ss = 0; // stack segment selector
-  segBases = new Map<number, number>(); // selector → linear base address
+  segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
 
@@ -89,7 +89,14 @@ export class CPU {
     if (this.realMode) return (sel * 16) >>> 0;
     const cached = this.segBases.get(sel);
     if (cached !== undefined) return cached;
-    // Look up in GDT if available
+    // LDT-style selector: strip RPL/TI bits (low 3 bits = __AHSHIFT)
+    // to find the canonical selector assigned by the NE loader
+    const canonical = sel >>> 3;
+    if (canonical > 0) {
+      const cbase = this.segBases.get(canonical);
+      if (cbase !== undefined) return cbase;
+    }
+    // Look up in GDT if available (for protected mode / DOS extender)
     const base = this.loadGdtDescriptorBase(sel);
     if (base !== undefined) {
       this.segBases.set(sel, base);
@@ -101,13 +108,12 @@ export class CPU {
   /** Read a GDT descriptor and return the base address */
   loadGdtDescriptorBase(sel: number): number | undefined {
     if (!this.emu || !this.emu._gdtBase) return undefined;
-    const index = (sel & 0xFFF8) >>> 3; // selector index (ignore RPL and TI)
-    if (index === 0) return 0; // null selector
+    const index = (sel & 0xFFF8) >>> 3;
+    if (index === 0) return 0;
     const descAddr = this.emu._gdtBase + index * 8;
     if (index * 8 + 7 > this.emu._gdtLimit) return undefined;
     const lo = this.mem.readU32(descAddr);
     const hi = this.mem.readU32(descAddr + 4);
-    // Base: bits 31:24 of hi, bits 7:0 of hi, bits 31:16 of lo
     const baseLo = (lo >>> 16) & 0xFFFF;
     const baseMid = hi & 0xFF;
     const baseHi = (hi >>> 24) & 0xFF;
@@ -122,7 +128,6 @@ export class CPU {
     const descAddr = this.emu._gdtBase + index * 8;
     if (index * 8 + 7 > this.emu._gdtLimit) return false;
     const hi = this.mem.readU32(descAddr + 4);
-    // D/B bit is bit 22 of hi dword
     return (hi & (1 << 22)) !== 0;
   }
 

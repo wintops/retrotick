@@ -52,6 +52,16 @@ npm run dev
 npm run build     # 生产构建 → dist/
 ```
 
+## 测试
+
+无头测试使用模拟 Canvas 在 Node.js 中运行可执行文件：
+
+```bash
+timeout 2 npx tsx tests/test-<name>.mjs
+```
+
+详见 [`tests/`](./tests/)。
+
 ## 参与贡献
 
 欢迎 PR！主要目标是让更多可执行文件正确运行，通常是实现缺失的 Win32/Win16 API 桩函数、修复渲染问题、提升 GDI 保真度。详见 `CLAUDE.md` 中的分步工作流程。

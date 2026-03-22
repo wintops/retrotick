@@ -53,7 +53,6 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
     const [hDlg, nIDDlgItem] = emu.readPascalArgs16([2, 2]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     const childHwnd = dlgWnd?.children?.get(nIDDlgItem) ?? 0;
-    // console.log(`[WIN16] GetDlgItem(0x${hDlg.toString(16)}, ${nIDDlgItem}) → 0x${childHwnd.toString(16)}`);
     return childHwnd;
   }, 91);
 

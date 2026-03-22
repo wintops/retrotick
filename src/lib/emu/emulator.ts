@@ -88,6 +88,7 @@ export interface ControlOverlay {
   listColumns?: ListViewColumn[];
   listItems?: ListViewItem[];
   statusTexts?: string[];
+  statusParts?: number[];
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
   bgColor?: string;
@@ -101,6 +102,8 @@ export interface ControlOverlay {
   isMdiMinimized?: boolean;
   /** Children overlays nested inside this MDI child window */
   mdiChildren?: ControlOverlay[];
+  /** MDICLIENT clip rect for MDI children (absolute canvas coords) */
+  mdiClientRect?: { x: number; y: number; w: number; h: number };
 }
 
 // Detect fullwidth characters (CJK, fullwidth forms, etc.) that occupy 2 console columns
@@ -498,6 +501,24 @@ export class Emulator {
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
+  // Diagnostic: ring buffer of last N thunk calls for crash debugging
+  _diagThunkRing: string[] = [];
+  _diagThunkIdx = 0;
+  _diagThunkSize = 64;
+  diagThunk(name: string) {
+    const sp = this.cpu.reg[4] & 0xFFFF;
+    this._diagThunkRing[this._diagThunkIdx % this._diagThunkSize] = `SP=${sp.toString(16)} ${name}`;
+    this._diagThunkIdx++;
+  }
+  diagThunkDump(): string {
+    const n = Math.min(this._diagThunkIdx, this._diagThunkSize);
+    const start = this._diagThunkIdx - n;
+    const lines: string[] = [];
+    for (let i = start; i < this._diagThunkIdx; i++) {
+      lines.push(`  [${i - start}] ${this._diagThunkRing[i % this._diagThunkSize]}`);
+    }
+    return lines.join('\n');
+  }
   exitedNormally = false;
   exitCode = 0;
   stopped = false;
@@ -634,8 +655,14 @@ export class Emulator {
   // Per-segment local heaps (selector → {ptr, end})
   segLocalHeaps = new Map<number, { ptr: number; end: number }>();
 
+  // Per-segment static data end offsets (selector → end of initialized data)
+  segStaticEnd = new Map<number, number>();
+
   // NE DLL resources (for LoadBitmap etc. to search across DLLs)
   neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
+
+  // NE DLL data segment selectors (for correct DS when calling DLL wndProcs)
+  neDllDataSegs = new Set<number>();
 
   // Virtual allocator
   virtualBase = 0;
@@ -976,6 +1003,16 @@ export class Emulator {
     this.heapPtr += aligned;
     for (let i = 0; i < aligned; i++) this.memory.writeU8(addr + i, 0);
     this.heapAllocSizes.set(addr, size);
+    // NE mode: register selectors so x86 code can use linear addr as far pointer (DX:AX)
+    if (this.isNE) {
+      const startSel = addr >>> 16;
+      const endSel = (addr + aligned - 1) >>> 16;
+      for (let sel = startSel; sel <= endSel; sel++) {
+        if (!this.cpu.segBases.has(sel)) {
+          this.cpu.segBases.set(sel, sel * 0x10000);
+        }
+      }
+    }
     return addr;
   }
 
@@ -1045,7 +1082,8 @@ export class Emulator {
     const off = raw & 0xFFFF;
     const seg = (raw >>> 16) & 0xFFFF;
     if (!seg) return off;
-    return (this.cpu.segBases.get(seg) ?? (seg * 16)) + off;
+    // Use cpu.segBase which handles LDT-style selectors (AHSHIFT)
+    return this.cpu.segBase(seg) + off;
   }
 
   /** Read a far pointer arg from the 16-bit stack and resolve to linear address */
@@ -1103,7 +1141,6 @@ export class Emulator {
     const onAvail = targetThread ? targetThread._onMessageAvailable : this._onMessageAvailable;
 
     if (message === 0x0113) { // WM_TIMER
-      console.log(`[POST] WM_TIMER hwnd=0x${hwnd.toString(16)} wParam=${wParam} lParam=0x${lParam.toString(16)} waiting=${this.waitingForMessage} qLen=${queue.length}`);
       if (queue.some(m => m.message === 0x0113 && m.hwnd === hwnd && m.wParam === wParam)) {
         return;
       }
@@ -1250,8 +1287,16 @@ export class Emulator {
         const childHwnd = parent.childList[i];
         const child = this.handles.get<WindowInfo>(childHwnd);
         if (!child || !child.visible) continue;
+        // CBS_DROPDOWN/CBS_DROPDOWNLIST combobox: when closed, only the edit
+        // portion (~20px) is visible; the full height includes the dropdown list.
+        let hitH = child.height;
+        const CBS_DROPDOWN = 0x0002, CBS_DROPDOWNLIST = 0x0003;
+        if (child.classInfo?.className?.toUpperCase() === 'COMBOBOX' &&
+            (child.style & 0xF) >= CBS_DROPDOWN) {
+          hitH = Math.min(hitH, 24); // edit portion height
+        }
         if (cx >= child.x && cy >= child.y &&
-            cx < child.x + child.width && cy < child.y + child.height) {
+            cx < child.x + child.width && cy < child.y + hitH) {
           return findChild(childHwnd, cx - child.x, cy - child.y);
         }
       }

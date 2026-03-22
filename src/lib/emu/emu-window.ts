@@ -134,9 +134,13 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
 
   const existing = emu.windowDCs.get(hwnd);
   if (existing && !needsTranslate && !hasDomCanvas) return existing;
-  // Free old DC for translated/domCanvas windows to avoid stale state
+  // Free old DC for translated/domCanvas windows to avoid stale state.
+  // Only call releaseChildDC (ctx.restore) if the DC is still in childDCSet —
+  // if EndPaint already restored it, the save stack is already balanced.
   if (existing && (needsTranslate || hasDomCanvas)) {
-    releaseChildDC(emu, existing);
+    if (childDCSet.has(existing)) {
+      releaseChildDC(emu, existing);
+    }
     emu.handles.free(existing);
     emu.windowDCs.delete(hwnd);
   }
@@ -181,11 +185,27 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
   // For windows sharing the main canvas, apply coordinate offset and clip
   if (needsTranslate && wnd) {
     const origin = isPopup ? { x: wnd.x || 0, y: wnd.y || 0 } : getWindowOrigin(emu, hwnd);
+    // CCS toolbar: the x86 COMMCTRL code computes button positions based on
+    // its internally-desired height (e.g. 47px), but the frame forces the
+    // toolbar to a smaller height (e.g. 27px). The button rects are centered
+    // for the internal height, so we shift the DC origin down to compensate.
+    let ccsYOffset = 0;
+    const internalH = (wnd as any)._ccsInternalHeight;
+    if (internalH && internalH > wnd.height) {
+      ccsYOffset = Math.round((internalH - wnd.height) / 2);
+    }
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, origin.x, origin.y);
+    ctx.setTransform(1, 0, 0, 1, origin.x, origin.y + ccsYOffset);
     ctx.beginPath();
-    ctx.rect(0, 0, wnd.width, wnd.height);
+    ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
     ctx.clip();
+    // Fill CCS toolbar background — the DC is shifted down so the top strip
+    // would otherwise show the canvas background color instead of BTNFACE.
+    if (ccsYOffset > 0) {
+      const bf = SYS_COLORS[COLOR_BTNFACE];
+      ctx.fillStyle = `rgb(${bf & 0xFF},${(bf >> 8) & 0xFF},${(bf >> 16) & 0xFF})`;
+      ctx.fillRect(0, -ccsYOffset, wnd.width, wnd.height);
+    }
     childDCSet.add(hdc);
   }
   return hdc;
@@ -273,7 +293,6 @@ export function endPaint(emu: Emulator, hwnd: number, _hdc: number): void {
     if (dc) dc.ctx.restore();
     clipChildrenDCSet.delete(hdc);
   }
-
   // Restore canvas state for child windows
   if (hdc) releaseChildDC(emu, hdc);
 
@@ -296,7 +315,17 @@ export function endPaint(emu: Emulator, hwnd: number, _hdc: number): void {
 export function releaseChildDC(emu: Emulator, hdc: number): void {
   if (childDCSet.has(hdc)) {
     const dc = getDC(emu, hdc);
-    if (dc) dc.ctx.restore();
+    if (dc) {
+      // Like Wine's reset_dc_state: pop ALL saves made via SaveDC on this DC,
+      // then pop the one from getWindowDC (translate+clip).
+      // The x86 code may call SaveDC without matching RestoreDC — Windows
+      // automatically discards all saved states when the DC is released.
+      const extraSaves = dc.saveLevel || 0;
+      for (let i = 0; i < extraSaves; i++) dc.ctx.restore();
+      dc.saveLevel = 0;
+      // Pop the getWindowDC's own save (translate + clip)
+      dc.ctx.restore();
+    }
     childDCSet.delete(hdc);
   }
 }

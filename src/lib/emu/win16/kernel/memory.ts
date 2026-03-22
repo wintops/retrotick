@@ -287,11 +287,14 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('LocalInit', 6, () => {
     const [segment, start, end] = emu.readPascalArgs16([2, 2, 2]);
     const base = emu.cpu.segBases.get(segment) ?? (segment * 16);
+    // When start=0, the heap must begin AFTER initialized static data in the segment
+    // to avoid clobbering global variables loaded from the NE file.
+    const staticEnd = emu.segStaticEnd.get(segment) || 0;
+    const effectiveStart = (start === 0 && staticEnd > 0) ? staticEnd : start;
     // Reserve 4 bytes at heap start for the heap header — real Windows local heap
     // stores management info there, so the first allocation offset is never 0
     // (callers treat offset 0 as NULL/failure).
-    const heapStart = start + 4;
-    console.log(`[KERNEL16] LocalInit(seg=0x${segment.toString(16)}, start=0x${start.toString(16)}, end=0x${end.toString(16)}) base=0x${base.toString(16)}`);
+    const heapStart = Math.max(effectiveStart, 4) + 4;
     emu.segLocalHeaps.set(segment, { ptr: base + heapStart, end: base + end });
     return 1;
   }, 4);
@@ -310,8 +313,14 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('LocalReAlloc', 6, () => {
     const [handle, bytes, flags] = emu.readPascalArgs16([2, 2, 2]);
     if (!handle) return 0;
+    const LMEM_MODIFY = 0x80;
+    if (flags & LMEM_MODIFY) {
+      // LMEM_MODIFY: only change flags, don't reallocate
+      console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) MODIFY only`);
+      return handle;
+    }
     const oldSize = state.localSizes.get(handle) || 0;
-    if (bytes <= oldSize) {
+    if (bytes <= oldSize && oldSize > 0) {
       console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) shrink in-place`);
       state.localSizes.set(handle, bytes);
       return handle;
@@ -322,14 +331,19 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
     const oldAddr = dsBase + handle;
     const newAddr = dsBase + newHandle;
-    const copyLen = Math.min(oldSize, bytes);
+    // If oldSize is unknown (handle not tracked), copy the full requested size
+    // from the old location to preserve any pre-existing data (e.g. static/DLL data)
+    const copyLen = oldSize > 0 ? Math.min(oldSize, bytes) : bytes;
     for (let i = 0; i < copyLen; i++) {
       emu.memory.writeU8(newAddr + i, emu.memory.readU8(oldAddr + i));
     }
-    if ((flags & GMEM_ZEROINIT) && bytes > oldSize) {
+    if ((flags & GMEM_ZEROINIT) && bytes > oldSize && oldSize > 0) {
       for (let i = oldSize; i < bytes; i++) emu.memory.writeU8(newAddr + i, 0);
     }
     state.localSizes.set(newHandle, bytes);
+    // Track relocation so LocalLock(oldHandle) returns the new address
+    if (!state.localRelocations) state.localRelocations = new Map();
+    state.localRelocations.set(handle, newHandle);
     console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) → 0x${newHandle.toString(16)}`);
     return newHandle;
   }, 6);
@@ -345,7 +359,15 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
 
   // --- Ordinal 8: LocalLock(handle) — 2 bytes (word) ---
   kernel.register('LocalLock', 2, () => {
-    const handle = emu.readArg16(0);
+    let handle = emu.readArg16(0);
+    // Follow relocation chain (LocalReAlloc may have moved the block)
+    if (state.localRelocations) {
+      let steps = 0;
+      while (state.localRelocations.has(handle) && steps < 20) {
+        handle = state.localRelocations.get(handle)!;
+        steps++;
+      }
+    }
     state.localLockCounts.set(handle, (state.localLockCounts.get(handle) || 0) + 1);
     return handle;
   }, 8);

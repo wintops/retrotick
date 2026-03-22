@@ -86,7 +86,7 @@ export function renderControlOverlay(
     top: `${ctrl.y}px`,
     width: `${ctrl.width}px`,
     height: `${ctrl.height}px`,
-    zIndex: 10,
+    zIndex: 100, // above MDI children (z-index 15+) so toolbar/statusbar aren't covered
   };
 
   const postCommand = () => {
@@ -522,15 +522,55 @@ export function renderControlOverlay(
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (!wnd) return;
       wnd.cbSelectedIndex = idx;
-      const parent = wnd.parent || emu.mainWindow || 0;
+
+      // Check if this combobox is inside a toolbar — if so, try to simulate
+      // a drivebar click instead of WM_COMMAND (WINFILE ignores CBN_* notifications
+      // for drive changes; it only reacts to drivebar button clicks).
+      const parentWnd = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
+      const pcn = parentWnd?.classInfo?.className?.toUpperCase();
+      if (pcn === 'TOOLBARWINDOW') {
+        // Find the WFS_Drives (drivebar) sibling window
+        const frameHwnd = parentWnd?.parent || emu.mainWindow || 0;
+        const frameWnd = emu.handles.get<WindowInfo>(frameHwnd);
+        if (frameWnd?.childList) {
+          for (const childHwnd of frameWnd.childList) {
+            const child = emu.handles.get<WindowInfo>(childHwnd);
+            if (child?.classInfo?.className === 'WFS_Drives' && child.wndProc) {
+              // Simulate drivebar click at the selected drive's button position.
+              // Drive buttons are laid out horizontally; estimate position from index.
+              // Each button is approximately 35px wide (16px icon + letter + padding).
+              const BUTTON_WIDTH = 35;
+              const clickX = idx * BUTTON_WIDTH + Math.round(BUTTON_WIDTH / 2);
+              const clickY = 5;
+              const WM_LBUTTONDOWN = 0x0201;
+              const WM_LBUTTONUP = 0x0202;
+              const lParam = ((clickY << 16) | clickX) >>> 0;
+              emu.postMessage(childHwnd, WM_LBUTTONDOWN, 1, lParam);
+              emu.postMessage(childHwnd, WM_LBUTTONUP, 0, lParam);
+              return;
+            }
+          }
+        }
+      }
+
+      // Generic fallback: post WM_COMMAND to parent (walk past CCS containers)
+      let parent = wnd.parent || emu.mainWindow || 0;
+      if (pcn === 'TOOLBARWINDOW' || pcn === 'MSCTLS_STATUSBAR') {
+        parent = parentWnd?.parent || emu.mainWindow || 0;
+      }
       if (parent) {
         const WM_COMMAND = 0x0111;
         const CBN_SELCHANGE = 1;
-        const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
-        emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+        if (emu.ne) {
+          const lParam16 = ((CBN_SELCHANGE << 16) | (ctrl.childHwnd & 0xFFFF)) >>> 0;
+          emu.postMessage(parent, WM_COMMAND, ctrl.controlId & 0xFFFF, lParam16);
+        } else {
+          const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
+          emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+        }
       }
-      const parentWnd = emu.handles.get<WindowInfo>(parent);
-      if (parentWnd) parentWnd.needsPaint = true;
+      const pWnd = emu.handles.get<WindowInfo>(parent);
+      if (pWnd) pWnd.needsPaint = true;
     };
 
     // ComboBox display height is always one row; the full height is for the dropdown
@@ -970,7 +1010,8 @@ export function renderControlOverlay(
     );
   }
 
-  if (effectiveClass(ctrl) === 'MSCTLS_STATUSBAR32') {
+  const ec = effectiveClass(ctrl);
+  if (ec === 'MSCTLS_STATUSBAR32' || ec === 'MSCTLS_STATUSBAR') {
     const texts = ctrl.statusTexts || [];
     const SBARS_SIZEGRIP = 0x0100;
     const hasSizeGrip = !!(ctrl.style & SBARS_SIZEGRIP);
@@ -981,14 +1022,26 @@ export function renderControlOverlay(
         font: '11px/1 "Tahoma", "MS Sans Serif", sans-serif',
         borderTop: '1px solid #FFF',
       }}>
-        {texts.map((t: string, i: number) => (
-          <div key={i} style={{
-            flex: i === 0 ? 1 : undefined, padding: '0 2px', margin: '0 1px',
-            border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
-            height: 'calc(100% - 2px)', display: 'flex', alignItems: 'center',
-            overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '11px',
-          }}>{t}</div>
-        ))}
+        {texts.map((t: string, i: number) => {
+          // statusParts contains absolute right-edge positions (like Wine).
+          // Value -1 means "extend to right edge". Compute width from positions.
+          const parts = ctrl.statusParts || [];
+          const rightEdge = (parts[i] != null && parts[i] !== -1) ? parts[i] : undefined;
+          const leftEdge = i === 0 ? 0 : (parts[i - 1] != null && parts[i - 1] !== -1 ? parts[i - 1] : undefined);
+          const w = (rightEdge != null && leftEdge != null) ? rightEdge - leftEdge : undefined;
+          return (
+            <div key={i} style={{
+              width: w != null ? `${w}px` : undefined,
+              flex: w == null ? 1 : undefined,
+              flexShrink: w != null ? 0 : undefined,
+              padding: '0 2px', margin: '0 1px',
+              border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
+              height: 'calc(100% - 2px)', display: 'flex', alignItems: 'center',
+              overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '11px',
+              boxSizing: 'border-box',
+            }}>{t}</div>
+          );
+        })}
         {hasSizeGrip && (
           <svg
             width="13" height="13" viewBox="0 0 13 13"

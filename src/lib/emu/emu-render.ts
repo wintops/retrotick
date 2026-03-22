@@ -57,7 +57,7 @@ export function notifyControlOverlays(emu: Emulator): void {
   }
 }
 
-const DOM_CLASSES = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MSCTLS_TRACKBAR32', 'MSCTLS_PROGRESS32', 'MSCTLS_HOTKEY32', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT', 'SYSTABCONTROL32', 'SYSLISTVIEW32', 'MSCTLS_STATUSBAR32', 'SYSTREEVIEW32'];
+const DOM_CLASSES = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MSCTLS_TRACKBAR32', 'MSCTLS_PROGRESS32', 'MSCTLS_HOTKEY32', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT', 'SYSTABCONTROL32', 'SYSLISTVIEW32', 'MSCTLS_STATUSBAR32', 'MSCTLS_STATUSBAR', 'SYSTREEVIEW32'];
 
 function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOverlay[] {
   const overlays: ControlOverlay[] = [];
@@ -101,6 +101,7 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
     if (child.listColumns) overlay.listColumns = child.listColumns;
     if (child.listItems) overlay.listItems = child.listItems;
     if (child.statusTexts) overlay.statusTexts = child.statusTexts;
+    if (child.statusParts) overlay.statusParts = child.statusParts;
     if (child.tabItems) overlay.tabItems = child.tabItems;
     if (child.tabSelectedIndex !== undefined) overlay.tabSelectedIndex = child.tabSelectedIndex;
 
@@ -114,6 +115,11 @@ function buildOverlays(emu: Emulator, allChildren: CollectedChild[]): ControlOve
       }
       if (child.maximized) overlay.isMdiMaximized = true;
       if (child.minimized) overlay.isMdiMinimized = true;
+      // Pass MDICLIENT clip rect so MDI children don't overlap toolbar/statusbar
+      // ox/oy already include mdiClient.x/y (set at collectChildren line 166)
+      if (mdiClient) {
+        overlay.mdiClientRect = { x: ox, y: oy, w: mdiClient.width, h: mdiClient.height };
+      }
       mdiChildMap.set(childHwnd, overlay);
       overlays.push(overlay);
     } else if (mdiParentHwnd) {
@@ -174,9 +180,18 @@ function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offset
     }
     if (!child.visible) continue;
     out.push({ hwnd: childHwnd, info: child, ox: offsetX, oy: offsetY, mdiParentHwnd });
-    // Recurse into child dialogs (e.g. tab pages) that have their own children
+    // Recurse into child's children (e.g. tab pages, toolbar controls)
     if (child.childList && child.childList.length > 0) {
-      collectChildren(emu, child, offsetX + child.x, offsetY + child.y, out, mdiParentHwnd);
+      let childOffY = offsetY + child.y;
+      // CCS toolbar: shift overlay children down to align with DC-painted buttons.
+      // The DC uses the full ccsYOffset to center the internal coordinate space,
+      // but overlay children only need a fraction because their stored positions
+      // were partially corrected by fixCcsPosition.
+      const internalH = (child as any)._ccsInternalHeight;
+      if (internalH && internalH > child.height) {
+        childOffY += Math.round((internalH - child.height) / 4);
+      }
+      collectChildren(emu, child, offsetX + child.x, childOffY, out, mdiParentHwnd);
     }
   }
 }
@@ -223,6 +238,13 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
+      // Safety net: pop any leaked ctx.save() from previous child paints.
+      // releaseChildDC uses dc.saveLevel to pop x86 SaveDC saves, but some
+      // saves may slip through (e.g. StretchBlt internal save/restore on the
+      // shared canvas). Popping stale saves prevents clip accumulation.
+      if (emu.canvasCtx) {
+        for (let i = 0; i < 20; i++) emu.canvasCtx.restore();
+      }
       if (emu.isNE) {
         emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win16 PASCAL)
       } else {
