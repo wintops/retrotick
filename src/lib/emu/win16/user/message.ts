@@ -773,6 +773,15 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               // CCS_TOP: dock to top of parent, full width
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
+              // Wine's CreateToolbar sends TB_SETBITMAPSIZE(16,16) before the
+              // toolbar processes WM_SIZE. Without this, the x86 COMMCTRL uses
+              // the full bitmap pixel height (multi-state rows) instead of a
+              // single button image height, producing an oversized toolbar.
+              const TB_SETBITMAPSIZE = 0x0420;
+              if (!(wnd as any)._tbBitmapSizeSet && wnd.wndProc) {
+                (wnd as any)._tbBitmapSizeSet = true;
+                emu.callWndProc16(wnd.wndProc, hWnd, TB_SETBITMAPSIZE, 0, (16 << 16) | 16);
+              }
             } else {
               // Statusbar: dock to bottom of parent, full width
               // Don't override height — let x86 code compute it
@@ -801,8 +810,9 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
             if (ucn === 'TOOLBARWINDOW') {
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
-              // Cap toolbar height: x86 COMMCTRL uses full bitmap height (55px)
-              // instead of one button-state row (~18px). Real Win3.1 toolbar = ~27px.
+              // Safety net: cap toolbar height if x86 COMMCTRL still computes an
+              // oversized value. With TB_SETBITMAPSIZE sent before WM_SIZE, this
+              // should no longer trigger for standard toolbar bitmaps.
               if (wnd.height > 30) wnd.height = 27;
             } else {
               // Statusbar: the x86 COMMCTRL computes height using GetWindowRect
