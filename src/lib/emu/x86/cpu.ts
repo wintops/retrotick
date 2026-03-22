@@ -87,6 +87,16 @@ export class CPU {
   fs = 0; // FS segment selector
   gs = 0; // GS segment selector
 
+  /** Load CS and update use32/_addrSize16 from GDT descriptor in protected mode */
+  loadCS(selector: number): void {
+    this.cs = selector;
+    if (!this.realMode) {
+      const is32 = this.loadGdtDescriptorIs32(selector);
+      this.use32 = is32;
+      this._addrSize16 = !is32;
+    }
+  }
+
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
     if (this.realMode) return (sel * 16) >>> 0;
@@ -167,7 +177,7 @@ export class CPU {
   }
 
   getFlags(): number {
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     return this.flagsCache;
   }
 
@@ -179,12 +189,12 @@ export class CPU {
 
   getFlag(bit: number): boolean {
     if (bit === DF) return !!(this.flagsCache & DF);
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     return !!(this.flagsCache & bit);
   }
 
   setFlag(bit: number, val: boolean): void {
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     if (val) this.flagsCache |= bit;
     else this.flagsCache &= ~bit;
   }
