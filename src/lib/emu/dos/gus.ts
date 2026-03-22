@@ -16,13 +16,15 @@ const WAVE_FRACT = 1 << WAVE_FRACT_BITS;
 const VOLUME_LEVELS = 4096;
 const VOLUME_INC_SCALAR = 512; // matches DOSBox — normalizes smallest increment (1/512)
 
-// Voice control bits
-const CTRL_STOPPED   = 0x01;
-const CTRL_16BIT     = 0x02;
-const CTRL_LOOP      = 0x04;
-const CTRL_BIDIR     = 0x08;
+// Voice control bits (must match DOSBox's CTRL enum in gus.h)
+const CTRL_RESET      = 0x01;
+const CTRL_STOPPED    = 0x02;
+const CTRL_DISABLED   = 0x03; // RESET | STOPPED
+const CTRL_16BIT      = 0x04;
+const CTRL_LOOP       = 0x08;
+const CTRL_BIDIR      = 0x10;
+const CTRL_IRQ        = 0x20;
 const CTRL_DECREASING = 0x40;
-const CTRL_IRQ       = 0x20;
 
 // Pre-compute volume scalars: 4096-entry log-to-linear table (matches DOSBox)
 // Index 4095 = 1.0 (max), divided by 1.002709201 at each step backwards to index 1.
@@ -38,11 +40,13 @@ const VOL_SCALARS = new Float32Array(VOLUME_LEVELS);
   VOL_SCALARS[0] = 0;
 }
 
-// Pre-compute pan scalars: 16-position constant-power panning
+// Pre-compute pan scalars: 16-position constant-power panning (matches DOSBox)
+// Center at position 7, asymmetric: left half divides by 7, right half by 8
 const PAN_LEFT = new Float32Array(16);
 const PAN_RIGHT = new Float32Array(16);
 for (let i = 0; i < 16; i++) {
-  const angle = (i / 15) * Math.PI / 2;
+  const norm = (i - 7.0) / (i < 7 ? 7 : 8);
+  const angle = (norm + 1) * Math.PI / 4;
   PAN_LEFT[i] = Math.cos(angle);
   PAN_RIGHT[i] = Math.sin(angle);
 }
@@ -393,9 +397,38 @@ export class GUS {
   /** Output sample rate (set from AudioContext.sampleRate during init) */
   outputRate = 44100;
 
-  /** Render mixed GUS audio into stereo buffers (additive) */
+  /** Read a sample from GUS RAM — matches DOSBox's GetSample exactly */
+  private getSample(v: GusVoice): number {
+    const pos = v.wave.pos;
+    const addr = (pos >> WAVE_FRACT_BITS) | 0;
+    const is16bit = !!(v.wave.state & CTRL_16BIT);
+
+    let sample: number;
+    if (is16bit) {
+      // 16-bit: non-linear GUS addressing (upper 2 bits + lower 17 bits shifted)
+      const upper = addr & 0xC0000;
+      const lower = addr & 0x1FFFF;
+      const i = (upper | (lower << 1)) & 0xFFFFF;
+      const lo = this.ram[i];
+      const hi = this.ram[(i + 1) & 0xFFFFF];
+      const w = (hi << 8) | lo;
+      sample = w > 32767 ? w - 65536 : w; // signed int16
+    } else {
+      // 8-bit: direct addressing, scale to 16-bit range (like DOSBox: int8 * 256)
+      const i = addr & 0xFFFFF;
+      const b = this.ram[i];
+      sample = (b > 127 ? b - 256 : b) * 256; // signed int8 → int16 range
+    }
+    return sample;
+  }
+
+  /** Render mixed GUS audio into stereo buffers (additive) — matches DOSBox */
   renderSamples(outL: Float32Array, outR: Float32Array, count: number): void {
-    if (!(this.resetReg & 0x01)) return; // GUS not running
+    if (!(this.resetReg & 0x01) || !(this.resetReg & 0x02)) return; // GUS not running or DAC not enabled
+
+    // Pre-compute GUS rate scaling (DOSBox renders at GUS internal rate, we at outputRate)
+    const gusRate = 1000000 / (1.619695497 * this.activeVoiceCount);
+    const rateScale = gusRate / this.outputRate;
 
     for (let s = 0; s < count; s++) {
       let mixL = 0, mixR = 0;
@@ -403,103 +436,82 @@ export class GUS {
       for (let vi = 0; vi < this.activeVoiceCount; vi++) {
         const v = this.voices[vi];
 
-        // Skip stopped voices
-        if ((v.wave.state & CTRL_STOPPED) && (v.vol.state & CTRL_STOPPED)) continue;
+        // Skip if both wave and vol are disabled (DOSBox: vol_ctrl.state & wave_ctrl.state & DISABLED)
+        if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
 
-        // Read 8-bit sample from GUS RAM (signed)
-        // Note: STMIK sets BIT16 flag but uploads 8-bit samples via DRAM poke
-        const addr = (v.wave.pos >> WAVE_FRACT_BITS) & 0xFFFFF;
-        const b = this.ram[addr];
-        const sample = (b > 127 ? b - 256 : b) / 128;
+        // Get sample (handles 8-bit and 16-bit modes)
+        const sample = this.getSample(v);
 
-        // Volume: get scalar from position
+        // Volume: get scalar from position (DOSBox: ceil_sdivide(pos, VOLUME_INC_SCALAR))
         const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
-          Math.floor(v.vol.pos / VOLUME_INC_SCALAR)));
+          Math.ceil(v.vol.pos / VOLUME_INC_SCALAR)));
         const vol = VOL_SCALARS[volIdx];
 
-        // Pan
-        const s1 = sample * vol;
+        // Pan and mix (sample is in int16 range, normalize to float)
+        const s1 = (sample / 32768) * vol;
         mixL += s1 * PAN_LEFT[v.pan];
         mixR += s1 * PAN_RIGHT[v.pan];
 
-        // Advance wave position (scaled by GUS internal rate / output rate)
-        const gusRate = 1000000 / (1.619695497 * this.activeVoiceCount);
-        const rateScale = gusRate / this.outputRate;
-        const savedInc = v.wave.inc;
-        v.wave.inc = Math.round(savedInc * rateScale);
-        this.advanceCtrl(v.wave, vi, true);
-        v.wave.inc = savedInc; // restore original for register readback
-        // Advance volume ramp
-        this.advanceCtrl(v.vol, vi, false);
+        // Advance wave position (DOSBox: IncrementCtrlPos with rollover check)
+        // Scale inc by GUS rate ratio for correct pitch
+        const savedWaveInc = v.wave.inc;
+        v.wave.inc = Math.round(savedWaveInc * rateScale);
+        const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
+        this.incrementCtrlPos(v.wave, vi, true, waveRollover);
+        v.wave.inc = savedWaveInc;
+
+        // Advance volume ramp (scaled by same rate ratio, no rollover)
+        const savedVolInc = v.vol.inc;
+        v.vol.inc = Math.round(savedVolInc * rateScale);
+        this.incrementCtrlPos(v.vol, vi, false, false);
+        v.vol.inc = savedVolInc;
       }
 
-      // RMS scaling like DOSBox (0.7071 = 1/sqrt(2))
+      // RMS scaling like DOSBox (M_SQRT1_2 = 0.7071)
       outL[s] += mixL * 0.7071;
       outR[s] += mixR * 0.7071;
     }
   }
 
-  /** Check if wave rollover is enabled: vol has BIT16 and wave has no LOOP */
-  private checkRollover(voiceIdx: number): boolean {
-    const v = this.voices[voiceIdx];
-    return !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
-  }
+  /** Advance control position — faithful copy of DOSBox's IncrementCtrlPos */
+  private incrementCtrlPos(ctrl: VoiceCtrl, voiceIdx: number, isWave: boolean, dontLoopOrRestart: boolean): void {
+    if (ctrl.state & CTRL_DISABLED) return;
 
-  private advanceCtrl(ctrl: VoiceCtrl, voiceIdx: number, isWave: boolean): void {
-    if (ctrl.state & CTRL_STOPPED) return;
-
-    // Rollover: for wave control, if vol has BIT16 and wave has no LOOP,
-    // voice continues past boundary (GUS SDK section 3.11). STMIK uses
-    // this with a 512-byte continuation buffer for seamless looping.
-    const rollover = isWave && this.checkRollover(voiceIdx);
-
+    let remaining = 0;
     if (ctrl.state & CTRL_DECREASING) {
       ctrl.pos -= ctrl.inc;
-      if (ctrl.pos <= ctrl.start) {
-        if (rollover) {
-          // Rollover: fire IRQ but keep going
-        } else if (ctrl.state & CTRL_LOOP) {
-          if (ctrl.state & CTRL_BIDIR) {
-            ctrl.state &= ~CTRL_DECREASING;
-            ctrl.pos = ctrl.start;
-          } else {
-            ctrl.pos = ctrl.end;
-          }
-        } else {
-          ctrl.state |= CTRL_STOPPED;
-          ctrl.pos = ctrl.start;
-        }
-        // Fire IRQ if enabled
-        if (ctrl.state & CTRL_IRQ) {
-          if (isWave) this.voiceIrqWave |= (1 << voiceIdx);
-          else this.voiceIrqVol |= (1 << voiceIdx);
-          this.irqStatus |= 0x20;
-          this.checkIrq();
-        }
-      }
+      remaining = ctrl.start - ctrl.pos;
     } else {
       ctrl.pos += ctrl.inc;
-      if (ctrl.pos >= ctrl.end) {
-        if (rollover) {
-          // Rollover: fire IRQ but keep going past end
-        } else if (ctrl.state & CTRL_LOOP) {
-          if (ctrl.state & CTRL_BIDIR) {
-            ctrl.state |= CTRL_DECREASING;
-            ctrl.pos = ctrl.end;
-          } else {
-            ctrl.pos = ctrl.start;
-          }
-        } else {
-          ctrl.state |= CTRL_STOPPED;
-          ctrl.pos = ctrl.end;
-        }
-        if (ctrl.state & CTRL_IRQ) {
-          if (isWave) this.voiceIrqWave |= (1 << voiceIdx);
-          else this.voiceIrqVol |= (1 << voiceIdx);
-          this.irqStatus |= 0x20;
-          this.checkIrq();
-        }
+      remaining = ctrl.pos - ctrl.end;
+    }
+
+    // Not yet reaching a boundary
+    if (remaining < 0) return;
+
+    // Generate an IRQ if requested
+    if (ctrl.state & CTRL_IRQ) {
+      if (isWave) this.voiceIrqWave |= (1 << voiceIdx);
+      else this.voiceIrqVol |= (1 << voiceIdx);
+      this.irqStatus |= 0x20;
+      this.checkIrq();
+    }
+
+    // Allow the current position to move beyond its limit (rollover)
+    if (dontLoopOrRestart) return;
+
+    // Should we loop?
+    if (ctrl.state & CTRL_LOOP) {
+      if (ctrl.state & CTRL_BIDIR) {
+        ctrl.state ^= CTRL_DECREASING; // reverse direction
       }
+      ctrl.pos = (ctrl.state & CTRL_DECREASING)
+        ? ctrl.end - remaining
+        : ctrl.start + remaining;
+    } else {
+      // No loop: stop the voice (DOSBox uses |= 1 = RESET bit)
+      ctrl.state |= CTRL_RESET;
+      ctrl.pos = (ctrl.state & CTRL_DECREASING) ? ctrl.start : ctrl.end;
     }
   }
 
