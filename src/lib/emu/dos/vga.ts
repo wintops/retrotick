@@ -683,20 +683,19 @@ export function syncModeX(emu: Emulator): void {
   // For Mode X 320 wide: 320/4 pixels per plane per line = 80 bytes, offset = 80/2 = 40
   const pitch = (vga.crtcRegs[0x13] || 40) * 2;
 
+  // Width is always a multiple of 4 in Mode X — process 4 pixels per byte offset
+  // (one pixel from each plane), avoiding per-pixel switch and shift
+  const bytesPerRow = width >> 2;
   for (let y = 0; y < height; y++) {
     const rowStart = displayStart + y * pitch;
-    const px = y * width;
-    for (let x = 0; x < width; x++) {
-      const plane = x & 3;
-      const offset = (rowStart + (x >> 2)) & 0x1FFFF; // 128KB plane mask
-      let colorIdx: number;
-      switch (plane) {
-        case 0: colorIdx = p0[offset]; break;
-        case 1: colorIdx = p1[offset]; break;
-        case 2: colorIdx = p2[offset]; break;
-        default: colorIdx = p3[offset]; break;
-      }
-      buf32[px + x] = lut[colorIdx & pixelMask];
+    let px = y * width;
+    for (let b = 0; b < bytesPerRow; b++) {
+      const offset = (rowStart + b) & 0x1FFFF;
+      buf32[px]     = lut[p0[offset] & pixelMask];
+      buf32[px + 1] = lut[p1[offset] & pixelMask];
+      buf32[px + 2] = lut[p2[offset] & pixelMask];
+      buf32[px + 3] = lut[p3[offset] & pixelMask];
+      px += 4;
     }
   }
 
