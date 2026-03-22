@@ -600,9 +600,9 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   }, [COLS, emu.isGraphicsMode]);
 
   const isGfx = emu.isGraphicsMode;
-  const gfxMode = emu.vga.currentMode;
-  const gfxWidth = gfxMode.width;
-  const gfxHeight = gfxMode.height;
+  const fb = emu.vga.framebuffer;
+  const gfxWidth = fb ? fb.width : emu.vga.currentMode.width;
+  const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
 
   return (
     <div style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }} onPointerUp={handleClick}>
