@@ -49,6 +49,9 @@ export class DosAudio {
       const addr = this.dma.getPhysicalAddr(0);
       this.writeMemory(addr, value);
     };
+    // Give SB DSP access to DMA and memory for debugging
+    this.sbDsp.dma = this.dma;
+    this.sbDsp.readMemFn = (addr: number) => this.readMemory(addr);
   }
 
   /** Initialize audio (must be called from user gesture). */

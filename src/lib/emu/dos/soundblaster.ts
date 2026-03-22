@@ -207,11 +207,25 @@ export class SoundBlasterDSP {
 
   private dmaTicks = 0; // Number of tickDMA calls since DMA started
 
+  dma?: import('./dma').DMAController;
+  readMemFn?: (addr: number) => number;
+
   private startDMA(length: number): void {
     this.dmaLength = length;
     this.dmaTransferred = 0;
     this.dmaActive = true;
     this.dmaTicks = 0;
+    if (this.dma) {
+      const addr = this.dma.getPhysicalAddr(1);
+      const count = this.dma.currentCount[1];
+      console.warn(`[SB-DMA] Start: addr=0x${addr.toString(16)} count=${count} length=${length} rate=${this.getSampleRate()}Hz autoInit=${this.dmaAutoInit} TC=${this.timeConstant}`);
+      // Log first 16 bytes at the DMA address
+      if (this.readMemFn) {
+        const bytes: string[] = [];
+        for (let i = 0; i < 16; i++) bytes.push(this.readMemFn(addr + i).toString(16).padStart(2, '0'));
+        console.warn(`[SB-DMA] Data at addr: ${bytes.join(' ')}`);
+      }
+    }
   }
 
   /** Get the sample rate derived from time constant. */
