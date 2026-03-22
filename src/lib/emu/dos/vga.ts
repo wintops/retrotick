@@ -98,7 +98,8 @@ export class VGAState {
   palette = buildDefaultPalette(); // 256 entries × 3 components, 6-bit each
   dacWriteIndex = 0;
   dacReadIndex = 0;
-  dacComponent = 0; // 0=R, 1=G, 2=B
+  private dacWriteComponent = 0; // 0=R, 1=G, 2=B (write side)
+  private dacReadComponent = 0;  // 0=R, 1=G, 2=B (read side)
 
   seqIndex = 0;
   gcIndex = 0;
@@ -383,20 +384,28 @@ export class VGAState {
         break;
       case 0x3C8: // DAC write index
         this.dacWriteIndex = value;
-        this.dacComponent = 0;
+        this.dacWriteComponent = 0;
         break;
       case 0x3C7: // DAC read index
         this.dacReadIndex = value;
-        this.dacComponent = 0;
+        this.dacReadComponent = 0;
         break;
-      case 0x3C9: // DAC data (write R, G, B sequentially)
-        this.palette[this.dacWriteIndex * 3 + this.dacComponent] = value & 0x3F;
-        this.dacComponent++;
-        if (this.dacComponent >= 3) {
-          this.dacComponent = 0;
+      case 0x3C9: { // DAC data (write R, G, B sequentially)
+        this.palette[this.dacWriteIndex * 3 + this.dacWriteComponent] = value & 0x3F;
+        this.dacWriteComponent++;
+        if (this.dacWriteComponent >= 3) {
+          this.dacWriteComponent = 0;
+          const idx = this.dacWriteIndex;
+          const r = this.palette[idx * 3], g = this.palette[idx * 3 + 1], b = this.palette[idx * 3 + 2];
+          if (idx < 16 && (r !== g || g !== b) && !(this as any)._palLog) {
+            (this as any)._palLog = true;
+            console.warn(`[PAL] Non-grey entry ${idx}: R=${r} G=${g} B=${b}`);
+          }
           this.dacWriteIndex = (this.dacWriteIndex + 1) & 0xFF;
           this.dirty = true;
         }
+        break;
+      }
         break;
       case 0x3D4: // CRTC index
         this.crtcIndex = value & 0x1F;
@@ -460,10 +469,10 @@ export class VGAState {
         return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
       }
       case 0x3C9: { // DAC data read
-        const val = this.palette[this.dacReadIndex * 3 + this.dacComponent];
-        this.dacComponent++;
-        if (this.dacComponent >= 3) {
-          this.dacComponent = 0;
+        const val = this.palette[this.dacReadIndex * 3 + this.dacReadComponent];
+        this.dacReadComponent++;
+        if (this.dacReadComponent >= 3) {
+          this.dacReadComponent = 0;
           this.dacReadIndex = (this.dacReadIndex + 1) & 0xFF;
         }
         return val;

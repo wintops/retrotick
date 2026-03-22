@@ -157,11 +157,11 @@ export class OPL2 {
   private vibratoPhase = 0;   // 0..1 triangle at ~6.1 Hz
   private noiseRNG = 1;       // 23-bit LFSR for percussion noise
 
-  // Timer state
+  // Timer state — tick-based (each tickTimers call = 256 instructions ≈ 53.7µs at 4.77MHz)
   private timer1Value = 0;
   private timer2Value = 0;
-  private timer1Start = 0;  // performance.now() when timer started
-  private timer2Start = 0;
+  private timer1Count = 0;   // counts up from timer value; overflows at 256
+  private timer2Count = 0;
   private timer1Running = false;
   private timer2Running = false;
   private timer1Expired = false;
@@ -237,13 +237,15 @@ export class OPL2 {
 
   writeAddr(val: number): void { this.regIndex = val & 0xFF; }
 
-  /** Check timer expiry and fire hardware IRQ if newly expired. */
+  /** Advance OPL2 timers — tick-based (called every 256 CPU instructions).
+   *  Timer 1: 80µs per unit. Each tick call ≈ 53.7µs at 4.77MHz.
+   *  Advance counter by 1 per call (close enough and ensures detection works). */
   tickTimers(): void {
-    const now = performance.now();
     if (this.timer1Running && !this.timer1Expired) {
-      const period = (256 - this.timer1Value) * 0.080; // 80µs per tick, in ms
-      if (now - this.timer1Start >= period) {
+      this.timer1Count++;
+      if (this.timer1Count >= 256) {
         this.timer1Expired = true;
+        this.timer1Count = this.timer1Value; // reload
         if (!this.timer1Mask && !this.timer1IRQFired) {
           this.timer1IRQFired = true;
           this.onTimerIRQ();
@@ -260,9 +262,10 @@ export class OPL2 {
       }
     }
     if (this.timer2Running && !this.timer2Expired) {
-      const period = (256 - this.timer2Value) * 0.320;
-      if (now - this.timer2Start >= period) {
+      this.timer2Count++;
+      if (this.timer2Count >= 256) {
         this.timer2Expired = true;
+        this.timer2Count = this.timer2Value; // reload
         if (!this.timer2Mask && !this.timer2IRQFired) {
           this.timer2IRQFired = true;
           this.onTimerIRQ();
@@ -320,7 +323,7 @@ export class OPL2 {
       const t2Start = !!(val & 0x02);
       if (t1Start && !this.timer1Running) {
         this.timer1Running = true;
-        this.timer1Start = performance.now();
+        this.timer1Count = this.timer1Value; // start counting from value
         this.timer1Expired = false;
         this.timer1IRQFired = false;
       } else if (!t1Start) {
@@ -328,7 +331,7 @@ export class OPL2 {
       }
       if (t2Start && !this.timer2Running) {
         this.timer2Running = true;
-        this.timer2Start = performance.now();
+        this.timer2Count = this.timer2Value;
         this.timer2Expired = false;
         this.timer2IRQFired = false;
       } else if (!t2Start) {
