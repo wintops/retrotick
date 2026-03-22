@@ -710,7 +710,7 @@ export class OPL2 {
     }
 
     // Normalize + tube-like saturation (tanh + subtle 2nd harmonic)
-    const norm = 1.4 / NUM_CHANNELS;
+    const norm = 0.5 / NUM_CHANNELS;
     const satL = Math.tanh(left * norm * DRIVE) * INV_TANH_DRIVE;
     const satR = Math.tanh(right * norm * DRIVE) * INV_TANH_DRIVE;
     // Even harmonic generation: x² produces 2nd harmonic (warm, musical)
