@@ -14,7 +14,7 @@ const MAX_VOICES = 32;
 const WAVE_FRACT_BITS = 9; // 9-bit fractional position (like DOSBox WAVE_WIDTH)
 const WAVE_FRACT = 1 << WAVE_FRACT_BITS;
 const VOLUME_LEVELS = 4096;
-const VOLUME_INC_SCALAR = 1 << (WAVE_FRACT_BITS + 1); // matches DOSBox
+const VOLUME_INC_SCALAR = 512; // matches DOSBox — normalizes smallest increment (1/512)
 
 // Voice control bits
 const CTRL_STOPPED   = 0x01;
@@ -24,19 +24,18 @@ const CTRL_BIDIR     = 0x08;
 const CTRL_DECREASING = 0x40;
 const CTRL_IRQ       = 0x20;
 
-// Pre-compute volume scalars: 4096-entry log-to-linear table
-// GUS volume is 12-bit: 4-bit exponent (0-15) + 8-bit mantissa (0-255)
-// Output range: 0.0 to 1.0
+// Pre-compute volume scalars: 4096-entry log-to-linear table (matches DOSBox)
+// Index 4095 = 1.0 (max), divided by 1.002709201 at each step backwards to index 1.
+// Index 0 = 0.0 (silence). DELTA_DB = 0.002709201 ≈ 0.0235 dB per step.
 const VOL_SCALARS = new Float32Array(VOLUME_LEVELS);
 {
-  // Index 0 = silence
-  VOL_SCALARS[0] = 0;
-  for (let i = 1; i < VOLUME_LEVELS; i++) {
-    // DOSBox formula: vol = pow(2, (i/512) - 7) — scaled to 16-bit range
-    // Simplified: linear ramp in log space
-    const db = (i - VOLUME_LEVELS) * (96.0 / VOLUME_LEVELS); // -96dB to 0dB
-    VOL_SCALARS[i] = Math.pow(10, db / 20);
+  const VOLUME_LEVEL_DIVISOR = 1.002709201;
+  let scalar = 1.0;
+  for (let i = VOLUME_LEVELS - 1; i >= 1; i--) {
+    VOL_SCALARS[i] = scalar;
+    scalar /= VOLUME_LEVEL_DIVISOR;
   }
+  VOL_SCALARS[0] = 0;
 }
 
 // Pre-compute pan scalars: 16-position constant-power panning
@@ -171,11 +170,15 @@ export class GUS {
       case 0x103: // Register select
         this.selectedRegister = value;
         break;
-      case 0x104: // Register data low byte — store only, don't trigger yet
-        this.registerData = (this.registerData & 0xFF00) | (value & 0xFF);
-        // For registers that use only the low byte (wave rate, addresses),
-        // the high byte write via port 0x105 will trigger writeRegister.
-        // For 16-bit OUT (word write), portWrite16 handles it atomically.
+      case 0x104: // Register data — word or low byte
+        if (value > 0xFF) {
+          // Word write (from OUTSW or direct 16-bit access): full value, trigger
+          this.registerData = value & 0xFFFF;
+          this.writeRegister();
+        } else {
+          // Byte write (from OUT DX,AX split): store low byte, wait for high byte
+          this.registerData = (this.registerData & 0xFF00) | (value & 0xFF);
+        }
         break;
       case 0x105: // Register data high byte — triggers register write
         this.registerData = (this.registerData & 0x00FF) | ((value & 0xFF) << 8);
@@ -305,8 +308,10 @@ export class GUS {
       case 0x00: // Wave control
         v.wave.state = hi & 0x7F;
         break;
-      case 0x01: // Wave rate (frequency)
-        v.wave.inc = data;
+      case 0x01: // Wave rate (frequency control word)
+        // DOSBox divides by 2: inc = ceil(val/2). The FC is relative to the
+        // GUS internal rate which varies with active voices.
+        v.wave.inc = Math.ceil(data / 2);
         break;
       case 0x02: // Wave start MSW
         v.wave.start = (v.wave.start & 0x0000FFFF) | ((data & 0x1FFF) << 16);
@@ -385,6 +390,9 @@ export class GUS {
 
   // ── Audio rendering ─────────────────────────────────────────────
 
+  /** Output sample rate (set from AudioContext.sampleRate during init) */
+  outputRate = 44100;
+
   /** Render mixed GUS audio into stereo buffers (additive) */
   renderSamples(outL: Float32Array, outR: Float32Array, count: number): void {
     if (!(this.resetReg & 0x01)) return; // GUS not running
@@ -398,9 +406,10 @@ export class GUS {
         // Skip stopped voices
         if ((v.wave.state & CTRL_STOPPED) && (v.vol.state & CTRL_STOPPED)) continue;
 
-        // Read 8-bit sample from GUS RAM (signed)
+        // Read 8-bit sample from GUS RAM (signed: STMIK XORs MSB during upload)
         const addr = (v.wave.pos >> WAVE_FRACT_BITS) & 0xFFFFF;
-        const sample = ((this.ram[addr] ^ 0x80) - 128) / 128; // unsigned→signed→float [-1,1]
+        const b = this.ram[addr];
+        const sample = (b > 127 ? b - 256 : b) / 128; // signed int8 → float [-1,+1]
 
         // Volume: get scalar from position
         const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
@@ -412,28 +421,44 @@ export class GUS {
         mixL += s1 * PAN_LEFT[v.pan];
         mixR += s1 * PAN_RIGHT[v.pan];
 
-        // Advance wave position
+        // Advance wave position (scaled by GUS internal rate / output rate)
+        const gusRate = 1000000 / (1.619695497 * this.activeVoiceCount);
+        const rateScale = gusRate / this.outputRate;
+        const savedInc = v.wave.inc;
+        v.wave.inc = Math.round(savedInc * rateScale);
         this.advanceCtrl(v.wave, vi, true);
+        v.wave.inc = savedInc; // restore original for register readback
         // Advance volume ramp
         this.advanceCtrl(v.vol, vi, false);
       }
 
-      // Scale down by active voice count to prevent clipping
-      const scale = 1.0 / this.activeVoiceCount;
-      outL[s] += mixL * scale;
-      outR[s] += mixR * scale;
+      // RMS scaling like DOSBox (0.7071 = 1/sqrt(2))
+      outL[s] += mixL * 0.7071;
+      outR[s] += mixR * 0.7071;
     }
+  }
+
+  /** Check if wave rollover is enabled: vol has BIT16 and wave has no LOOP */
+  private checkRollover(voiceIdx: number): boolean {
+    const v = this.voices[voiceIdx];
+    return !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
   }
 
   private advanceCtrl(ctrl: VoiceCtrl, voiceIdx: number, isWave: boolean): void {
     if (ctrl.state & CTRL_STOPPED) return;
 
+    // Check rollover: for wave control, if vol has BIT16 and wave has no LOOP,
+    // the voice continues past the boundary without stopping or looping (rollover).
+    const rollover = isWave && this.checkRollover(voiceIdx);
+
     if (ctrl.state & CTRL_DECREASING) {
       ctrl.pos -= ctrl.inc;
       if (ctrl.pos <= ctrl.start) {
-        if (ctrl.state & CTRL_LOOP) {
+        if (rollover) {
+          // Rollover: fire IRQ but keep going
+        } else if (ctrl.state & CTRL_LOOP) {
           if (ctrl.state & CTRL_BIDIR) {
-            ctrl.state &= ~CTRL_DECREASING; // reverse direction
+            ctrl.state &= ~CTRL_DECREASING;
             ctrl.pos = ctrl.start;
           } else {
             ctrl.pos = ctrl.end;
@@ -453,7 +478,9 @@ export class GUS {
     } else {
       ctrl.pos += ctrl.inc;
       if (ctrl.pos >= ctrl.end) {
-        if (ctrl.state & CTRL_LOOP) {
+        if (rollover) {
+          // Rollover: fire IRQ but keep going past end
+        } else if (ctrl.state & CTRL_LOOP) {
           if (ctrl.state & CTRL_BIDIR) {
             ctrl.state |= CTRL_DECREASING;
             ctrl.pos = ctrl.end;
@@ -525,10 +552,12 @@ export class GUS {
   }
 }
 
-/** Calculate volume increment from GUS rate byte */
+/** Calculate volume increment from GUS rate byte (matches DOSBox) */
 function calcVolInc(rate: number): number {
-  // Rate byte: bits 5-0 = increment, bits 7-6 = scale
-  const inc = rate & 0x3F;
-  const scale = (rate >> 6) & 0x03;
-  return (inc << scale) * VOLUME_INC_SCALAR;
+  // Rate byte: bits 5-0 = position in bank, bits 7-6 = bank selector
+  // Bank 0: inc = pos * 512,  Bank 1: inc = pos * 64
+  // Bank 2: inc = pos * 8,    Bank 3: inc = pos * 1
+  const posInBank = rate & 0x3F;
+  const decimator = 1 << (3 * ((rate >> 6) & 0x03)); // 1, 8, 64, 512
+  return Math.ceil((posInBank * VOLUME_INC_SCALAR) / decimator);
 }

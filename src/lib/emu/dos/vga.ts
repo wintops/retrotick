@@ -383,6 +383,10 @@ export class VGAState {
         this.dacPixelMask = value;
         break;
       case 0x3C8: // DAC write index
+        if (this.dacWriteComponent !== 0 && !(this as any)._dacDesyncLogged) {
+          (this as any)._dacDesyncLogged = true;
+          console.warn(`[DAC] Component desync: 0x3C8 write while component=${this.dacWriteComponent}, idx was ${this.dacWriteIndex}, new=${value}`);
+        }
         this.dacWriteIndex = value;
         this.dacWriteComponent = 0;
         break;
