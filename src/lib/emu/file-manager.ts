@@ -19,6 +19,8 @@ export interface DirEntry {
   name: string;
   size: number;
   isDir: boolean;
+  /** Drive letter (uppercase, e.g. 'C') — set by getVirtualDirListing */
+  drive?: string;
 }
 
 export interface OpenFile {
@@ -349,6 +351,18 @@ export class DefaultFileManager implements FileManager {
     const filePat = lastSlash >= 0 ? resolved.substring(lastSlash + 1) : resolved;
 
     const results: DirEntry[] = [];
+
+    // Z:\ — external files from browser file picker
+    if (dirPart.startsWith('Z:\\')) {
+      for (const [key, ext] of this.externalFiles) {
+        const keyDir = key.substring(0, key.lastIndexOf('\\') + 1);
+        if (keyDir !== dirPart) continue;
+        const fileName = ext.name;
+        if (this.matchesPattern(fileName, filePat)) {
+          results.push({ name: fileName, size: ext.data.length, isDir: false });
+        }
+      }
+    }
 
     if (dirPart.startsWith('D:\\')) {
       const dirRel = dirPart.substring(3);

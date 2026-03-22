@@ -27,6 +27,25 @@ export function registerComdlg32(emu: Emulator): void {
     return parts.join('|');
   }
 
+  function writePathToBuffer(path: string, filePtr: number, nMaxFile: number, isWide: boolean): void {
+    if (!filePtr || nMaxFile <= 0) return;
+    const toWrite = path.substring(0, nMaxFile - 1);
+    if (isWide) {
+      for (let i = 0; i < toWrite.length; i++) emu.memory.writeU16(filePtr + i * 2, toWrite.charCodeAt(i));
+      emu.memory.writeU16(filePtr + toWrite.length * 2, 0);
+    } else {
+      for (let i = 0; i < toWrite.length; i++) emu.memory.writeU8(filePtr + i, toWrite.charCodeAt(i) & 0xFF);
+      emu.memory.writeU8(filePtr + toWrite.length, 0);
+    }
+  }
+
+  function setOfnOffsets(lpOfn: number, path: string): void {
+    const lastSlash = path.lastIndexOf('\\');
+    emu.memory.writeU16(lpOfn + OFN_nFileOffset, lastSlash + 1);
+    const lastDot = path.lastIndexOf('.');
+    emu.memory.writeU16(lpOfn + OFN_nFileExtension, lastDot >= 0 ? lastDot + 1 : 0);
+  }
+
   function doGetOpenFileName(isWide: boolean): number | undefined {
     const lpOfn = emu.readArg(0);
     if (!lpOfn) return 0;
@@ -39,51 +58,31 @@ export function registerComdlg32(emu: Emulator): void {
     const filter = parseFilter(filterPtr, isWide);
     const title = titlePtr ? (isWide ? emu.memory.readUTF16String(titlePtr) : emu.memory.readCString(titlePtr)) : '';
 
-    if (!emu.onFileDialog) return 0;
+    if (!emu.onShowCommonDialog) return 0;
 
-    // Show browser file picker — wait for result
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
-    emu.onFileDialog('open', filter, title).then(result => {
-      let retVal = 0;
-      if (result) {
-        // Store file data in externalFiles under Z:\<filename>
-        const data = new Uint8Array(result.data);
-        const zPath = 'Z:\\' + result.name;
-        const zPathUpper = zPath.toUpperCase();
-        emu.fs.externalFiles.set(zPathUpper, { data, name: result.name });
-
-        // Write path to lpstrFile buffer
-        if (filePtr && nMaxFile > 0) {
-          if (isWide) {
-            const toWrite = zPath.substring(0, nMaxFile - 1);
-            for (let i = 0; i < toWrite.length; i++) {
-              emu.memory.writeU16(filePtr + i * 2, toWrite.charCodeAt(i));
-            }
-            emu.memory.writeU16(filePtr + toWrite.length * 2, 0);
-          } else {
-            const toWrite = zPath.substring(0, nMaxFile - 1);
-            for (let i = 0; i < toWrite.length; i++) {
-              emu.memory.writeU8(filePtr + i, toWrite.charCodeAt(i) & 0xFF);
-            }
-            emu.memory.writeU8(filePtr + toWrite.length, 0);
+    emu.onShowCommonDialog({
+      type: 'file-open',
+      filter: filter || undefined,
+      onResult: (result) => {
+        let retVal = 0;
+        if (result) {
+          // If imported file with data, store in externalFiles
+          if (result.data && result.path.toUpperCase().startsWith('Z:\\')) {
+            const data = new Uint8Array(result.data);
+            emu.fs.externalFiles.set(result.path.toUpperCase(), {
+              data, name: result.path.substring(3),
+            });
           }
+          writePathToBuffer(result.path, filePtr, nMaxFile, isWide);
+          setOfnOffsets(lpOfn, result.path);
+          retVal = 1;
         }
-
-        // Set nFileOffset (offset to filename part after last backslash)
-        const lastSlash = zPath.lastIndexOf('\\');
-        emu.memory.writeU16(lpOfn + OFN_nFileOffset, lastSlash + 1);
-
-        // Set nFileExtension (offset to extension after last dot)
-        const lastDot = zPath.lastIndexOf('.');
-        emu.memory.writeU16(lpOfn + OFN_nFileExtension, lastDot >= 0 ? lastDot + 1 : 0);
-        retVal = 1;
-      }
-      emu.waitingForMessage = false;
-      emuCompleteThunk(emu, retVal, stackBytes);
-      if (emu.running && !emu.halted) {
-        requestAnimationFrame(emu.tick);
-      }
+        emu.waitingForMessage = false;
+        emuCompleteThunk(emu, retVal, stackBytes);
+        if (emu.running && !emu.halted) requestAnimationFrame(emu.tick);
+      },
     });
     return undefined;
   }
@@ -100,56 +99,38 @@ export function registerComdlg32(emu: Emulator): void {
     const filter = parseFilter(filterPtr, isWide);
     const title = titlePtr ? (isWide ? emu.memory.readUTF16String(titlePtr) : emu.memory.readCString(titlePtr)) : '';
 
-    // Read existing filename from lpstrFile as default name
     let defaultName = '';
     if (filePtr) {
       defaultName = isWide ? emu.memory.readUTF16String(filePtr) : emu.memory.readCString(filePtr);
     }
 
-    if (!emu.onFileDialog) return 0;
+    if (!emu.onShowCommonDialog) return 0;
 
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
-    emu.onFileDialog('save', filter, title).then(result => {
-      let retVal = 0;
-      if (result) {
-        // For save, just set up the path — actual data written later via WriteFile/CloseHandle
-        const zPath = 'Z:\\' + result.name;
-        const zPathUpper = zPath.toUpperCase();
-
-        // Pre-create an empty entry so CreateFile can find it
-        if (!emu.fs.externalFiles.has(zPathUpper)) {
-          emu.fs.externalFiles.set(zPathUpper, { data: new Uint8Array(0), name: result.name });
-        }
-
-        // Write path to lpstrFile buffer
-        if (filePtr && nMaxFile > 0) {
-          if (isWide) {
-            const toWrite = zPath.substring(0, nMaxFile - 1);
-            for (let i = 0; i < toWrite.length; i++) {
-              emu.memory.writeU16(filePtr + i * 2, toWrite.charCodeAt(i));
+    emu.onShowCommonDialog({
+      type: 'file-save',
+      filter: filter || undefined,
+      defaultName: defaultName || undefined,
+      onResult: (result) => {
+        let retVal = 0;
+        if (result) {
+          // For save on D:\, the file will be written via WriteFile/CloseHandle
+          // For Z:\ paths, pre-create an empty entry so CreateFile can find it
+          if (result.path.toUpperCase().startsWith('Z:\\')) {
+            const name = result.path.substring(3);
+            if (!emu.fs.externalFiles.has(result.path.toUpperCase())) {
+              emu.fs.externalFiles.set(result.path.toUpperCase(), { data: new Uint8Array(0), name });
             }
-            emu.memory.writeU16(filePtr + toWrite.length * 2, 0);
-          } else {
-            const toWrite = zPath.substring(0, nMaxFile - 1);
-            for (let i = 0; i < toWrite.length; i++) {
-              emu.memory.writeU8(filePtr + i, toWrite.charCodeAt(i) & 0xFF);
-            }
-            emu.memory.writeU8(filePtr + toWrite.length, 0);
           }
+          writePathToBuffer(result.path, filePtr, nMaxFile, isWide);
+          setOfnOffsets(lpOfn, result.path);
+          retVal = 1;
         }
-
-        const lastSlash = zPath.lastIndexOf('\\');
-        emu.memory.writeU16(lpOfn + OFN_nFileOffset, lastSlash + 1);
-        const lastDot = zPath.lastIndexOf('.');
-        emu.memory.writeU16(lpOfn + OFN_nFileExtension, lastDot >= 0 ? lastDot + 1 : 0);
-        retVal = 1;
-      }
-      emu.waitingForMessage = false;
-      emuCompleteThunk(emu, retVal, stackBytes);
-      if (emu.running && !emu.halted) {
-        requestAnimationFrame(emu.tick);
-      }
+        emu.waitingForMessage = false;
+        emuCompleteThunk(emu, retVal, stackBytes);
+        if (emu.running && !emu.halted) requestAnimationFrame(emu.tick);
+      },
     });
     return undefined;
   }
