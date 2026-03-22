@@ -339,6 +339,7 @@ export class Emulator {
   _emsNextHandle = 1;
   _emsNextAddr = 0x200000; // 2MB start
   _emsMapping?: number[];  // 4 physical page mappings
+  _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;

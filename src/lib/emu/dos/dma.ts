@@ -67,7 +67,10 @@ export class DMAController {
   writeAllMask(val: number): void { this.mask = val & 0x0F; }
 
   /** Write mode register. */
-  writeMode(val: number): void { this.mode[val & 3] = val; }
+  writeMode(val: number): void {
+    const ch = val & 3;
+    this.mode[ch] = val;
+  }
 
   /** Master clear (like hardware reset). */
   masterClear(): void {

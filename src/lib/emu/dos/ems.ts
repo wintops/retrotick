@@ -65,7 +65,6 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       const physPage = cpu.reg[EAX] & 0xFF;
       const logPage = cpu.reg[EBX] & 0xFFFF;
       const handle = cpu.reg[EDX] & 0xFFFF;
-
       if (physPage > 3) {
         cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8A00; // AH=8A invalid physical page
         break;
@@ -110,6 +109,46 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       const handle = cpu.reg[EDX] & 0xFFFF;
       emu._emsHandles.delete(handle);
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000; // AH=0
+      break;
+    }
+
+    case 0x47: { // Save Page Map (DX=handle) — saves current mapping state
+      const handle = cpu.reg[EDX] & 0xFFFF;
+      if (!emu._emsSavedMaps) emu._emsSavedMaps = new Map<number, number[]>();
+      // Save both the mapping array AND the page frame contents for each mapped page
+      const saved = [...emu._emsMapping];
+      emu._emsSavedMaps.set(handle, saved);
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      break;
+    }
+
+    case 0x48: { // Restore Page Map (DX=handle) — restores saved mapping state
+      const handle = cpu.reg[EDX] & 0xFFFF;
+      const saved = emu._emsSavedMaps?.get(handle);
+      if (!saved) {
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8300; // invalid handle
+        break;
+      }
+      // Save back currently mapped pages, then restore saved mapping
+      for (let p = 0; p < 4; p++) {
+        const dstAddr = EMS_PAGE_FRAME_SEG * 16 + p * EMS_PAGE_SIZE;
+        // Save current page frame content back to current mapping's storage
+        const curAddr = emu._emsMapping[p];
+        if (curAddr >= 0) {
+          for (let i = 0; i < EMS_PAGE_SIZE; i++) {
+            cpu.mem.writeU8(curAddr + i, cpu.mem.readU8(dstAddr + i));
+          }
+        }
+        // Restore saved mapping's data to page frame
+        const savedAddr = saved[p];
+        if (savedAddr >= 0) {
+          for (let i = 0; i < EMS_PAGE_SIZE; i++) {
+            cpu.mem.writeU8(dstAddr + i, cpu.mem.readU8(savedAddr + i));
+          }
+        }
+        emu._emsMapping[p] = savedAddr;
+      }
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
       break;
     }
 

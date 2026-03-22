@@ -165,12 +165,13 @@ export class SoundBlasterDSP {
   private executeCommand(): void {
     const p = this.pendingParams;
     switch (this.lastCommand) {
-      case 0x10: // Direct DAC — write single sample
+      case 0x10: { // Direct DAC — write single sample
         if (this.speakerOn) {
           this.pcmRing[this.pcmWritePos & 0xFFFF] = (p[0] - 128) / 128;
           this.pcmWritePos++;
         }
         break;
+      }
       case 0x14: // DMA DAC 8-bit single cycle
       case 0x24: {
         const length = (p[0] | (p[1] << 8)) + 1;
@@ -216,15 +217,7 @@ export class SoundBlasterDSP {
     this.dmaActive = true;
     this.dmaTicks = 0;
     if (this.dma) {
-      const addr = this.dma.getPhysicalAddr(1);
-      const count = this.dma.currentCount[1];
-      console.warn(`[SB-DMA] Start: addr=0x${addr.toString(16)} count=${count} length=${length} rate=${this.getSampleRate()}Hz autoInit=${this.dmaAutoInit} TC=${this.timeConstant}`);
-      // Log first 16 bytes at the DMA address
-      if (this.readMemFn) {
-        const bytes: string[] = [];
-        for (let i = 0; i < 16; i++) bytes.push(this.readMemFn(addr + i).toString(16).padStart(2, '0'));
-        console.warn(`[SB-DMA] Data at addr: ${bytes.join(' ')}`);
-      }
+      console.log(`[SB-DMA] Start: length=${length} rate=${this.getSampleRate()}Hz autoInit=${this.dmaAutoInit}`);
     }
   }
 
@@ -263,10 +256,27 @@ export class SoundBlasterDSP {
         this.pcmWritePos++;
       }
 
-      // Advance DMA address (respecting mode direction, but usually increment)
+      // Advance DMA address and decrement count
       dma.currentAddr[1] = (dma.currentAddr[1] + 1) & 0xFFFF;
-      dma.currentCount[1] = (dma.currentCount[1] - 1) & 0xFFFF;
+      const countBefore = dma.currentCount[1];
+      dma.currentCount[1] = (countBefore - 1) & 0xFFFF;
       this.dmaTransferred++;
+
+      // Check for DMA terminal count (count wrapped from 0 to 0xFFFF)
+      if (countBefore === 0) {
+        dma.status |= 0x02; // TC bit for channel 1
+        if (dma.mode[1] & 0x10) {
+          // Auto-init: reload address and count from base registers
+          dma.currentAddr[1] = dma.baseAddr[1];
+          dma.currentCount[1] = dma.baseCount[1];
+        } else {
+          // Single-cycle: mask channel, stop transfer
+          dma.mask |= (1 << 1);
+          this.dmaActive = false;
+          this.irqPending = true;
+          return true;
+        }
+      }
     }
 
     if (this.dmaTransferred >= this.dmaLength) {
