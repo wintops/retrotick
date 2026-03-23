@@ -13,12 +13,12 @@ const TEXT_ICON_32 = (
 );
 
 const TEXT_ICON_16 = (
-  <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
-    <path d="M3 1h7l3 3v11H3V1z" fill="#FFF" stroke="#808080" stroke-width="0.5"/>
-    <path d="M10 1v3h3" fill="none" stroke="#808080" stroke-width="0.5"/>
-    <rect x="5" y="6" width="6" height="1" fill="#000080"/>
-    <rect x="5" y="8" width="6" height="1" fill="#000080"/>
-    <rect x="5" y="10" width="4" height="1" fill="#000080"/>
+  <svg width="16" height="16" viewBox="0 0 32 32" fill="none" style={{ flexShrink: 0 }}>
+    <path d="M3 0h18l8 8v23a1 1 0 01-1 1H3a1 1 0 01-1-1V1a1 1 0 011-1z" fill="#fff" stroke="#808080" stroke-width="1"/>
+    <path d="M21 0v7a1 1 0 001 1h7" fill="#e0e0e0" stroke="#808080" stroke-width="1"/>
+    <rect x="6" y="12" width="16" height="2" fill="#000080"/>
+    <rect x="6" y="17" width="16" height="2" fill="#000080"/>
+    <rect x="6" y="22" width="10" height="2" fill="#000080"/>
   </svg>
 );
 
@@ -32,9 +32,9 @@ const GENERIC_ICON_32 = (
 );
 
 const GENERIC_ICON_16 = (
-  <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
-    <path d="M3 1h7l3 3v11H3V1z" fill="#c0c0c0" stroke="#808080" stroke-width="0.5"/>
-    <path d="M10 1v3h3" fill="none" stroke="#808080" stroke-width="0.5"/>
+  <svg width="16" height="16" viewBox="0 0 32 32" fill="none" style={{ flexShrink: 0 }}>
+    <path d="M3 0h18l8 8v23a1 1 0 01-1 1H3a1 1 0 01-1-1V1a1 1 0 011-1z" fill="#c0c0c0" stroke="#808080" stroke-width="1"/>
+    <path d="M21 0v7a1 1 0 001 1h7" fill="#e0e0e0" stroke="#808080" stroke-width="1"/>
   </svg>
 );
 
@@ -86,17 +86,24 @@ const TEXT_EXTENSIONS = new Set([
   'txt', 'log', 'ini', 'cfg', 'inf', 'csv', 'xml', 'htm', 'html',
 ]);
 
-function isTextFile(name: string): boolean {
+function getExt(name: string): string {
   const dot = name.lastIndexOf('.');
-  if (dot < 0) return false;
-  return TEXT_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+  return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
+}
+
+function isTextFile(name: string): boolean {
+  return TEXT_EXTENSIONS.has(getExt(name));
+}
+
+function isExeByExtension(name: string): boolean {
+  const ext = getExt(name);
+  return ext === 'exe' || ext === 'com';
 }
 
 // --- Public helpers ---
 
 export interface FileIconOptions {
   isFolder?: boolean;
-  isExe?: boolean;
   /** Extracted PE icon URL (from parsePE) */
   iconUrl?: string | null;
 }
@@ -105,7 +112,7 @@ export interface FileIconOptions {
 export function fileIcon32(name: string, opts: FileIconOptions = {}): preact.JSX.Element {
   if (opts.isFolder) return FOLDER_ICON_32;
   if (opts.iconUrl) return <img src={opts.iconUrl} width={32} height={32} draggable={false} style={{ imageRendering: 'pixelated' }} />;
-  if (opts.isExe && /\.(exe|com)$/i.test(name)) return EXE_ICON_32;
+  if (isExeByExtension(name)) return EXE_ICON_32;
   if (isTextFile(name)) return TEXT_ICON_32;
   return GENERIC_ICON_32;
 }
@@ -114,7 +121,7 @@ export function fileIcon32(name: string, opts: FileIconOptions = {}): preact.JSX
 export function fileIcon16(name: string, opts: FileIconOptions = {}): preact.JSX.Element {
   if (opts.isFolder) return FOLDER_ICON_16;
   if (opts.iconUrl) return <img src={opts.iconUrl} width={16} height={16} draggable={false} style={{ imageRendering: 'pixelated' }} />;
-  if (opts.isExe && /\.(exe|com)$/i.test(name)) return EXE_ICON_16;
+  if (isExeByExtension(name)) return EXE_ICON_16;
   if (isTextFile(name)) return TEXT_ICON_16;
   return GENERIC_ICON_16;
 }

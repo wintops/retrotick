@@ -107,7 +107,7 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
       <div class="w-[32px] h-[32px] flex items-center justify-center mb-1"
         style={(selected || folderDragOver) ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)' } : undefined}
       >
-        {fileIcon32(name, { isFolder, isExe, iconUrl })}
+        {fileIcon32(name, { isFolder, iconUrl })}
       </div>
       {editing ? (
         <input
