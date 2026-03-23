@@ -1039,12 +1039,17 @@ export function emuTick(emu: Emulator): void {
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     emu._tickCount++;
     if (emu._dosHalted) {
-      // HLT: sleep until next timer tick instead of busy-spinning
+      // HLT: sleep until next timer tick. Use scheduleImmediate for short
+      // delays (≤4ms) to avoid setTimeout's 4ms clamping after nested calls.
       const pitReload = emu._pitCounters[0] || 0x10000;
       const timerIntervalMs = (pitReload / 1193182) * 1000;
       const elapsed = performance.now() - emu._dosLastTimerTick;
-      const delay = Math.max(1, timerIntervalMs - elapsed);
-      setTimeout(emu.tick, delay);
+      const delay = timerIntervalMs - elapsed;
+      if (delay <= 4) {
+        scheduleImmediate(emu.tick);
+      } else {
+        setTimeout(emu.tick, delay);
+      }
     } else if (emu.isDOS) {
       // DOS games need maximum throughput — MessageChannel avoids setTimeout's
       // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
