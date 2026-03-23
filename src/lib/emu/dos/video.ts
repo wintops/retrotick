@@ -215,7 +215,7 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
   emu.vga.resetPalette();
 
   // Enable/disable planar memory hook for A0000-AFFFF
-  cpu.mem.vgaPlanar = vgaMode.planar ? emu.vga : null;
+  cpu.mem.setVgaPlanar(vgaMode.planar ? emu.vga : null);
 
   if (vgaMode.isText) {
     if (!noClear) {

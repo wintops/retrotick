@@ -109,33 +109,27 @@ export function cpuStep(cpu: CPU): void {
   let prefixF3 = false;  // REP
   cpu._segOverride = 0;
 
-  // Parse prefixes
+  // Parse prefixes + fetch opcode in a single pass (avoids double-reading the first byte)
+  let opcode = cpu.mem.readU8(cpu.eip >>> 0);
+  cpu.eip = (cpu.eip + 1) | 0;
   for (;;) {
-    const b = cpu.mem.readU8(cpu.eip >>> 0);
-    if (b === 0x66) { prefix66 = true; cpu.eip = (cpu.eip + 1) | 0; }
-    else if (b === 0x67) { prefix67 = true; cpu.eip = (cpu.eip + 1) | 0; }
-    else if (b === 0xF2) { prefixF2 = true; cpu.eip = (cpu.eip + 1) | 0; }
-    else if (b === 0xF3) { prefixF3 = true; cpu.eip = (cpu.eip + 1) | 0; }
-    else if (b === 0x64) {
-      // FS segment override — used for TEB access
-      cpu._segOverride = 0x64;
-      cpu.eip = (cpu.eip + 1) | 0;
-    } else if (b === 0x26 || b === 0x2E || b === 0x36 || b === 0x3E || b === 0x65) {
-      // Segment override prefixes: store for 16-bit mode, ignore in flat model
-      if (!cpu.use32) {
-        cpu._segOverride = b;
-      }
-      cpu.eip = (cpu.eip + 1) | 0;
+    if (opcode === 0x66) { prefix66 = true; }
+    else if (opcode === 0x67) { prefix67 = true; }
+    else if (opcode === 0xF2) { prefixF2 = true; }
+    else if (opcode === 0xF3) { prefixF3 = true; }
+    else if (opcode === 0x64) { cpu._segOverride = 0x64; }
+    else if (opcode === 0x26 || opcode === 0x2E || opcode === 0x36 || opcode === 0x3E || opcode === 0x65) {
+      if (!cpu.use32) cpu._segOverride = opcode;
     } else {
-      break;
+      break; // opcode is set, EIP already past it
     }
+    opcode = cpu.mem.readU8(cpu.eip >>> 0);
+    cpu.eip = (cpu.eip + 1) | 0;
   }
 
   const defaultOpSize = cpu.use32 ? 32 : 16;
   const opSize = prefix66 ? (defaultOpSize === 32 ? 16 : 32) : defaultOpSize;
-  // Address size affects ModRM decoding
   cpu._addrSize16 = cpu.use32 ? prefix67 : !prefix67;
-  const opcode = cpu.fetch8();
 
   // ALU pattern: opcodes 0x00-0x3F
   if (opcode < 0x40 && (opcode & 0x06) !== 0x06) {

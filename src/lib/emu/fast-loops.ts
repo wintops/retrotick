@@ -4,6 +4,9 @@
 const REG_EAX = 0, REG_ECX = 1, REG_EDX = 2, REG_EBX = 3;
 const REG_ESP = 4, REG_EBP = 5, REG_ESI = 6, REG_EDI = 7;
 
+// Pooled register file for executeLoop — 8 real regs + pseudo-reg 8 for memory-source ALU
+const _regs = new Int32Array(9);
+
 const enum Op {
   ADD_RR, ADD_RI, SUB_RR, SUB_RI, ADC_RR, SBB_RR,
   AND_RR, AND_RI, OR_RR, OR_RI, XOR_RR, XOR_RI,
@@ -12,10 +15,11 @@ const enum Op {
   LEA, MOVZX8,
   LOAD8, LOAD32, LOAD32_SIB, LOAD32_BSIB,
   STORE8, STORE16, STORE32,
+  STORE32_SIB, STORE32_BSIB,
 }
 
 interface Insn { op: Op; dst: number; src: number; imm: number; base: number; scale: number; disp: number }
-interface LoopInfo { startAddr: number; endAddr: number; insns: Insn[]; counterReg: number; cmpReg: number; cmpImm: number; jccType: number }
+interface LoopInfo { startAddr: number; endAddr: number; insns: Insn[]; counterReg: number; cmpReg: number; cmpImm: number; jccType: number; _firstDword?: number }
 
 function ins(op: Op, dst: number, src = 0, imm = 0, base = 0, scale = 0, disp = 0): Insn {
   return { op, dst, src, imm, base, scale, disp };
@@ -85,14 +89,22 @@ function decodeLoopBody(mem: { readU8(a: number): number; readU32(a: number): nu
         insns.push(ins(opMap[opType], dst, src));
         ip += 2; continue;
       }
-      // reg, [mem] — only decode dir=1 (r32, r/m32) for loads
+      // reg, [mem] — dir=1 (r32, r/m32): emit LOAD32 to pseudo-reg 8, then ALU_RR
       if (dir === 1) {
         const reg = (b1 >> 3) & 7;
         const m = decodeModRM32(mem, ip + 1);
-        if (m && m.idx < 0 && m.base >= 0) {
-          // Simple [base+disp] form — emit as LOAD32 + ALU
-          const tmp = ins(Op.LOAD32, 8, 0, 0, m.base, 0, m.disp); // pseudo-reg 8
-          // We can't use a temp register in our IR easily. Bail for now on memory-source ALU.
+        if (m) {
+          if (m.idx < 0 && m.base >= 0) {
+            insns.push(ins(Op.LOAD32, 8, 0, 0, m.base, 0, m.disp));
+          } else if (m.base === -1 && m.idx >= 0) {
+            insns.push(ins(Op.LOAD32_SIB, 8, m.idx, 0, -1, m.scale, m.disp));
+          } else if (m.idx >= 0 && m.base >= 0) {
+            insns.push(ins(Op.LOAD32_BSIB, 8, m.idx, 0, m.base, m.scale, m.disp));
+          } else {
+            return null;
+          }
+          insns.push(ins(opMap[opType], reg, 8));
+          ip += 1 + m.len; continue;
         }
       }
       return null;
@@ -213,8 +225,18 @@ function decodeLoopBody(mem: { readU8(a: number): number; readU32(a: number): nu
       const reg = (b1 >> 3) & 7;
       if ((b1 & 0xC0) === 0xC0) { insns.push(ins(Op.MOV_RR, b1 & 7, reg)); ip += 2; continue; }
       const m = decodeModRM32(mem, ip + 1);
-      if (m && m.idx < 0 && m.base >= 0) {
-        insns.push(ins(Op.STORE32, 0, reg, 0, m.base, 0, m.disp));
+      if (m) {
+        if (m.idx < 0 && m.base >= 0) {
+          insns.push(ins(Op.STORE32, 0, reg, 0, m.base, 0, m.disp));
+        } else if (m.base === -1 && m.idx >= 0) {
+          // [idx*scale+disp32]: dst=idx reg, src=value reg
+          insns.push(ins(Op.STORE32_SIB, m.idx, reg, 0, -1, m.scale, m.disp));
+        } else if (m.idx >= 0 && m.base >= 0) {
+          // [base+idx*scale+disp]: dst=idx reg, src=value reg, base=base reg
+          insns.push(ins(Op.STORE32_BSIB, m.idx, reg, 0, m.base, m.scale, m.disp));
+        } else {
+          return null;
+        }
         ip += 1 + m.len; continue;
       }
       return null;
@@ -320,20 +342,19 @@ function findBackwardJcc(mem: { readU8(a: number): number; readU32(a: number): n
 function executeLoop(cpu: { reg: Int32Array; eip: number },
                      mem: { readU8(a: number): number; readU16(a: number): number; readU32(a: number): number;
                             writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void },
-                     loop: LoopInfo, startInsn = 0): number {
+                     loop: LoopInfo): number {
   const { insns, counterReg, endAddr } = loop;
   if (counterReg < 0) return 0;
   const count = cpu.reg[counterReg] | 0;
   if (count <= 0) return 0;
 
-  const r = new Int32Array(8);
+  const r = _regs;
   for (let i = 0; i < 8; i++) r[i] = cpu.reg[i];
   let carry = 0, iters = 0;
-  let firstInsn = startInsn; // skip already-executed instructions on first iteration
 
   for (let n = count; n > 0; n--) {
     carry = 0;
-    for (let i = firstInsn; i < insns.length; i++) {
+    for (let i = 0; i < insns.length; i++) {
       const I = insns[i]; let a: number, b: number, s: number, addr: number;
       switch (I.op) {
         case Op.ADD_RR: a = r[I.dst]>>>0; b = r[I.src]>>>0; r[I.dst] = (a+b)|0; carry = (a+b) > 0xFFFFFFFF ? 1 : 0; break;
@@ -367,10 +388,11 @@ function executeLoop(cpu: { reg: Int32Array; eip: number },
         case Op.STORE8: mem.writeU8(((r[I.base]>>>0)+I.disp)>>>0, r[I.src]&0xFF); break;
         case Op.STORE16: mem.writeU16(((r[I.base]>>>0)+I.disp)>>>0, r[I.src]&0xFFFF); break;
         case Op.STORE32: mem.writeU32(((r[I.base]>>>0)+I.disp)>>>0, r[I.src]); break;
+        case Op.STORE32_SIB: mem.writeU32(((r[I.dst]>>>0)*I.scale+I.disp)>>>0, r[I.src]); break;
+        case Op.STORE32_BSIB: mem.writeU32(((r[I.base]>>>0)+(r[I.dst]>>>0)*I.scale+I.disp)>>>0, r[I.src]); break;
       }
     }
     iters++;
-    firstInsn = 0; // subsequent iterations execute all instructions
   }
   for (let i = 0; i < 8; i++) cpu.reg[i] = r[i];
   cpu.eip = endAddr;
@@ -379,58 +401,10 @@ function executeLoop(cpu: { reg: Int32Array; eip: number },
 
 // ---- Loop cache ----
 
-interface CachedLoop {
-  loop: LoopInfo;
-  jccAddr: number;  // end of loop body (exclusive of jcc instruction bytes)
-}
+const _loopCache = new Map<number, LoopInfo | null>();
 
-// Cache of recently-detected loops, keyed by loopStart address.
-// When EIP enters a known loop range, skip the expensive full decode.
-const loopCache = new Map<number, CachedLoop>();
-const MAX_CACHE = 64;
-
-// Flat arrays for O(1)-ish cache lookup from hot loops.
-// Rebuilt whenever loopCache changes.
-let cacheStarts: number[] = [];
-let cacheEnds: number[] = [];
-let cacheEntries: CachedLoop[] = [];
-
-function rebuildCacheArrays(): void {
-  cacheStarts = [];
-  cacheEnds = [];
-  cacheEntries = [];
-  for (const [start, entry] of loopCache) {
-    cacheStarts.push(start);
-    cacheEnds.push(entry.jccAddr);
-    cacheEntries.push(entry);
-  }
-}
-
-/**
- * Lightweight cache-only check: if EIP is inside a previously-detected loop,
- * fast-forward immediately. Called from the main execution loops on every step
- * (or every N steps) without waiting for the sampler.
- */
-export function tryCachedLoop(cpu: { reg: Int32Array; eip: number },
-                              mem: { readU8(a: number): number; readU16(a: number): number; readU32(a: number): number;
-                                     writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): number {
-  const eip = cpu.eip >>> 0;
-  for (let i = 0; i < cacheStarts.length; i++) {
-    if (eip >= cacheStarts[i] && eip <= cacheEnds[i]) {
-      const cached = cacheEntries[i];
-      let startInsn = 0;
-      if (eip !== cacheStarts[i]) {
-        const partial = decodeLoopBody(mem, cacheStarts[i], eip);
-        if (!partial) continue;
-        startInsn = partial.length;
-        if (startInsn >= cached.loop.insns.length) continue;
-      }
-      const iters = executeLoop(cpu, mem, cached.loop, startInsn);
-      if (iters > 0) return iters;
-    }
-  }
-  return 0;
-}
+/** Clear the decoded-loop cache (call when code memory may have changed). */
+export function invalidateLoopCache(): void { _loopCache.clear(); }
 
 // ---- Public API ----
 
@@ -443,30 +417,33 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
                                    writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): number {
   const eip = cpu.eip >>> 0;
 
-  // --- Fast path: check cache for known loop ranges ---
-  for (const [startAddr, cached] of loopCache) {
-    if (eip >= startAddr && eip <= cached.jccAddr) {
-      let startInsn = 0;
-      if (eip !== startAddr) {
-        const partial = decodeLoopBody(mem, startAddr, eip);
-        if (!partial) continue;
-        startInsn = partial.length;
-        if (startInsn >= cached.loop.insns.length) continue;
+  // Check cache first
+  const cached = _loopCache.get(eip);
+  if (cached !== undefined) {
+    if (cached === null) return 0; // known non-loop
+    // Validate: check first dword hasn't changed (anti-SMC)
+    if (mem.readU32(eip) !== cached._firstDword!) {
+      _loopCache.delete(eip);
+      // Fall through to re-decode
+    } else {
+      const iters = executeLoop(cpu, mem, cached);
+      if (iters > 0) {
+        console.log(`[FAST-LOOP] ${iters} iters @ 0x${cached.startAddr.toString(16)}-0x${cached.endAddr.toString(16)} (${cached.insns.length} ops, counter=r${cached.counterReg}) [cached]`);
       }
-      const iters = executeLoop(cpu, mem, cached.loop, startInsn);
-      if (iters > 0) return iters;
+      return iters;
     }
   }
 
-  // --- Slow path: full decode ---
   const jcc = findBackwardJcc(mem, eip);
-  if (!jcc) return 0;
+  if (!jcc) { _loopCache.set(eip, null); return 0; }
 
-  // EIP must be at or inside the loop body
-  if (eip < jcc.loopStart || eip > jcc.jccAddr) return 0;
+  // Only fast-forward when EIP is exactly at the loop start.
+  // Stepping forward to reach loop start is unsafe: cpu.step() may write
+  // memory that we can't roll back, causing subtle data corruption.
+  if (eip !== jcc.loopStart) { _loopCache.set(eip, null); return 0; }
 
   const insns = decodeLoopBody(mem, jcc.loopStart, jcc.jccAddr);
-  if (!insns || insns.length === 0 || insns.length > 32) return 0;
+  if (!insns || insns.length === 0 || insns.length > 32) { _loopCache.set(eip, null); return 0; }
 
   // Find counter: a DEC'd register, or LOOP instruction (implicit ECX)
   let counterReg = -1;
@@ -482,7 +459,7 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
     for (const i of insns) {
       if (i.op === Op.DEC) { counterReg = i.dst; decCount++; }
     }
-    if (decCount > 1) return 0; // multiple DECs — too complex
+    if (decCount > 1) { _loopCache.set(eip, null); return 0; }
 
     // If no DEC, look for SUB reg, 1 (equivalent to DEC)
     if (counterReg < 0) {
@@ -494,38 +471,27 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
       }
     }
   }
-  if (counterReg < 0) return 0;
-  if (counterReg === REG_ESP || counterReg === REG_EBP) return 0;
+  if (counterReg < 0) { _loopCache.set(eip, null); return 0; }
+  if (counterReg === REG_ESP || counterReg === REG_EBP) { _loopCache.set(eip, null); return 0; }
 
-  // Must write memory (side effect)
-  const hasWrite = insns.some(i => i.op === Op.STORE8 || i.op === Op.STORE16 || i.op === Op.STORE32);
-  if (!hasWrite) return 0;
-
-  // Compute IR instruction offset when EIP is mid-loop.
-  let startInsn = 0;
-  if (eip !== jcc.loopStart) {
-    const partialInsns = decodeLoopBody(mem, jcc.loopStart, eip);
-    if (!partialInsns) return 0;
-    startInsn = partialInsns.length;
-    if (startInsn >= insns.length) return 0;
-  }
+  // Must access memory (side effect — store or load; reject pure-register idle loops)
+  const hasMemAccess = insns.some(i =>
+    i.op === Op.STORE8 || i.op === Op.STORE16 || i.op === Op.STORE32 ||
+    i.op === Op.STORE32_SIB || i.op === Op.STORE32_BSIB ||
+    i.op === Op.LOAD8 || i.op === Op.LOAD32 || i.op === Op.LOAD32_SIB || i.op === Op.LOAD32_BSIB);
+  if (!hasMemAccess) { _loopCache.set(eip, null); return 0; }
 
   const loop: LoopInfo = {
     startAddr: jcc.loopStart,
     endAddr: jcc.jccAddr + jcc.jccLen,
     insns, counterReg, cmpReg, cmpImm,
     jccType: jcc.jccType,
+    _firstDword: mem.readU32(eip),
   };
+  _loopCache.set(eip, loop);
 
-  const iters = executeLoop(cpu, mem, loop, startInsn);
+  const iters = executeLoop(cpu, mem, loop);
   if (iters > 0) {
-    // Cache the loop for instant re-detection
-    if (loopCache.size >= MAX_CACHE) {
-      const firstKey = loopCache.keys().next().value!;
-      loopCache.delete(firstKey);
-    }
-    loopCache.set(jcc.loopStart, { loop, jccAddr: jcc.jccAddr });
-    rebuildCacheArrays();
     console.log(`[FAST-LOOP] ${iters} iters @ 0x${loop.startAddr.toString(16)}-0x${loop.endAddr.toString(16)} (${insns.length} ops, counter=r${counterReg})`);
   }
   return iters;

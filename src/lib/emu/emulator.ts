@@ -421,11 +421,11 @@ export class Emulator {
     this.vga.onUnchainedChange = (unchained: boolean) => {
       if (unchained) {
         // Mode X: activate planar memory hook and clear planes
-        this.cpu.mem.vgaPlanar = this.vga;
+        this.cpu.mem.setVgaPlanar(this.vga);
         this.vga.clearPlanes();
       } else {
         // Back to Chain-4 linear mode 13h
-        this.cpu.mem.vgaPlanar = null;
+        this.cpu.mem.setVgaPlanar(null);
       }
     };
   }

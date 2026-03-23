@@ -3,6 +3,14 @@ import type { CPU } from './cpu';
 // Register indices
 const EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 
+// Pooled result objects — callers consume fields immediately, never store long-term.
+// decodeModRM and decodeModRM16 use SEPARATE pools because decodeModRM calls decodeModRM16.
+// decodeFPUModRM uses its own pool because it calls decodeModRM16 internally.
+const _mr = { isReg: false, regField: 0, val: 0, addr: 0, ea: 0 };
+const _mr16 = { isReg: false, regField: 0, val: 0, addr: 0, ea: 0 };
+const _sib = { addr: 0, bpBase: false };
+const _fpu = { mod: 0, regField: 0, rm: 0, addr: 0 };
+
 export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regField: number; val: number; addr: number; ea?: number } {
   // Dispatch to 16-bit addressing mode if active
   if (cpu._addrSize16) return decodeModRM16(cpu, sizeBits);
@@ -18,7 +26,8 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
     if (sizeBits === 8) val = cpu.getReg8(rm);
     else if (sizeBits === 16) val = cpu.getReg16(rm);
     else val = cpu.reg[rm] | 0;
-    return { isReg: true, regField, val, addr: rm };
+    _mr.isReg = true; _mr.regField = regField; _mr.val = val; _mr.addr = rm; _mr.ea = 0;
+    return _mr;
   }
 
   // Memory addressing
@@ -26,9 +35,9 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
   let useSSeg = false; // BP/ESP-based addressing defaults to SS
   if (rm === 4) {
     // SIB byte
-    const { addr: sibAddr, bpBase } = decodeSIB(cpu, mod);
-    addr = sibAddr;
-    useSSeg = bpBase;
+    const s = decodeSIB(cpu, mod);
+    addr = s.addr;
+    useSSeg = s.bpBase;
   } else if (rm === 5 && mod === 0) {
     // disp32
     addr = cpu.fetch32();
@@ -64,7 +73,8 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
   else if (sizeBits === 16) val = cpu.mem.readU16(ea);
   else val = cpu.mem.readU32(ea);
 
-  return { isReg: false, regField, val, addr: ea, ea: rawEA };
+  _mr.isReg = false; _mr.regField = regField; _mr.val = val; _mr.addr = ea; _mr.ea = rawEA;
+  return _mr;
 }
 
 export function decodeSIB(cpu: CPU, mod: number): { addr: number; bpBase: boolean } {
@@ -86,7 +96,8 @@ export function decodeSIB(cpu: CPU, mod: number): { addr: number; bpBase: boolea
     addr = (addr + ((cpu.reg[index] | 0) << scale)) | 0;
   }
 
-  return { addr, bpBase };
+  _sib.addr = addr; _sib.bpBase = bpBase;
+  return _sib;
 }
 
 export function getSegOverrideSel(cpu: CPU): number {
@@ -111,7 +122,8 @@ export function decodeModRM16(cpu: CPU, sizeBits: number): { isReg: boolean; reg
     if (sizeBits === 8) val = cpu.getReg8(rm);
     else if (sizeBits === 16) val = cpu.getReg16(rm);
     else val = cpu.reg[rm] | 0;
-    return { isReg: true, regField, val, addr: rm };
+    _mr16.isReg = true; _mr16.regField = regField; _mr16.val = val; _mr16.addr = rm; _mr16.ea = 0;
+    return _mr16;
   }
 
   let ea = 0;
@@ -155,7 +167,8 @@ export function decodeModRM16(cpu: CPU, sizeBits: number): { isReg: boolean; reg
   else if (sizeBits === 16) val = cpu.mem.readU16(linearAddr);
   else val = cpu.mem.readU32(linearAddr);
 
-  return { isReg: false, regField, val, addr: linearAddr, ea };
+  _mr16.isReg = false; _mr16.regField = regField; _mr16.val = val; _mr16.addr = linearAddr; _mr16.ea = ea;
+  return _mr16;
 }
 
 export function writeModRM(cpu: CPU, decoded: { isReg: boolean; addr: number }, val: number, sizeBits: number): void {
@@ -174,7 +187,8 @@ export function decodeFPUModRM(cpu: CPU): { mod: number; regField: number; rm: n
   // In 16-bit address mode, use decodeModRM16 and extract fields
   if (cpu._addrSize16) {
     const d = decodeModRM16(cpu, 32); // sizeBits doesn't matter for FPU, addr matters
-    return { mod: d.isReg ? 3 : 0, regField: d.regField, rm: d.isReg ? d.addr : 0, addr: d.addr };
+    _fpu.mod = d.isReg ? 3 : 0; _fpu.regField = d.regField; _fpu.rm = d.isReg ? d.addr : 0; _fpu.addr = d.addr;
+    return _fpu;
   }
 
   const modrm = cpu.fetch8();
@@ -183,15 +197,16 @@ export function decodeFPUModRM(cpu: CPU): { mod: number; regField: number; rm: n
   const rm = modrm & 7;
 
   if (mod === 3) {
-    return { mod, regField, rm, addr: 0 };
+    _fpu.mod = mod; _fpu.regField = regField; _fpu.rm = rm; _fpu.addr = 0;
+    return _fpu;
   }
 
   let addr: number;
   let useSSeg = false;
   if (rm === 4) {
-    const { addr: sibAddr, bpBase } = decodeSIB(cpu, mod);
-    addr = sibAddr;
-    useSSeg = bpBase;
+    const s = decodeSIB(cpu, mod);
+    addr = s.addr;
+    useSSeg = s.bpBase;
   } else if (rm === 5 && mod === 0) {
     addr = cpu.fetch32();
   } else {
@@ -213,5 +228,6 @@ export function decodeFPUModRM(cpu: CPU): { mod: number; regField: number; rm: n
     addr = (addr + cpu.segBase(segSel)) | 0;
   }
 
-  return { mod, regField, rm, addr: addr >>> 0 };
+  _fpu.mod = mod; _fpu.regField = regField; _fpu.rm = rm; _fpu.addr = addr >>> 0;
+  return _fpu;
 }

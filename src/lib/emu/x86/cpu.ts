@@ -58,6 +58,7 @@ export class CPU {
   halted = false;
   haltReason = '';
   thunkHit = false; // set when EIP is in thunk range
+  _tfActive = false; // true only when TF (trap flag) is set in flagsCache
 
   // Segment base for FS register (points to TEB)
   fsBase = 0;
@@ -185,6 +186,7 @@ export class CPU {
     this.flagsCache = f | 0x0002;
     this.flagsValid = true;
     this.lazyOp = LazyOp.NONE;
+    this._tfActive = !!(f & TF);
   }
 
   getFlag(bit: number): boolean {
@@ -197,6 +199,7 @@ export class CPU {
     if (!this.flagsValid) materializeFlags(this);
     if (val) this.flagsCache |= bit;
     else this.flagsCache &= ~bit;
+    if (bit === TF) this._tfActive = val;
   }
 
   setLazy(op: number, result: number, a: number, b: number): void {
@@ -366,32 +369,39 @@ export class CPU {
     }
   }
 
-  // Condition code evaluation
+  // Condition code evaluation — materialize once, then test bits directly
   testCC(cc: number): boolean {
+    if (!this.flagsValid) materializeFlags(this);
+    const f = this.flagsCache;
     switch (cc) {
-      case 0x0: return this.getFlag(OF);
-      case 0x1: return !this.getFlag(OF);
-      case 0x2: return this.getFlag(CF);
-      case 0x3: return !this.getFlag(CF);
-      case 0x4: return this.getFlag(ZF);
-      case 0x5: return !this.getFlag(ZF);
-      case 0x6: return this.getFlag(CF) || this.getFlag(ZF);
-      case 0x7: return !this.getFlag(CF) && !this.getFlag(ZF);
-      case 0x8: return this.getFlag(SF);
-      case 0x9: return !this.getFlag(SF);
-      case 0xA: return this.getFlag(PF);
-      case 0xB: return !this.getFlag(PF);
-      case 0xC: return this.getFlag(SF) !== this.getFlag(OF);
-      case 0xD: return this.getFlag(SF) === this.getFlag(OF);
-      case 0xE: return this.getFlag(ZF) || (this.getFlag(SF) !== this.getFlag(OF));
-      case 0xF: return !this.getFlag(ZF) && (this.getFlag(SF) === this.getFlag(OF));
+      case 0x0: return !!(f & OF);
+      case 0x1: return !(f & OF);
+      case 0x2: return !!(f & CF);
+      case 0x3: return !(f & CF);
+      case 0x4: return !!(f & ZF);
+      case 0x5: return !(f & ZF);
+      case 0x6: return !!((f & CF) | (f & ZF));
+      case 0x7: return !((f & CF) | (f & ZF));
+      case 0x8: return !!(f & SF);
+      case 0x9: return !(f & SF);
+      case 0xA: return !!(f & PF);
+      case 0xB: return !(f & PF);
+      case 0xC: return !!(f & SF) !== !!(f & OF);
+      case 0xD: return !!(f & SF) === !!(f & OF);
+      case 0xE: return !!(f & ZF) || (!!(f & SF) !== !!(f & OF));
+      case 0xF: return !(f & ZF) && (!!(f & SF) === !!(f & OF));
       default: return false;
     }
   }
 
   // Execute one instruction — delegated to cpu-step.ts
   step(): void {
-    // Check if TF was set BEFORE this instruction (single-step trap fires after)
+    // Fast path: TF is almost never set — skip the entire TF machinery
+    if (!this._tfActive) {
+      cpuStep(this);
+      return;
+    }
+    // Slow path: TF is set — check for single-step trap
     const tfBefore = this.getFlags() & TF;
     this._inhibitTF = false;
     cpuStep(this);

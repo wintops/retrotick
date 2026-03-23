@@ -2,7 +2,7 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
-import { tryFastLoop, tryCachedLoop } from './fast-loops';
+import { tryFastLoop } from './fast-loops';
 import { AccessViolationError } from './memory';
 
 // A special "return from WndProc" thunk address
@@ -153,12 +153,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  // Tight loop detection: two consecutive-match samplers at different periods.
+  // Tight loop detection: three consecutive-match samplers at different periods.
   // P=256 catches loops of length 1,2,4,8,16... (powers of 2).
   // P=252 catches loops of length 1,2,3,4,6,7,9,12,14... (highly composite).
-  // Together they cover all common loop lengths 1-12.
+  // P=64 catches short-lived loops (100-300 iterations) before the larger periods trigger.
   let csEipA = 0, csHitA = 0;  // period 256
   let csEipB = 0, csHitB = 0, csNextB = 252;  // period 252
+  let csEipC = 0, csHitC = 0;  // period 64
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
 
@@ -184,15 +185,18 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
           csEipB = eip; csHitB = 0;
       }
     }
+    if ((steps & 0x3F) === 0 && steps > 0) {
+      if (eip === csEipC) { if (++csHitC >= 2) csTry = true; } else { csEipC = eip; csHitC = 0; }
+    }
     if (csTry) {
       try {
         const iters = tryFastLoop(emu.cpu, emu.memory);
-        if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+        if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = csHitC = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
         throw e;
       }
-      csHitA = csHitB = 0;
+      csHitA = csHitB = csHitC = 0;
     }
 
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
@@ -631,6 +635,8 @@ export function emuTick(emu: Emulator): void {
   }
 
   let tkEipA = 0, tkHitA = 0, tkEipB = 0, tkHitB = 0, tkNextB = 252;
+  let tkEipC = 0, tkHitC = 0; // period 64
+  const hasThunks = emu.thunkPages.size > 0; // DOS programs have no thunks
 
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
@@ -780,7 +786,7 @@ export function emuTick(emu: Emulator): void {
 
     const eip = emu.cpu.eip >>> 0;
 
-    const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
+    const thunk = hasThunks ? (emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined) : undefined;
     if (thunk) {
       stepCount += 999; // thunks represent significant work (~1000 real instructions)
       emu._lastThunkTick = emu._tickCount;
@@ -849,7 +855,7 @@ export function emuTick(emu: Emulator): void {
       continue;
     }
 
-    // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
+    // Tight loop fast-forward (triple-period consecutive match, same as callStdcall)
     {
       // Fast path: check loop cache every 64 steps
       if ((stepCount & 0x3F) === 0 && stepCount > 0) {
@@ -869,16 +875,18 @@ export function emuTick(emu: Emulator): void {
         tkNextB = stepCount + 252;
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
+      if ((stepCount & 0x3F) === 0 && stepCount > 0) {
+        if (eip === tkEipC) { if (++tkHitC >= 2) tkTry = true; } else { tkEipC = eip; tkHitC = 0; }
+      }
       if (tkTry) {
-<<<<<<< HEAD
         try {
           const it = tryFastLoop(emu.cpu, emu.memory);
-          if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+          if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
           throw e;
         }
-        tkHitA = tkHitB = 0;
+        tkHitA = tkHitB = tkHitC = 0;
       }
     }
 
@@ -1005,9 +1013,9 @@ export function emuTick(emu: Emulator): void {
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
       const now = performance.now();
-      // Sync on VBlank (normal path), or every ~33ms as fallback for games
-      // that don't poll 0x3DA (ensures display still updates).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 33) {
+      // Sync on VBlank (normal path), or every ~15ms as fallback for games
+      // that don't poll 0x3DA (ensures display still updates at ~60Hz).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 15) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);
