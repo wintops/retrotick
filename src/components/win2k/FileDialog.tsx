@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { useLayoutEffect } from 'preact/hooks';
-import { Window, WS_CAPTION, WS_SYSMENU } from './Window';
+import { Window, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME } from './Window';
 import { Button } from './Button';
 import { MessageBox, MB_YESNO, MB_ICONWARNING, IDYES } from './MessageBox';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
@@ -158,6 +158,8 @@ export function FileDialog({
   const [initialPos, setInitialPos] = useState<{ x: number; y: number } | undefined>();
   const [visible, setVisible] = useState(false);
   const [overwriteConfirm, setOverwriteConfirm] = useState<string | null>(null);
+  const [clientSize, setClientSize] = useState({ w: DIALOG_W - 8, h: DIALOG_H });
+  const resizeDrag = useRef<{ edge: string; startX: number; startY: number; startW: number; startH: number } | null>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -174,6 +176,31 @@ export function FileDialog({
   }, []);
 
   useEffect(() => { if (initialPos) setVisible(true); }, [initialPos]);
+
+  // Resize handling
+  const onResizeStart = useCallback((edge: string, e: PointerEvent) => {
+    e.preventDefault();
+    resizeDrag.current = { edge, startX: e.clientX, startY: e.clientY, startW: clientSize.w, startH: clientSize.h };
+  }, [clientSize]);
+
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      const d = resizeDrag.current;
+      if (!d) return;
+      const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+      let w = d.startW, h = d.startH;
+      if (d.edge.includes('e')) w = d.startW + dx;
+      if (d.edge.includes('w')) w = d.startW - dx;
+      if (d.edge.includes('s')) h = d.startH + dy;
+      if (d.edge.includes('n')) h = d.startH - dy;
+      const minW = 300, minH = 200;
+      setClientSize({ w: Math.max(minW, w), h: Math.max(minH, h) });
+    };
+    const onPointerUp = () => { resizeDrag.current = null; };
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    return () => { document.removeEventListener('pointermove', onPointerMove); document.removeEventListener('pointerup', onPointerUp); };
+  }, []);
 
   // Refresh file list
   const refreshEntries = useCallback(() => {
@@ -373,13 +400,14 @@ export function FileDialog({
   return (
     <div ref={measureRef} style={{
       visibility: visible ? 'visible' : 'hidden', position: 'absolute',
-      font: FONT, width: `${DIALOG_W}px`, zIndex: 300,
+      font: FONT, zIndex: 300,
     }}>
-      <Window title={dialogTitle} style={WS_CAPTION | WS_SYSMENU}
+      <Window title={dialogTitle} style={WS_CAPTION | WS_SYSMENU | WS_THICKFRAME}
+        clientW={clientSize.w} clientH={clientSize.h}
         focused={focused} draggable initialPos={initialPos} flashTrigger={flashTrigger}
-        onClose={() => onResult(null)}>
+        onClose={() => onResult(null)} onResizeStart={onResizeStart}>
         <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '4px',
-          width: `${DIALOG_W - 8}px`, height: `${DIALOG_H}px`, boxSizing: 'border-box' }}>
+          width: '100%', height: '100%', boxSizing: 'border-box' }}>
 
           {/* --- Top toolbar: Look in + navigation --- */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
