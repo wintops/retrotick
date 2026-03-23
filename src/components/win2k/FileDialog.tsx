@@ -5,6 +5,7 @@ import { Button } from './Button';
 import { MessageBox, MB_YESNO, MB_ICONWARNING, IDYES } from './MessageBox';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
 import { t } from '../../lib/regional-settings';
+import { fileIcon16 } from './file-icons';
 
 // --- Types ---
 
@@ -70,27 +71,6 @@ function formatSize(size: number): string {
 }
 
 // --- Icons ---
-
-function FolderIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
-      <path d="M1 3h5l1-1h7v1h-7l-1 1H1v9h14V4H7L6 3z" fill="#FFD700" stroke="#996600" stroke-width="0.5" />
-      <rect x="1" y="4" width="14" height="9" fill="#FFD700" stroke="#996600" stroke-width="0.5" rx="0" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
-      <path d="M3 1h7l3 3v11H3V1z" fill="#FFF" stroke="#808080" stroke-width="0.5" />
-      <path d="M10 1v3h3" fill="none" stroke="#808080" stroke-width="0.5" />
-      <rect x="5" y="6" width="6" height="1" fill="#808080" />
-      <rect x="5" y="8" width="6" height="1" fill="#808080" />
-      <rect x="5" y="10" width="4" height="1" fill="#808080" />
-    </svg>
-  );
-}
 
 function DriveIcon() {
   return (
@@ -450,7 +430,7 @@ export function FileDialog({
                     font: FONT, whiteSpace: 'nowrap',
                   }}
                 >
-                  {entry.isDir ? <FolderIcon /> : <FileIcon />}
+                  {fileIcon16(entry.name, { isFolder: entry.isDir })}
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {entry.name}
                   </span>
