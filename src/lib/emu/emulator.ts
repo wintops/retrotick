@@ -1504,12 +1504,15 @@ export class Emulator {
       case 0x40: case 0x41: case 0x42: { // PIT counter write
         const ch = port - 0x40;
         const accessMode = this._pitAccessModes[ch];
+        let pitWriteComplete = false;
         if (accessMode === 1) { // LSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
           this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else if (accessMode === 2) { // MSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
           this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else { // LSB then MSB
           if (!this._pitWriteHigh[ch]) {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
@@ -1518,12 +1521,13 @@ export class Emulator {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
             this._pitWriteHigh[ch] = false;
             this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
+            pitWriteComplete = true;
           }
         }
-        // When PIT channel 0 is reprogrammed, resync the timer delivery baseline.
+        // When PIT channel 0 is fully reprogrammed, resync the timer delivery baseline.
         // Without this, the copper system's scanline-based PIT reprogramming causes
         // INT 08h to fire at wrong times (palette glitches, timing drift).
-        if (ch === 0 && this.isDOS) {
+        if (pitWriteComplete && ch === 0 && this.isDOS) {
           this._dosLastTimerTick = performance.now();
         }
         // Update PC speaker when PIT channel 2 changes
