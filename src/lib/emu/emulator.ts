@@ -1509,6 +1509,12 @@ export class Emulator {
             this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
           }
         }
+        // When PIT channel 0 is reprogrammed, resync the timer delivery baseline.
+        // Without this, the copper system's scanline-based PIT reprogramming causes
+        // INT 08h to fire at wrong times (palette glitches, timing drift).
+        if (ch === 0 && this.isDOS) {
+          this._dosLastTimerTick = performance.now();
+        }
         // Update PC speaker when PIT channel 2 changes
         if (ch === 2 && this.isDOS) {
           this.dosAudio.updateSpeaker(this._ioPorts.get(0x61) ?? 0, this._pitCounters[2] || 0x10000);

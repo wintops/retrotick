@@ -397,6 +397,12 @@ export class GUS {
   /** Output sample rate (set from AudioContext.sampleRate during init) */
   outputRate = 44100;
 
+  /** Fractional accumulator for GUS internal rate → output rate conversion (ZOH) */
+  private _gusAccum = 0;
+  private _lastMixL = 0;
+  private _lastMixR = 0;
+
+
   /** Read a sample from GUS RAM — matches DOSBox's GetSample exactly */
   private getSample(v: GusVoice): number {
     const pos = v.wave.pos;
@@ -422,54 +428,52 @@ export class GUS {
     return sample;
   }
 
-  /** Render mixed GUS audio into stereo buffers (additive) — matches DOSBox */
+  /** Render mixed GUS audio into stereo buffers (additive).
+   *  DOSBox renders at the GUS internal rate (depends on voice count), then
+   *  upsamples to 44.1kHz via zero-order hold. We replicate this: advance
+   *  voices at the internal rate using unscaled inc, hold the last mix for
+   *  output samples that fall between GUS ticks. */
   renderSamples(outL: Float32Array, outR: Float32Array, count: number): void {
-    if (!(this.resetReg & 0x01) || !(this.resetReg & 0x02)) return; // GUS not running or DAC not enabled
+    if (!(this.resetReg & 0x01) || !(this.resetReg & 0x02)) return;
 
-    // Pre-compute GUS rate scaling (DOSBox renders at GUS internal rate, we at outputRate)
-    const gusRate = 1000000 / (1.619695497 * this.activeVoiceCount);
-    const rateScale = gusRate / this.outputRate;
+    // GUS internal rate depends on active voice count (DOSBox: ifloor)
+    const gusRate = Math.floor(1000000 / (1.619695497 * this.activeVoiceCount));
+    const step = gusRate / this.outputRate; // GUS ticks per output sample
 
     for (let s = 0; s < count; s++) {
-      let mixL = 0, mixR = 0;
+      this._gusAccum += step;
 
-      for (let vi = 0; vi < this.activeVoiceCount; vi++) {
-        const v = this.voices[vi];
+      // Process GUS internal ticks (usually 0 or 1 per output sample)
+      while (this._gusAccum >= 1.0) {
+        this._gusAccum -= 1.0;
 
-        // Skip if both wave and vol are disabled (DOSBox: vol_ctrl.state & wave_ctrl.state & DISABLED)
-        if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
+        let mixL = 0, mixR = 0;
+        for (let vi = 0; vi < this.activeVoiceCount; vi++) {
+          const v = this.voices[vi];
+          if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
 
-        // Get sample (handles 8-bit and 16-bit modes)
-        const sample = this.getSample(v);
+          const sample = this.getSample(v);
+          const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
+            Math.ceil(v.vol.pos / VOLUME_INC_SCALAR)));
+          const vol = VOL_SCALARS[volIdx];
+          const s1 = (sample / 32768) * vol;
+          mixL += s1 * PAN_LEFT[v.pan];
+          mixR += s1 * PAN_RIGHT[v.pan];
 
-        // Volume: get scalar from position (DOSBox: ceil_sdivide(pos, VOLUME_INC_SCALAR))
-        const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
-          Math.ceil(v.vol.pos / VOLUME_INC_SCALAR)));
-        const vol = VOL_SCALARS[volIdx];
+          // Advance wave and volume with original unscaled inc (like DOSBox)
+          const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
+          this.incrementCtrlPos(v.wave, vi, true, waveRollover);
+          this.incrementCtrlPos(v.vol, vi, false, false);
+        }
 
-        // Pan and mix (sample is in int16 range, normalize to float)
-        const s1 = (sample / 32768) * vol;
-        mixL += s1 * PAN_LEFT[v.pan];
-        mixR += s1 * PAN_RIGHT[v.pan];
-
-        // Advance wave position (DOSBox: IncrementCtrlPos with rollover check)
-        // Scale inc by GUS rate ratio for correct pitch
-        const savedWaveInc = v.wave.inc;
-        v.wave.inc = Math.round(savedWaveInc * rateScale);
-        const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
-        this.incrementCtrlPos(v.wave, vi, true, waveRollover);
-        v.wave.inc = savedWaveInc;
-
-        // Advance volume ramp (scaled by same rate ratio, no rollover)
-        const savedVolInc = v.vol.inc;
-        v.vol.inc = Math.round(savedVolInc * rateScale);
-        this.incrementCtrlPos(v.vol, vi, false, false);
-        v.vol.inc = savedVolInc;
+        // Store last mix for ZOH output
+        this._lastMixL = mixL * 0.7071;
+        this._lastMixR = mixR * 0.7071;
       }
 
-      // RMS scaling like DOSBox (M_SQRT1_2 = 0.7071)
-      outL[s] += mixL * 0.7071;
-      outR[s] += mixR * 0.7071;
+      // Zero-order hold: output the last computed GUS sample
+      outL[s] += this._lastMixL;
+      outR[s] += this._lastMixR;
     }
   }
 

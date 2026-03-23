@@ -136,17 +136,19 @@ export class VGAState {
   pendingSync = false;             // set when VBlank starts; tick should sync & present
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
 
+
   // Cached retrace timing — reduces performance.now() calls in tight 0x3DA poll loops
   private _cachedNowUs = 0;        // performance.now() * 1000, refreshed every N polls
   private _3daPollCount = 0;       // polls since last refresh
   private _cachedVisibleLines = 200;
   private _cachedFrameUs = 449 * 31.778;
   private _retraceConstsDirty = true;
+  private _cached3DA = 0;          // cached 0x3DA result (recomputed every 64 polls)
 
   /** Refresh retrace constants when CRTC regs change */
   private _updateRetraceConsts(): void {
     this._cachedVisibleLines = this.getVisibleHeight();
-    const totalLines = (this._cachedVisibleLines <= 350) ? 449 : 525;
+    const totalLines = (this._cachedVisibleLines <= 400) ? 449 : 525;
     this._cachedFrameUs = totalLines * 31.778;
     this._retraceConstsDirty = false;
   }
@@ -444,26 +446,19 @@ export class VGAState {
       case 0x3DA: { // Input status register 1 — cached retrace simulation
         this.atcFlipFlop = false; // reading 0x3DA resets ATC flip-flop
 
-        // Refresh performance.now() every 64 polls (not every poll — too expensive)
+        // Recompute retrace state every 64 polls (float math is expensive per-poll)
         if ((this._3daPollCount++ & 63) === 0) {
           this._cachedNowUs = performance.now() * 1000;
           if (this._retraceConstsDirty) this._updateRetraceConsts();
+          const tInFrame = this._cachedNowUs % this._cachedFrameUs;
+          const currentLine = (tInFrame / 31.778) | 0;
+          const inVblank = currentLine >= this._cachedVisibleLines;
+          if (inVblank && !this.lastVblankSync) this.pendingSync = true;
+          this.lastVblankSync = inVblank;
+          const inHblank = !inVblank && (tInFrame - currentLine * 31.778) >= 25.422;
+          this._cached3DA = (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
         }
-
-        const tInFrame = this._cachedNowUs % this._cachedFrameUs;
-        const currentLine = (tInFrame / 31.778) | 0;
-        const inVblank = currentLine >= this._cachedVisibleLines;
-
-        // On VBlank entry: VRAM contains a complete frame — schedule sync.
-        if (inVblank && !this.lastVblankSync) {
-          this.pendingSync = true;
-        }
-        this.lastVblankSync = inVblank;
-
-        // Bit 3: Vertical retrace (VSync)
-        // Bit 0: Display disabled (HBlank or VBlank)
-        const inHblank = !inVblank && (tInFrame - currentLine * 31.778) >= 25.422;
-        return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
+        return this._cached3DA;
       }
       case 0x3C9: { // DAC data read
         const val = this.palette[this.dacReadIndex * 3 + this.dacReadComponent];
