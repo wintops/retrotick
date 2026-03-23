@@ -588,7 +588,7 @@ export function emuTick(emu: Emulator): void {
 
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 14; // run close to one frame (~16ms) for throughput
+  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
@@ -671,8 +671,8 @@ export function emuTick(emu: Emulator): void {
       dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
-    if ((i & 0xFFF) === 0 && i > 0) {
-      // Periodic time check — amortize performance.now() cost across 4096 instructions
+    if ((i & 0x1FFF) === 0 && i > 0) {
+      // Periodic time check — amortize performance.now() cost across 8192 instructions
       const now = performance.now();
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
       if (!waitingForPostKeyWindow && now - tickStart > tickMs) break;
@@ -696,7 +696,7 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu.isDOS) {
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)
-      if ((i & 0xFF) === 0) emu.dosAudio.tickDMA();
+      if ((i & 0x1FF) === 0) emu.dosAudio.tickDMA();
     }
 
     // Deliver queued scancodes one at a time, throttled to ~30 Hz to match
@@ -1008,6 +1008,7 @@ export function emuTick(emu: Emulator): void {
     }
   }
   emu.cpuSteps += stepCount;
+  emu._pitInsnCount += stepCount;
   } catch (err) {
     console.error(`[EMU] tick() error at EIP=0x${(emu.cpu.eip >>> 0).toString(16)}:`, err);
     emu.haltReason = 'internal emulator error';
