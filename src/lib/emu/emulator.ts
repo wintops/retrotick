@@ -1,6 +1,7 @@
 import { Memory } from './memory';
 import { CPU } from './x86/cpu';
-import { JitCache } from './x86/jit-cache';
+import { FlatMemory, OFF_ENTRY } from './x86/flat-memory';
+import { compileWasmRegion, type WasmCompiledRegion } from './x86/wasm-module';
 import type { LoadedPE } from './pe-loader';
 import type { LoadedNE, NEResourceEntry } from './ne-loader';
 import { HandleTable } from './win32/handles';
@@ -402,13 +403,12 @@ export class Emulator {
   _pitStartTime = [0, 0, 0];               // performance.now() when each counter was last programmed
   _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
 
-  // JIT compiler cache (wired to memory for self-modifying code invalidation)
-  jitCache = (() => {
-    const jit = new JitCache();
-    jit.memory = this.memory;
-    this.memory.onJitInvalidate = (segKey: number) => jit.invalidateSegment(segKey);
-    return jit;
-  })();
+  // WASM JIT
+  flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
+  wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
+  _wasmPending = new Set<number>();  // addresses with pending compilations
+  _wasmHotness = new Map<number, number>();  // address → hit count
+  _wasmFlatSynced = false;  // true after initial flat memory sync
 
   // VGA state
   vga = new VGAState();

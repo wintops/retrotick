@@ -3,11 +3,13 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { tryFastLoop } from './fast-loops';
-import { JitCache } from './x86/jit-cache';
-import { compileBlock } from './x86/jit-compile';
+import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
+import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
+import { materializeFlags } from './x86/flags';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
+
 
 export function emuCompleteThunk(emu: Emulator, retVal: number, stackBytes: number): void {
   emu.cpu.reg[0] = retVal | 0; // EAX
@@ -793,23 +795,55 @@ export function emuTick(emu: Emulator): void {
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
       if (tkTry) {
-        // Try fast-loop first (handles simple tight loops)
         const it = tryFastLoop(emu.cpu, emu.memory);
         if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
-        // Fast-loop failed — try JIT (compiles more complex blocks)
-        if (!(emu.cpu.flagsCache & 0x100)) {
-          const block = emu.jitCache.get(eip);
-          if (block) {
-            const nextEip = block.fn(emu.cpu.reg, emu.memory, emu.cpu);
-            emu.cpu.eip = nextEip >>> 0;
-            stepCount += block.instrCount;
-            emu._pitInsnCount += block.instrCount;
-            tkHitA = tkHitB = 0;
-            continue;
+        // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
+        if (emu.flatMemory && !(emu.cpu.flagsCache & 0x100)) {
+          const regionBase = eip & ~0xFFFF;
+          const region = emu.wasmRegions.get(regionBase);
+          if (region) {
+            const entryIdx = region.entryMap.get(eip);
+            if (entryIdx !== undefined) {
+              const flat = emu.flatMemory;
+              // Only sync registers/flags — memory is already shared (zero-copy)
+              flat.writeRegs(emu.cpu);
+              flat.writeFlags(emu.cpu);
+              flat.writeSegBases(emu.cpu);
+              flat.dv.setInt32(OFF_ENTRY, entryIdx, true);
+              region.run();
+              flat.readRegs(emu.cpu);
+              flat.readFlags(emu.cpu);
+              emu.cpu.eip = flat.readEip();
+              stepCount += 4096;
+              emu._pitInsnCount += 4096;
+              tkHitA = tkHitB = 0;
+              continue;
+            }
           }
-          // Compile the hot loop
-          const compiled = compileBlock(emu.memory, eip, emu.cpu.use32);
-          if (compiled) { emu.jitCache.put(compiled); continue; }
+          // Record hotness and trigger async compilation
+          if (!emu._wasmPending.has(regionBase)) {
+            const count = (emu._wasmHotness.get(regionBase) || 0) + 1;
+            emu._wasmHotness.set(regionBase, count);
+            if (count >= 50) {
+              emu._wasmPending.add(regionBase);
+              const flat = emu.flatMemory;
+              const wasmImports: WasmImports = {
+                writeVGA: (addr, val) => { emu.memory.writeU8(addr, val); },
+                testCC: (cc) => {
+                  // Sync flags from flat buffer (written by WASM) to CPU before materializing
+                  flat.readFlags(emu.cpu);
+                  materializeFlags(emu.cpu);
+                  return emu.cpu.testCC(cc) ? 1 : 0;
+                },
+                portIn: (port) => emu.portIn(port),
+                portOut: (port, val) => emu.portOut(port, val),
+              };
+              compileWasmRegion(emu.memory, eip, emu.cpu.use32, flat, wasmImports).then(compiled => {
+                emu._wasmPending.delete(regionBase);
+                if (compiled) emu.wasmRegions.set(regionBase, compiled);
+              });
+            }
+          }
         }
         tkHitA = tkHitB = 0;
       }
