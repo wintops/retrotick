@@ -1,5 +1,6 @@
 import { Memory } from './memory';
 import { CPU } from './x86/cpu';
+import { JitCache } from './x86/jit-cache';
 import type { LoadedPE } from './pe-loader';
 import type { LoadedNE, NEResourceEntry } from './ne-loader';
 import { HandleTable } from './win32/handles';
@@ -396,6 +397,14 @@ export class Emulator {
   _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
   _pitStartTime = [0, 0, 0];               // performance.now() when each counter was last programmed
   _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
+
+  // JIT compiler cache (wired to memory for self-modifying code invalidation)
+  jitCache = (() => {
+    const jit = new JitCache();
+    jit.memory = this.memory;
+    this.memory.onJitInvalidate = (segKey: number) => jit.invalidateSegment(segKey);
+    return jit;
+  })();
 
   // VGA state
   vga = new VGAState();

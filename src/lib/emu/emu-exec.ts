@@ -3,6 +3,8 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { tryFastLoop } from './fast-loops';
+import { JitCache } from './x86/jit-cache';
+import { compileBlock } from './x86/jit-compile';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -780,7 +782,7 @@ export function emuTick(emu: Emulator): void {
       continue;
     }
 
-    // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
+    // Tight loop fast-forward + JIT (triggered by loop detection, zero overhead otherwise)
     {
       let tkTry = false;
       if ((stepCount & 0xFF) === 0 && stepCount > 0) {
@@ -791,8 +793,24 @@ export function emuTick(emu: Emulator): void {
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
       if (tkTry) {
+        // Try fast-loop first (handles simple tight loops)
         const it = tryFastLoop(emu.cpu, emu.memory);
         if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        // Fast-loop failed — try JIT (compiles more complex blocks)
+        if (!(emu.cpu.flagsCache & 0x100)) {
+          const block = emu.jitCache.get(eip);
+          if (block) {
+            const nextEip = block.fn(emu.cpu.reg, emu.memory, emu.cpu);
+            emu.cpu.eip = nextEip >>> 0;
+            stepCount += block.instrCount;
+            emu._pitInsnCount += block.instrCount;
+            tkHitA = tkHitB = 0;
+            continue;
+          }
+          // Compile the hot loop
+          const compiled = compileBlock(emu.memory, eip, emu.cpu.use32);
+          if (compiled) { emu.jitCache.put(compiled); continue; }
+        }
         tkHitA = tkHitB = 0;
       }
     }

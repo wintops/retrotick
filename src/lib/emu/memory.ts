@@ -249,10 +249,27 @@ export class Memory {
   }
 
   _watchAddr = 0; // temporary memory write watch
+  /** JIT invalidation callback — set by emulator to invalidate compiled blocks on code writes */
+  onJitInvalidate: ((segKey: number) => void) | null = null;
+  private _jitSegKeys: Set<number> | null = null;
+  /** Register a segment key as containing JIT code */
+  jitMarkSegment(segKey: number): void {
+    if (!this._jitSegKeys) this._jitSegKeys = new Set();
+    this._jitSegKeys.add(segKey);
+  }
+  /** Unregister a segment key */
+  jitUnmarkSegment(segKey: number): void {
+    this._jitSegKeys?.delete(segKey);
+  }
+
   writeU8(addr: number, val: number): void {
     if (this._watchAddr && addr === this._watchAddr) {
       console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
       console.trace();
+    }
+    // JIT invalidation: if writing to a segment with compiled code, invalidate it
+    if (this._jitSegKeys && this._jitSegKeys.has(addr >>> 16) && this.onJitInvalidate) {
+      this.onJitInvalidate(addr >>> 16);
     }
     if (this.vgaPlanar && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
