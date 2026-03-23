@@ -147,7 +147,7 @@ export class VGAState {
   /** Refresh retrace constants when CRTC regs change */
   private _updateRetraceConsts(): void {
     this._cachedVisibleLines = this.getVisibleHeight();
-    const totalLines = (this._cachedVisibleLines <= 350) ? 449 : 525;
+    const totalLines = (this._cachedVisibleLines <= 400) ? 449 : 525;
     this._cachedFrameUs = totalLines * 31.778;
     this._retraceConstsDirty = false;
   }

@@ -671,8 +671,8 @@ export function emuTick(emu: Emulator): void {
       dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
-    if ((i & 0x1FFF) === 0 && i > 0) {
-      // Periodic time check — amortize performance.now() cost across 8192 instructions
+    if ((i & 0xFFF) === 0 && i > 0) {
+      // Periodic time check — amortize performance.now() cost across 4096 instructions
       const now = performance.now();
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
       if (!waitingForPostKeyWindow && now - tickStart > tickMs) break;
