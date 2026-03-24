@@ -61,10 +61,11 @@ export function emit8bitALU(
 ): number {
   const { b, mem, tmp1, tmp2 } = ctx;
   const modrm = mem.readU8(pos);
+  if (aluOp === 2 || aluOp === 3) return -1;
+  // Bail on [mem] OP reg8 write-back before emitting bytecode
+  if (!toReg && ((modrm >> 6) & 3) !== 3) return -1;
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const regF = mr.reg;
-
-  if (aluOp === 2 || aluOp === 3) return -1;
 
   if (mr.isReg) {
     const dst8 = toReg ? regF : mr.rm;

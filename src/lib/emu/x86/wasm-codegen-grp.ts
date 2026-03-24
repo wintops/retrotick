@@ -8,7 +8,7 @@ import type { CodegenCtx } from './wasm-codegen';
 import { emitReg8Get, emitReg8Set, emitRegGet16, emitRegSet16 } from './wasm-codegen';
 import { REG_ESP } from './wasm-codegen';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
-import { emitModRM32Addr } from './wasm-codegen-mem';
+import { emitModRM32Addr, emitAddrMask } from './wasm-codegen-mem';
 import { emitAddSegBase, emitStoreI32Direct } from './wasm-codegen-mem';
 import {
   LOP_ADD8, LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,
@@ -66,12 +66,11 @@ export function emitGroup80(
   tmp1: number, tmp2: number, _writeVGAIdx: number,
 ): number {
   const modrm = mem.readU8(pos);
-  const mr = emitModRM32Addr(b, modrm, mem, pos);
-  const aluOp = mr.reg;
-  const imm = mem.readU8(pos + mr.extraBytes);
-
+  const aluOp = (modrm >> 3) & 7;
   if (aluOp === 2 || aluOp === 3) return -1;
-  if (!mr.isReg) return -1;
+  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
+  const mr = emitModRM32Addr(b, modrm, mem, pos);
+  const imm = mem.readU8(pos + mr.extraBytes);
 
   const rm8 = mr.rm;
   emitReg8Get(b, rm8); b.setLocal(tmp1);
@@ -100,13 +99,12 @@ export function emitGroup81(
   tmp1: number, tmp2: number,
 ): number {
   const modrm = mem.readU8(pos);
+  const aluOp = (modrm >> 3) & 7;
+  if (aluOp === 2 || aluOp === 3) return -1; // ADC/SBB
+  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
   const mr = emitModRM32Addr(b, modrm, mem, pos);
-  const aluOp = mr.reg;
   const immSize = is16 ? 2 : 4;
   const imm = is16 ? mem.readU16(pos + mr.extraBytes) : mem.readU32(pos + mr.extraBytes) | 0;
-
-  if (aluOp === 2 || aluOp === 3) return -1; // ADC/SBB
-  if (!mr.isReg) return -1;
 
   const rm = mr.rm;
   b.getLocal(rm); b.setLocal(tmp1); // save old value
@@ -133,11 +131,10 @@ export function emitGroup81(
 export function emitGroupFE(ctx: CodegenCtx, pos: number): number {
   const { b, mem, tmp1, tmp2 } = ctx;
   const modrm = mem.readU8(pos);
+  if (((modrm >> 3) & 7) > 1) return -1;
+  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const op = mr.reg;
-
-  if (op > 1) return -1;
-  if (!mr.isReg) return -1;
 
   const rm8 = mr.rm;
   emitReg8Get(b, rm8); b.setLocal(tmp1);
@@ -156,13 +153,13 @@ export function emitGroupFE(ctx: CodegenCtx, pos: number): number {
 export function emitGroupFF(ctx: CodegenCtx, pos: number, is16: boolean): number {
   const { b, mem, tmp1 } = ctx;
   const modrm = mem.readU8(pos);
+  const op = (modrm >> 3) & 7;
+  if (op === 2 || op === 3 || op === 4 || op === 5) return -1; // bail before emitting bytecode
+  // For INC/DEC (op 0/1), bail on memory operands before emitModRM32Addr
+  if ((op === 0 || op === 1) && ((modrm >> 6) & 3) !== 3) return -1;
   const mr = emitModRM32Addr(b, modrm, mem, pos);
-  const op = mr.reg;
-
-  if (op === 2 || op === 3 || op === 4 || op === 5) return -1;
 
   if (op === 0 || op === 1) {
-    if (!mr.isReg) return -1;
     const rm = mr.rm;
     b.getLocal(rm); b.setLocal(tmp1);
     if (is16) {
@@ -197,6 +194,7 @@ export function emitGroupFF(ctx: CodegenCtx, pos: number, is16: boolean): number
         emitStoreI32Direct(b);
       }
     } else {
+      emitAddrMask(b);
       if (is16) { b.loadU16(0); } else { b.loadI32Unaligned(0); }
       b.setLocal(tmp1);
       if (is16) {
@@ -225,10 +223,9 @@ export function emitGroupFF(ctx: CodegenCtx, pos: number, is16: boolean): number
 export function emitGroupF6(ctx: CodegenCtx, pos: number): number {
   const { b, mem, tmp1, tmp2 } = ctx;
   const modrm = mem.readU8(pos);
+  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const op = mr.reg;
-
-  if (!mr.isReg) return -1;
 
   const rm8 = mr.rm;
   switch (op) {
@@ -263,10 +260,9 @@ export function emitGroupF6(ctx: CodegenCtx, pos: number): number {
 export function emitGroupF7(ctx: CodegenCtx, pos: number, is16: boolean): number {
   const { b, mem, tmp1, tmp2 } = ctx;
   const modrm = mem.readU8(pos);
+  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const op = mr.reg;
-
-  if (!mr.isReg) return -1;
 
   const rm = mr.rm;
   const immSize = is16 ? 2 : 4;

@@ -69,17 +69,17 @@ export function emitALU_rm(
   aluType: number, direction: 'rm_reg' | 'reg_rm',
   tmp1: number, tmp2: number,
 ): number {
+  if (aluType === 2 || aluType === 3) return -1; // ADC/SBB not supported
   const modrm = mem.readU8(pos);
+  // Bail early for [mem] OP reg write-back (not yet implemented) — before emitting any bytecode
+  const isDstReg = direction === 'reg_rm';
+  const mod = (modrm >> 6) & 3;
+  if (!isDstReg && mod !== 3) return -1; // [mem] OP reg: bail before emitModRM32Addr
+
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   const regF = mr.reg;
   const rm = mr.rm;
-
-  // Determine dst and src
-  const isDstReg = direction === 'reg_rm';
-  const dstIsReg = isDstReg || mr.isReg;
-
-  if (aluType === 2 || aluType === 3) return -1; // ADC/SBB not supported
 
   if (mr.isReg) {
     // reg-reg case
@@ -115,30 +115,8 @@ export function emitALU_rm(
         emitSetLazyFlagsImm(b, lop, regF, 0, 0);
         b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
       }
-    } else {
-      // [mem] OP reg — addr on stack
-      b.teeLocal(tmp1); // save addr
-      if (is16) { b.loadU16(0); } else { b.loadI32Unaligned(0); }
-      b.setLocal(tmp2); // old mem value
-      if (is16) { b.getLocal(tmp2); rg16(b, regF); } else { b.getLocal(tmp2); b.getLocal(regF); }
-      const lop = emitAluOp(b, aluType, is16);
-      if (aluType === 7) {
-        // CMP: don't write back
-        b.setLocal(tmp2 + 1 < 13 ? tmp2 : tmp1); // use available tmp
-        // Just set flags
-        b.drop(); // drop result... actually we need it
-        // Redo: result is on stack
-      } else {
-        b.teeLocal(tmp2 + 1 < 13 ? tmp1 : tmp2); // save result
-        // Write back to memory
-        b.getLocal(tmp1); // addr
-        b.getLocal(tmp2 + 1 < 13 ? tmp1 : tmp2); // result...
-        // This is getting complicated with locals. Let me simplify.
-      }
-      // For now, bail on [mem] OP reg write-back (complex local management)
-      // TODO: implement properly
-      return -1;
     }
+    // Note: [mem] OP reg write-back is bailed early (before emitModRM32Addr)
   }
   return mr.extraBytes;
 }
@@ -212,21 +190,21 @@ export function emitGroup83(
     b.setLocal(tmp2); // old value
     b.getLocal(tmp2); b.constI32(imm);
     const lop = emitAluOp(b, aluOp, is16);
+    const result = b.allocLocal();
     if (aluOp === 7) {
-      // CMP — don't write back
-      b.drop();
+      // CMP — save result for flags, don't write back
+      b.setLocal(result);
     } else {
-      // Write back
-      const result = b.allocLocal();
+      // Write back to memory
       b.setLocal(result);
       b.getLocal(tmp1); // addr
       b.getLocal(result);
       if (is16) { b.storeU16(0); } else { b.storeI32Unaligned(0); }
-      b.freeLocal(result);
     }
-    emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
-    b.constI32(0); b.getLocal(tmp2); b.storeI32(OFF_FLAGS + 8);
-    b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
+    emitSetLazyFlagsImm(b, lop, result, 0, 0); // result, not tmp2 (old value)
+    b.constI32(0); b.getLocal(tmp2); b.storeI32(OFF_FLAGS + 8); // lazyA = old value
+    b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12); // lazyB = imm
+    b.freeLocal(result);
   }
   return mr.extraBytes + 1; // +1 for imm8
 }
