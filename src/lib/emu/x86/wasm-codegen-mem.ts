@@ -15,7 +15,7 @@ export function setAddrSize16(v: boolean): void { _addrSize16 = v; }
 
 /** Emit: mask the address on the WASM stack to stay within the 128MB flat buffer.
  *  Prevents OOB traps from negative offsets or high 32-bit addresses. */
-function emitAddrMask(b: WasmBuilder): void {
+export function emitAddrMask(b: WasmBuilder): void {
   b.constI32(ADDR_MASK);
   b.andI32();
 }

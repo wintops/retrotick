@@ -96,16 +96,16 @@ function writeBytes(mem, addr, bytes) {
   assert(b0 && b0.endAddr === 0x6006, `modrm: correct endAddr`);
 }
 
-// Test 7: Port I/O is block boundary
+// Test 7: Port I/O is NOT a block boundary (handled by imported portIn/portOut)
 {
   const mem = new Memory();
   // 0x7000: IN AL, DX (EC)
   // 0x7001: NOP; RET
   writeBytes(mem, 0x7000, [0xEC, 0x90, 0xC3]);
   const blocks = analyzeRegion(mem, 0x7000, true);
-  // IN AL,DX should end the block
+  // IN AL,DX is a regular instruction; block ends at RET
   const b0 = blocks.get(0x7000);
-  assert(b0 && b0.endAddr === 0x7001, `port io: block ends after IN`);
+  assert(b0 && b0.endAddr === 0x7003, `port io: block includes IN and ends at RET`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
