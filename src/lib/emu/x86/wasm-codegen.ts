@@ -10,7 +10,7 @@ import type { Memory } from '../memory';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
 import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16 } from './wasm-codegen-mem';
 import { emitMOV_rm, emitALU_rm, emitLEA, emitGroup83, emitTEST_rm } from './wasm-codegen-modrm';
-import { LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
+import { LOP_ADD8, LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_OR8, LOP_XOR8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
 import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_moffs_AL, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
 import { emitGroup80, emitGroup81, emitGroupFE, emitGroupFF, emitGroupF6, emitGroupF7 } from './wasm-codegen-grp';
 
@@ -282,6 +282,28 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
       const imm = mem.readU8(pos); pos++;
       emitReg8Get(b, 0); b.constI32(imm); b.andI32(); b.setLocal(tmp1);
       emitSetLazyFlagsImm(b, LOP_AND8, tmp1, 0, 0);
+      break;
+    }
+
+    // ALU AL, imm8 (04=ADD, 0C=OR, 24=AND, 2C=SUB, 34=XOR)
+    case 0x04: case 0x0C: case 0x24: case 0x2C: case 0x34: {
+      const imm = mem.readU8(pos); pos++;
+      const aluMap: Record<number, [() => void, number]> = {
+        0x04: [() => b.addI32(), LOP_ADD8],
+        0x0C: [() => b.orI32(), LOP_OR8],
+        0x24: [() => b.andI32(), LOP_AND8],
+        0x2C: [() => b.subI32(), LOP_SUB8],
+        0x34: [() => b.xorI32(), LOP_XOR8],
+      };
+      const [aluFn, lop] = aluMap[op];
+      emitReg8Get(b, 0); b.setLocal(tmp1); // save old AL
+      b.getLocal(tmp1); b.constI32(imm);
+      aluFn();
+      b.constI32(0xFF); b.andI32(); b.teeLocal(tmp2);
+      emitReg8Set(b, 0); // write result to AL
+      emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8); // lazyA = old AL
+      b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12); // lazyB = imm
       break;
     }
 

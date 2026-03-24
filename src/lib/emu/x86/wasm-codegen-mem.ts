@@ -189,8 +189,13 @@ export function emitModRM32Addr(
 
   if (mod === 3) return { isReg: true, reg, rm, extraBytes: 1 };
 
-  // 16-bit addressing: bail for memory operands (codegen not yet validated)
-  if (_addrSize16) return { isReg: false, reg, rm, extraBytes: -1 };
+  // 16-bit addressing: dispatch to emitModRM16Addr (includes segment base)
+  if (_addrSize16) {
+    const regLocals = [0, 1, 2, 3, 4, 5, 6, 7];
+    const dispBytes = emitModRM16Addr(b, regLocals, modrm, mem,
+      pos + 1, OFF_SEGBASES + 4, OFF_SEGBASES + 12);
+    return { isReg: false, reg, rm, extraBytes: 1 + dispBytes };
+  }
 
   let extra = 1; // ModRM byte itself
 
