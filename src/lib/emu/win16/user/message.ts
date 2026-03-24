@@ -955,8 +955,13 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       }
       // EM_SETHANDLE: read text from local buffer, update edit control
       if (message === EM_SETHANDLE) {
-        const handle = wParam;
+        let handle = wParam;
         if (handle) {
+          // Follow relocation chain (LocalReAlloc may have moved the block)
+          if (emu._localRelocations) {
+            let steps = 0;
+            while (emu._localRelocations.has(handle) && steps < 20) { handle = emu._localRelocations.get(handle)!; steps++; }
+          }
           const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
           const addr = dsBase + handle;
           const text = emu.memory.readCString(addr);

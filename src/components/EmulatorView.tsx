@@ -15,6 +15,7 @@ import { renderControlOverlay, effectiveClass } from './ControlOverlay';
 import { EmulatorDialog } from './EmulatorDialog';
 import { EXE_ICON_16 } from './DesktopIcon';
 import { FindDialog } from './FindDialog';
+import { FileDialog } from './win2k/FileDialog';
 import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
 import { loadRegistry, saveRegistry } from '../lib/registry-db';
@@ -538,52 +539,6 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         deleteFile(fileName).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
       };
 
-      // Wire up browser file picker for GetOpenFileName/GetSaveFileName
-      emu.onFileDialog = (type, filter, title) => {
-        return new Promise<{ name: string; data: ArrayBuffer } | null>((resolve) => {
-          if (type === 'open') {
-            const input = document.createElement('input');
-            input.type = 'file';
-            // Parse filter to extract extensions (e.g. "Text Files|*.txt|All Files|*.*")
-            if (filter) {
-              const parts = filter.split('|');
-              const exts: string[] = [];
-              for (let i = 1; i < parts.length; i += 2) {
-                const pat = parts[i].trim();
-                if (pat && pat !== '*.*' && pat !== '*') {
-                  // "*.txt;*.log" → ".txt,.log"
-                  pat.split(';').forEach(p => {
-                    const m = p.trim().match(/\*(\.\w+)/);
-                    if (m) exts.push(m[1]);
-                  });
-                }
-              }
-              if (exts.length > 0) input.accept = exts.join(',');
-            }
-            input.onchange = () => {
-              const file = input.files?.[0];
-              if (!file) { resolve(null); return; }
-              file.arrayBuffer().then(data => resolve({ name: file.name, data }));
-            };
-            // Handle cancel — input doesn't fire change on cancel, use focus fallback
-            const onFocus = () => {
-              setTimeout(() => {
-                if (!input.files?.length) resolve(null);
-                window.removeEventListener('focus', onFocus);
-              }, 300);
-            };
-            window.addEventListener('focus', onFocus);
-            input.click();
-          } else {
-            // Save: prompt for filename
-            const defaultName = title || 'untitled.txt';
-            const name = prompt('Save file as:', defaultName);
-            if (!name) { resolve(null); return; }
-            resolve({ name, data: new ArrayBuffer(0) });
-          }
-        });
-      };
-
       // Wire up browser download for Z:\ file save
       emu.fs.onFileSaveExternal = (name, data) => {
         const blob = new Blob([data]);
@@ -598,6 +553,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // Populate virtual filesystem with desktop files (for all app types)
       getAllFiles().then(files => {
         emu.fs.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
+        // Pre-populate data cache so file reads don't need another IndexedDB round-trip
+        const cache = (emu.fs as any).virtualFileCache as Map<string, ArrayBuffer> | undefined;
+        if (cache) {
+          for (const f of files) cache.set(f.name.toUpperCase(), f.data);
+        }
       });
 
       // Listen for window changes from emulator
@@ -788,47 +748,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     };
   }, [arrayBuffer, peInfo, resetCount]);
 
-  // --- File open/save dialogs (trigger native browser UI) ---
-  useEffect(() => {
-    if (commonDialog?.type === 'file-open') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.onchange = () => {
-        const file = input.files?.[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = () => {
-            commonDialog.onResult({ name: file.name, data: new Uint8Array(reader.result as ArrayBuffer) });
-            setCommonDialog(null);
-          };
-          reader.readAsArrayBuffer(file);
-        } else {
-          commonDialog.onResult(null);
-          setCommonDialog(null);
-        }
-      };
-      input.addEventListener('cancel', () => {
-        commonDialog.onResult(null);
-        setCommonDialog(null);
-      });
-      input.click();
-    }
-    if (commonDialog?.type === 'file-save') {
-      const name = prompt('Save as:', commonDialog.defaultName);
-      if (name) {
-        const blob = new Blob([commonDialog.content], { type: 'text/plain' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = name;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        commonDialog.onResult(name);
-      } else {
-        commonDialog.onResult(null);
-      }
-      setCommonDialog(null);
-    }
-  }, [commonDialog]);
+  // File open/save dialogs are now rendered as FileDialog components (see JSX below)
 
   // --- Find dialog: Find Next handler ---
   const handleFindNext = useCallback(() => {
@@ -1291,6 +1211,17 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             focused={focused}
           />
         )}
+        {(commonDialog?.type === 'file-open' || commonDialog?.type === 'file-save') && emuRef.current && (
+          <FileDialog
+            mode={commonDialog.type === 'file-open' ? 'open' : 'save'}
+            filter={commonDialog.filter}
+            initialFileName={commonDialog.type === 'file-save' ? commonDialog.defaultName : undefined}
+            fileManager={emuRef.current.fs}
+            additionalFiles={emuRef.current.additionalFiles}
+            focused={focused}
+            onResult={(result) => { commonDialog.onResult(result); setCommonDialog(null); }}
+          />
+        )}
       </>
     );
   }
@@ -1410,6 +1341,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); }}
           focused={focused}
           parentRef={desktopRef}
+        />
+      )}
+      {(commonDialog?.type === 'file-open' || commonDialog?.type === 'file-save') && emuRef.current && (
+        <FileDialog
+          mode={commonDialog.type === 'file-open' ? 'open' : 'save'}
+          filter={commonDialog.filter}
+          initialFileName={commonDialog.type === 'file-save' ? commonDialog.defaultName : undefined}
+          fileManager={emuRef.current.fs}
+          additionalFiles={emuRef.current.additionalFiles}
+          focused={focused}
+          parentRef={desktopRef}
+          onResult={(result) => { commonDialog.onResult(result); setCommonDialog(null); }}
         />
       )}
     </div>

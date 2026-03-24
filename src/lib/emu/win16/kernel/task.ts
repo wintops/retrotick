@@ -42,8 +42,16 @@ export function registerKernelTask(kernel: Win16Module, emu: Emulator, state: Ke
     emu.cpu.setReg16(1, 0x1000);  // CX = stack size
     emu.cpu.setReg16(7, hInstance); // DI = hInstance
     emu.cpu.setReg16(6, 0);       // SI = hPrevInstance
-    const cmdLineAddr = emu.allocHeap(16);
-    emu.memory.writeU8(cmdLineAddr, 0);
+    // Write command line at PSP offset 0x80 (Pascal string: length + string + \r)
+    // Win16 C runtime reads lpCmdLine from DS:0x81 (PSP command tail)
+    const cmdStr = emu.commandLine || '';
+    const dsBase = emu.cpu.segBases.get(emu.cpu.ds) ?? 0;
+    const len = Math.min(cmdStr.length, 126);
+    emu.memory.writeU8(dsBase + 0x80, len);
+    for (let i = 0; i < len; i++) {
+      emu.memory.writeU8(dsBase + 0x81 + i, cmdStr.charCodeAt(i) & 0xFF);
+    }
+    emu.memory.writeU8(dsBase + 0x81 + len, 0x00);
     emu.cpu.es = emu.cpu.ds;
     emu.cpu.setReg16(3, 0x81);    // BX = offset to command line in PSP
     // Return DWORD: DX:AX where AX=hInstance, DX=nCmdShow

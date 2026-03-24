@@ -44,8 +44,8 @@ export interface DialogControlInfo {
 
 export type CommonDialogRequest =
   | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void }
-  | { type: 'file-open'; onResult: (file: { name: string; data: Uint8Array } | null) => void }
-  | { type: 'file-save'; defaultName: string; content: string; onResult: (name: string | null) => void }
+  | { type: 'file-open'; filter?: string; initialDir?: string; onResult: (result: { path: string; data?: ArrayBuffer } | null) => void }
+  | { type: 'file-save'; filter?: string; initialDir?: string; defaultName?: string; onResult: (result: { path: string } | null) => void }
   | { type: 'find'; editHwnd: number; onClose: () => void };
 
 export interface DialogInfo {
@@ -335,6 +335,8 @@ export class Emulator {
   _dosHwKeyReadThisTick = false;
   _dosDTA = 0;
   _dosDtaSeg?: number;
+  /** Win16 local heap relocation tracking (set by kernel/memory.ts) */
+  _localRelocations?: Map<number, number>;
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;

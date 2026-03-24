@@ -159,8 +159,29 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
       }
       onRunExe(f.data, result.peInfo, additional, name, commandLine);
     } else {
-      onViewResources(f.data, name);
+      // Try to open with a default app based on file extension
+      const opened = await openWithDefaultApp(name, stored);
+      if (!opened) onViewResources(f.data, name);
     }
+  }
+
+  async function openWithDefaultApp(name: string, stored: { name: string; data: ArrayBuffer }[]): Promise<boolean> {
+    const ext = name.toLowerCase().split('.').pop();
+    const NOTEPAD_EXTS = new Set(['txt', 'ini', 'log', 'nfo', 'diz', '1st']);
+    if (!ext || !NOTEPAD_EXTS.has(ext)) return false;
+    // Find notepad.exe in stored files
+    const notepad = stored.find(s => s.name.toLowerCase().replace(/^.*\//, '') === 'notepad.exe');
+    if (!notepad) return false;
+    const result = isExeFile(notepad.data, notepad.name);
+    if (!result.ok || !result.peInfo) return false;
+    const additional = new Map<string, ArrayBuffer>();
+    for (const s of stored) {
+      if (s.name !== notepad.name) additional.set(s.name, s.data);
+    }
+    // Pass file path as command line (D:\filename for root files)
+    const filePath = 'D:\\' + name.replace(/\//g, '\\');
+    onRunExe(notepad.data, result.peInfo, additional, notepad.name, filePath);
+    return true;
   }
 
   async function handleOpen(name: string, fileIsFolder: boolean) {

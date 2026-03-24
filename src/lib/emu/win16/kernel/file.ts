@@ -31,6 +31,9 @@ export function registerKernelFile(kernel: Win16Module, emu: Emulator, state: Ke
     } else if (existing.source === 'additional') {
       const ab = emu.additionalFiles.get(existing.name);
       if (ab) syncData = new Uint8Array(ab);
+    } else if (existing.source === 'virtual') {
+      const cached = (fs as any).virtualFileCache?.get(existing.name.toUpperCase());
+      if (cached) syncData = new Uint8Array(cached);
     }
     console.log(`[FILE16] openFileByPath("${path}") → resolved="${upper}" source=${existing.source} size=${existing.size} data=${syncData ? syncData.length : 'null'}`);
     return emu.handles.alloc('file', {

@@ -19,6 +19,8 @@ export interface DirEntry {
   name: string;
   size: number;
   isDir: boolean;
+  /** Drive letter (uppercase, e.g. 'C') — set by getVirtualDirListing */
+  drive?: string;
 }
 
 export interface OpenFile {
@@ -142,8 +144,15 @@ export class DefaultFileManager implements FileManager {
       const relPath = file.path.substring(3);
       const vf = this.virtualFiles.find(f => this.vfToRelPath(f.name) === relPath);
       const name = vf ? vf.name : relPath.replace(/\\/g, '/');
-      if (vf) vf.size = file.data.length;
-      const ab = file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + file.data.byteLength) as ArrayBuffer;
+      // Trim data to actual file size (buffer may be over-allocated by _lwrite)
+      const actualSize = Math.min(file.size, file.data.byteLength);
+      const ab = file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + actualSize) as ArrayBuffer;
+      if (vf) {
+        vf.size = actualSize;
+      } else {
+        // New file — add to virtualFiles so it's visible immediately
+        this.virtualFiles.push({ name, size: actualSize });
+      }
       this.virtualFileCache.set(name.toUpperCase(), ab);
       this.onFileSave(name, ab);
     }
@@ -349,6 +358,18 @@ export class DefaultFileManager implements FileManager {
     const filePat = lastSlash >= 0 ? resolved.substring(lastSlash + 1) : resolved;
 
     const results: DirEntry[] = [];
+
+    // Z:\ — external files from browser file picker
+    if (dirPart.startsWith('Z:\\')) {
+      for (const [key, ext] of this.externalFiles) {
+        const keyDir = key.substring(0, key.lastIndexOf('\\') + 1);
+        if (keyDir !== dirPart) continue;
+        const fileName = ext.name;
+        if (this.matchesPattern(fileName, filePat)) {
+          results.push({ name: fileName, size: ext.data.length, isDir: false });
+        }
+      }
+    }
 
     if (dirPart.startsWith('D:\\')) {
       const dirRel = dirPart.substring(3);

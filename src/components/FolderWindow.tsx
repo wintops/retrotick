@@ -30,7 +30,7 @@ interface FolderWindowProps {
   onFocus: () => void;
   onMinimize: () => void;
   onOpenFolder: (path: string) => void;
-  onRunExe: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles: Map<string, ArrayBuffer> | undefined, exeName: string) => void;
+  onRunExe: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles: Map<string, ArrayBuffer> | undefined, exeName: string, commandLine?: string) => void;
   onViewResources: (arrayBuffer: ArrayBuffer, fileName?: string) => void;
   zIndex: number;
   focused: boolean;
@@ -183,9 +183,28 @@ export function FolderWindow({
         const fullPath = cleanPath + '/' + displayName(item.name);
         onRunExe(f.data, result.peInfo, additional, fullPath);
       } else {
-        onViewResources(f.data, displayName(item.name));
+        // Try to open with a default app based on file extension
+        const opened = await openWithDefaultApp(item.name, allFiles);
+        if (!opened) onViewResources(f.data, displayName(item.name));
       }
     }
+  }
+
+  async function openWithDefaultApp(name: string, stored: { name: string; data: ArrayBuffer }[]): Promise<boolean> {
+    const ext = name.toLowerCase().split('.').pop();
+    const NOTEPAD_EXTS = new Set(['txt', 'ini', 'log', 'nfo', 'diz', '1st']);
+    if (!ext || !NOTEPAD_EXTS.has(ext)) return false;
+    const notepad = stored.find(s => s.name.toLowerCase().replace(/^.*\//, '') === 'notepad.exe');
+    if (!notepad) return false;
+    const result = isExeFile(notepad.data, notepad.name);
+    if (!result.ok || !result.peInfo) return false;
+    const additional = new Map<string, ArrayBuffer>();
+    for (const s of stored) {
+      if (s.name !== notepad.name) additional.set(s.name, s.data);
+    }
+    const filePath = 'D:\\' + name.replace(/\//g, '\\');
+    onRunExe(notepad.data, result.peInfo, additional, notepad.name, filePath);
+    return true;
   }
 
   async function handleNewFolder() {

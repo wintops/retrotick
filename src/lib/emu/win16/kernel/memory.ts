@@ -342,7 +342,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     }
     state.localSizes.set(newHandle, bytes);
     // Track relocation so LocalLock(oldHandle) returns the new address
-    if (!state.localRelocations) state.localRelocations = new Map();
+    if (!state.localRelocations) { state.localRelocations = new Map(); emu._localRelocations = state.localRelocations; }
     state.localRelocations.set(handle, newHandle);
     console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) → 0x${newHandle.toString(16)}`);
     return newHandle;

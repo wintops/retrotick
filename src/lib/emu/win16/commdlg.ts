@@ -27,20 +27,23 @@ export function registerWin16Commdlg(emu: Emulator): void {
     emu.waitingForMessage = true;
     emu.onShowCommonDialog?.({
       type: 'file-open',
-      onResult: (file) => {
+      onResult: (result) => {
         emu.waitingForMessage = false;
-        if (file) {
-          // Store in externalFiles as Z:\filename
-          const upperPath = 'Z:\\' + file.name.toUpperCase();
-          emu.fs.externalFiles.set(upperPath, { data: file.data, name: file.name });
+        if (result) {
+          // If imported file with data, store in externalFiles
+          if (result.data && result.path.toUpperCase().startsWith('Z:\\')) {
+            const data = new Uint8Array(result.data);
+            emu.fs.externalFiles.set(result.path.toUpperCase(), {
+              data, name: result.path.substring(3),
+            });
+          }
           // Write path into lpstrFile buffer
-          const path = 'Z:\\' + file.name;
-          console.log(`[COMMDLG] GetOpenFileName: storing "${upperPath}" (${file.data.length} bytes), writing path "${path}" to buffer at 0x${lpstrFile.toString(16)}, nMaxFile=${nMaxFile}`);
           if (lpstrFile && nMaxFile > 0) {
-            for (let i = 0; i < Math.min(path.length, nMaxFile - 1); i++) {
-              emu.memory.writeU8(lpstrFile + i, path.charCodeAt(i) & 0xFF);
+            const toWrite = result.path.substring(0, nMaxFile - 1);
+            for (let i = 0; i < toWrite.length; i++) {
+              emu.memory.writeU8(lpstrFile + i, toWrite.charCodeAt(i) & 0xFF);
             }
-            emu.memory.writeU8(lpstrFile + Math.min(path.length, nMaxFile - 1), 0);
+            emu.memory.writeU8(lpstrFile + toWrite.length, 0);
           }
           emuCompleteThunk16(emu, 1, stackBytes);
         } else {
@@ -95,17 +98,17 @@ export function registerWin16Commdlg(emu: Emulator): void {
     emu.waitingForMessage = true;
     emu.onShowCommonDialog?.({
       type: 'file-save',
-      defaultName,
-      content,
-      onResult: (name) => {
+      defaultName: defaultName || undefined,
+      onResult: (result) => {
         emu.waitingForMessage = false;
-        if (name) {
-          // Write chosen filename into lpstrFile buffer
+        if (result) {
+          // Write chosen path into lpstrFile buffer
           if (lpstrFile && nMaxFile > 0) {
-            for (let i = 0; i < Math.min(name.length, nMaxFile - 1); i++) {
-              emu.memory.writeU8(lpstrFile + i, name.charCodeAt(i) & 0xFF);
+            const toWrite = result.path.substring(0, nMaxFile - 1);
+            for (let i = 0; i < toWrite.length; i++) {
+              emu.memory.writeU8(lpstrFile + i, toWrite.charCodeAt(i) & 0xFF);
             }
-            emu.memory.writeU8(lpstrFile + Math.min(name.length, nMaxFile - 1), 0);
+            emu.memory.writeU8(lpstrFile + toWrite.length, 0);
           }
           emuCompleteThunk16(emu, 1, stackBytes);
         } else {

@@ -866,9 +866,9 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     const lpString = emu.resolveFarPtr(lpStringRaw);
     const text = lpString ? emu.memory.readCString(lpString) : '';
     if (wnd) {
-      console.log(`[WIN16] SetWindowText(0x${hWnd.toString(16)}, "${text}") class=${wnd.classInfo?.className} prev="${wnd.title}"`);
       wnd.title = text;
       if (wnd.domInput) wnd.domInput.value = text;
+      if (hWnd === emu.mainWindow) emu.onWindowChange?.(wnd);
       emu.notifyControlOverlays();
     }
     return 0;

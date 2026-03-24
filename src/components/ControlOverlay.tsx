@@ -348,6 +348,20 @@ export function renderControlOverlay(
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (wnd) {
         wnd.title = text;
+        // Sync text to the local memory buffer (Win16 apps read it directly via LocalLock)
+        if (wnd.editBufferHandle) {
+          let handle = wnd.editBufferHandle;
+          if (emu._localRelocations) {
+            let steps = 0;
+            while (emu._localRelocations.has(handle) && steps < 20) { handle = emu._localRelocations.get(handle)!; steps++; }
+          }
+          const dsBase = emu.cpu?.segBases.get(emu.cpu.ds) ?? 0;
+          const addr = dsBase + handle;
+          for (let i = 0; i < text.length; i++) {
+            emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
+          }
+          emu.memory.writeU8(addr + text.length, 0);
+        }
         // Also update dialog controlValues so GetDlgItemInt/GetDlgItemText see it
         if (emu.dialogState && wnd.controlId !== undefined) {
           emu.dialogState.info.controlValues.set(wnd.controlId, text);

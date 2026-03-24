@@ -65,6 +65,17 @@ export interface UiStrings {
   folderEmpty: string;
   dropHint: string;
   rightClickHint: string;
+  // File dialog
+  lookIn: string;
+  saveIn: string;
+  fileName: string;
+  filesOfType: string;
+  save: string;
+  saveAs: string;
+  importFromPC: string;
+  newFolderPrompt: string;
+  empty: string;
+  confirmOverwrite: string;
 }
 
 const en: UiStrings = {
@@ -127,6 +138,16 @@ const en: UiStrings = {
   folderEmpty: 'This folder is empty',
   dropHint: 'Drop EXE / DLL files to run apps or inspect resources',
   rightClickHint: 'Right-click desktop for actions',
+  lookIn: 'Look in:',
+  saveIn: 'Save in:',
+  fileName: 'File name:',
+  filesOfType: 'Files of type:',
+  save: 'Save',
+  saveAs: 'Save As',
+  importFromPC: 'Import from local computer...',
+  newFolderPrompt: 'New folder name:',
+  empty: '(empty)',
+  confirmOverwrite: '{0} already exists.\nDo you want to replace it?',
 };
 
 const fr: UiStrings = {
@@ -189,6 +210,16 @@ const fr: UiStrings = {
   folderEmpty: 'Ce dossier est vide',
   dropHint: 'D\u00e9posez des fichiers EXE / DLL pour lancer des applis ou inspecter les ressources',
   rightClickHint: 'Clic droit sur le bureau pour les actions',
+  lookIn: 'Regarder dans :',
+  saveIn: 'Enregistrer dans :',
+  fileName: 'Nom du fichier :',
+  filesOfType: 'Type de fichiers :',
+  save: 'Enregistrer',
+  saveAs: 'Enregistrer sous',
+  importFromPC: "Importer depuis l'ordinateur...",
+  newFolderPrompt: 'Nom du nouveau dossier :',
+  empty: '(vide)',
+  confirmOverwrite: '{0} existe d\u00e9j\u00e0.\nVoulez-vous le remplacer ?',
 };
 
 const de: UiStrings = {
@@ -251,6 +282,16 @@ const de: UiStrings = {
   folderEmpty: 'Dieser Ordner ist leer',
   dropHint: 'EXE-/DLL-Dateien hierher ziehen, um Apps auszuf\u00fchren oder Ressourcen anzuzeigen',
   rightClickHint: 'Rechtsklick auf den Desktop f\u00fcr Aktionen',
+  lookIn: 'Suchen in:',
+  saveIn: 'Speichern in:',
+  fileName: 'Dateiname:',
+  filesOfType: 'Dateityp:',
+  save: 'Speichern',
+  saveAs: 'Speichern unter',
+  importFromPC: 'Vom lokalen Computer importieren...',
+  newFolderPrompt: 'Name des neuen Ordners:',
+  empty: '(leer)',
+  confirmOverwrite: '{0} ist bereits vorhanden.\nM\u00f6chten Sie die Datei ersetzen?',
 };
 
 const es: UiStrings = {
@@ -313,6 +354,16 @@ const es: UiStrings = {
   folderEmpty: 'Esta carpeta est\u00e1 vac\u00eda',
   dropHint: 'Arrastre archivos EXE / DLL para ejecutar aplicaciones o inspeccionar recursos',
   rightClickHint: 'Clic derecho en el escritorio para acciones',
+  lookIn: 'Buscar en:',
+  saveIn: 'Guardar en:',
+  fileName: 'Nombre de archivo:',
+  filesOfType: 'Tipo de archivos:',
+  save: 'Guardar',
+  saveAs: 'Guardar como',
+  importFromPC: 'Importar desde el equipo local...',
+  newFolderPrompt: 'Nombre de la nueva carpeta:',
+  empty: '(vac\u00edo)',
+  confirmOverwrite: '{0} ya existe.\n\u00bfDesea reemplazarlo?',
 };
 
 const ja: UiStrings = {
@@ -375,6 +426,16 @@ const ja: UiStrings = {
   folderEmpty: '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u30fc\u306f\u7a7a\u3067\u3059',
   dropHint: 'EXE / DLL \u30d5\u30a1\u30a4\u30eb\u3092\u30c9\u30ed\u30c3\u30d7\u3057\u3066\u30a2\u30d7\u30ea\u3092\u5b9f\u884c\u307e\u305f\u306f\u30ea\u30bd\u30fc\u30b9\u3092\u8868\u793a',
   rightClickHint: '\u53f3\u30af\u30ea\u30c3\u30af\u3067\u64cd\u4f5c\u30e1\u30cb\u30e5\u30fc\u3092\u8868\u793a',
+  lookIn: '\u30d5\u30a1\u30a4\u30eb\u306e\u5834\u6240:',
+  saveIn: '\u4fdd\u5b58\u3059\u308b\u5834\u6240:',
+  fileName: '\u30d5\u30a1\u30a4\u30eb\u540d:',
+  filesOfType: '\u30d5\u30a1\u30a4\u30eb\u306e\u7a2e\u985e:',
+  save: '\u4fdd\u5b58',
+  saveAs: '\u540d\u524d\u3092\u4ed8\u3051\u3066\u4fdd\u5b58',
+  importFromPC: '\u30ed\u30fc\u30ab\u30eb\u30b3\u30f3\u30d4\u30e5\u30fc\u30bf\u304b\u3089\u30a4\u30f3\u30dd\u30fc\u30c8...',
+  newFolderPrompt: '\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0\u540d:',
+  empty: '(\u7a7a)',
+  confirmOverwrite: '{0} \u306f\u65e2\u306b\u5b58\u5728\u3057\u307e\u3059\u3002\n\u7f6e\u304d\u63db\u3048\u307e\u3059\u304b?',
 };
 
 const zhCN: UiStrings = {
@@ -437,6 +498,16 @@ const zhCN: UiStrings = {
   folderEmpty: '\u6b64\u6587\u4ef6\u5939\u4e3a\u7a7a',
   dropHint: '\u62d6\u653e EXE / DLL \u6587\u4ef6\u4ee5\u8fd0\u884c\u5e94\u7528\u6216\u67e5\u770b\u8d44\u6e90',
   rightClickHint: '\u53f3\u952e\u5355\u51fb\u684c\u9762\u4ee5\u6267\u884c\u64cd\u4f5c',
+  lookIn: '\u67e5\u627e\u8303\u56f4:',
+  saveIn: '\u4fdd\u5b58\u4f4d\u7f6e:',
+  fileName: '\u6587\u4ef6\u540d:',
+  filesOfType: '\u6587\u4ef6\u7c7b\u578b:',
+  save: '\u4fdd\u5b58',
+  saveAs: '\u53e6\u5b58\u4e3a',
+  importFromPC: '\u4ece\u672c\u5730\u7535\u8111\u5bfc\u5165...',
+  newFolderPrompt: '\u65b0\u5efa\u6587\u4ef6\u5939\u540d\u79f0:',
+  empty: '(\u7a7a)',
+  confirmOverwrite: '{0} \u5df2\u7ecf\u5b58\u5728\u3002\n\u8981\u66ff\u6362\u5b83\u5417\uff1f',
 };
 
 const ptBR: UiStrings = {
@@ -499,6 +570,16 @@ const ptBR: UiStrings = {
   folderEmpty: 'Esta pasta est\u00e1 vazia',
   dropHint: 'Solte arquivos EXE / DLL para executar aplicativos ou inspecionar recursos',
   rightClickHint: 'Clique com o bot\u00e3o direito na \u00e1rea de trabalho para a\u00e7\u00f5es',
+  lookIn: 'Examinar:',
+  saveIn: 'Salvar em:',
+  fileName: 'Nome do arquivo:',
+  filesOfType: 'Tipo de arquivo:',
+  save: 'Salvar',
+  saveAs: 'Salvar como',
+  importFromPC: 'Importar do computador local...',
+  newFolderPrompt: 'Nome da nova pasta:',
+  empty: '(vazio)',
+  confirmOverwrite: '{0} j\u00e1 existe.\nDeseja substitu\u00ed-lo?',
 };
 
 const it: UiStrings = {
@@ -561,6 +642,16 @@ const it: UiStrings = {
   folderEmpty: 'Questa cartella \u00e8 vuota',
   dropHint: 'Trascinare file EXE / DLL per eseguire applicazioni o visualizzare risorse',
   rightClickHint: 'Clic destro sul desktop per le azioni',
+  lookIn: 'Cerca in:',
+  saveIn: 'Salva in:',
+  fileName: 'Nome file:',
+  filesOfType: 'Tipo file:',
+  save: 'Salva',
+  saveAs: 'Salva con nome',
+  importFromPC: 'Importa dal computer locale...',
+  newFolderPrompt: 'Nome della nuova cartella:',
+  empty: '(vuoto)',
+  confirmOverwrite: '{0} esiste gi\u00e0.\nSostituirlo?',
 };
 
 const pl: UiStrings = {
@@ -623,6 +714,16 @@ const pl: UiStrings = {
   folderEmpty: 'Ten folder jest pusty',
   dropHint: 'Upu\u015b\u0107 pliki EXE / DLL, aby uruchomi\u0107 aplikacje lub przegl\u0105da\u0107 zasoby',
   rightClickHint: 'Kliknij prawym przyciskiem na pulpicie, aby wy\u015bwietli\u0107 akcje',
+  lookIn: 'Szukaj w:',
+  saveIn: 'Zapisz w:',
+  fileName: 'Nazwa pliku:',
+  filesOfType: 'Typ plik\u00f3w:',
+  save: 'Zapisz',
+  saveAs: 'Zapisz jako',
+  importFromPC: 'Importuj z komputera lokalnego...',
+  newFolderPrompt: 'Nazwa nowego folderu:',
+  empty: '(pusty)',
+  confirmOverwrite: '{0} ju\u017c istnieje.\nCzy chcesz go zast\u0105pi\u0107?',
 };
 
 const ko: UiStrings = {
@@ -685,6 +786,16 @@ const ko: UiStrings = {
   folderEmpty: '\uc774 \ud3f4\ub354\ub294 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4',
   dropHint: 'EXE / DLL \ud30c\uc77c\uc744 \ub4dc\ub86d\ud558\uc5ec \uc571\uc744 \uc2e4\ud589\ud558\uac70\ub098 \ub9ac\uc18c\uc2a4\ub97c \ud655\uc778\ud558\uc138\uc694',
   rightClickHint: '\ubc14\ud0d5 \ud654\uba74\uc744 \ub9c8\uc6b0\uc2a4 \uc624\ub978\ucabd \ubc84\ud2bc\uc73c\ub85c \ud074\ub9ad\ud558\uc5ec \uc791\uc5c5 \uc218\ud589',
+  lookIn: '\ucc3e\ub294 \uc704\uce58:',
+  saveIn: '\uc800\uc7a5 \uc704\uce58:',
+  fileName: '\ud30c\uc77c \uc774\ub984:',
+  filesOfType: '\ud30c\uc77c \ud615\uc2dd:',
+  save: '\uc800\uc7a5',
+  saveAs: '\ub2e4\ub978 \uc774\ub984\uc73c\ub85c \uc800\uc7a5',
+  importFromPC: '\ub85c\uceec \ucef4\ud4e8\ud130\uc5d0\uc11c \uac00\uc838\uc624\uae30...',
+  newFolderPrompt: '\uc0c8 \ud3f4\ub354 \uc774\ub984:',
+  empty: '(\ube44\uc5b4 \uc788\uc74c)',
+  confirmOverwrite: '{0}\uc774(\uac00) \uc774\ubbf8 \uc788\uc2b5\ub2c8\ub2e4.\n\ubc14\uafb8\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
