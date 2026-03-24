@@ -81,7 +81,7 @@ export function emit8bitALU(
       emitReg8Get(b, src8); b.setLocal(tmp2);
       b.constI32(0); b.getLocal(tmp2); b.storeI32(OFF_FLAGS + 12);
     } else {
-      b.constI32(0xFF); b.andI32(); b.setLocal(tmp2);
+      b.constI32(0xFF); b.andI32(); b.teeLocal(tmp2);
       emitReg8Set(b, dst8);
       emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
       b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);

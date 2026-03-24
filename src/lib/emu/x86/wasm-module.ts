@@ -129,12 +129,10 @@ export async function compileWasmRegion(
       tmp1, tmp2, tmp3,
     };
 
-    // Emit instructions for this block (excluding the terminator)
+    // Emit body instructions (stop before the terminator)
     let instrAddr = block.addr;
     let emittedAll = true;
-    while (instrAddr < block.endAddr) {
-      // Check if this is the last instruction (terminator)
-      // Terminators (Jcc, JMP, RET) are handled specially below
+    while (instrAddr < block.terminatorAddr) {
       const nextInsnResult = emitInstruction(ctx, instrAddr);
       if (nextInsnResult < 0) {
         // Log unsupported opcode for diagnostics
@@ -251,77 +249,10 @@ function emitBlockTerminator(
   stateLocal: number, dispatchLabel: Label, exitLabel: Label,
   use32: boolean, testCCIdx: number,
 ): void {
-  switch (block.exitType) {
-    case 'jcc': {
-      const takenState = addrToState.get(block.branchTarget);
-      const fallState = addrToState.get(block.fallthrough);
-      const cc = block.conditionCode;
-
-      if (takenState !== undefined && cc >= 0) {
-        // Call imported testCC(cc) — it materializes flags and evaluates the condition
-        b.constI32(cc);
-        b.call(testCCIdx);
-        // testCC returns 1 if condition is true, 0 if false
-        b.ifVoid();
-          b.constI32(takenState); b.setLocal(stateLocal); b.br(dispatchLabel);
-        b.end();
-      }
-
-      if (fallState !== undefined) {
-        b.constI32(fallState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      } else {
-        b.constI32(0); b.constI32(block.fallthrough); b.storeI32(OFF_EIP);
-        b.br(exitLabel);
-      }
-      break;
-    }
-
-    case 'jmp': {
-      const targetState = addrToState.get(block.branchTarget);
-      if (targetState !== undefined) {
-        b.constI32(targetState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      } else {
-        b.constI32(0); b.constI32(block.branchTarget); b.storeI32(OFF_EIP);
-        b.br(exitLabel);
-      }
-      break;
-    }
-
-    case 'ret':
-      // Return: exit module. EIP is on the stack (popped by RET).
-      // The RET instruction itself should have been emitted... but we don't emit RET in codegen yet.
-      // For now, just exit.
-      b.constI32(0); b.constI32(0); b.storeI32(OFF_EXIT);
-      b.br(exitLabel);
-      break;
-
-    case 'call': {
-      // CALL falls through — target may be inside or outside region
-      const fallState = addrToState.get(block.fallthrough);
-      if (fallState !== undefined) {
-        b.constI32(fallState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      } else {
-        b.constI32(0); b.constI32(block.fallthrough); b.storeI32(OFF_EIP);
-        b.br(exitLabel);
-      }
-      break;
-    }
-
-    case 'fallthrough': {
-      const nextState = addrToState.get(block.fallthrough);
-      if (nextState !== undefined) {
-        b.constI32(nextState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      } else {
-        b.constI32(0); b.constI32(block.fallthrough); b.storeI32(OFF_EIP);
-        b.br(exitLabel);
-      }
-      break;
-    }
-
-    case 'bail':
-      b.constI32(0); b.constI32(block.endAddr); b.storeI32(OFF_EIP);
-      b.constI32(0); b.constI32(2); b.storeI32(OFF_EXIT);
-      b.br(exitLabel);
-      break;
-  }
+  // All terminators bail to interpreter — WASM handles the block body,
+  // interpreter handles control flow (Jcc/JMP/RET/CALL).
+  // TODO: inline Jcc/JMP for inter-block WASM execution once validated.
+  b.constI32(0); b.constI32(block.terminatorAddr); b.storeI32(OFF_EIP);
+  b.constI32(0); b.constI32(0); b.storeI32(OFF_EXIT);
+  b.br(exitLabel);
 }

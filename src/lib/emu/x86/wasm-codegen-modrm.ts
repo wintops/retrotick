@@ -5,7 +5,7 @@
 
 import type { WasmBuilder } from './wasm-builder';
 import type { Memory } from '../memory';
-import { emitModRM32Addr, type ModRMDecoded } from './wasm-codegen-mem';
+import { emitModRM32Addr, emitAddrMask, type ModRMDecoded } from './wasm-codegen-mem';
 import { OFF_FLAGS } from './flat-memory';
 import {
   LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,
@@ -43,7 +43,8 @@ export function emitMOV_rm(
       if (is16) { rg16(b, rm); rs16(b, regF); } else { b.getLocal(rm); b.setLocal(regF); }
     }
   } else {
-    // Memory operand — address is on WASM stack
+    // Memory operand — address is on WASM stack, mask to 128MB
+    emitAddrMask(b);
     if (direction === 'rm_reg') {
       // MOV [mem], reg — stack has addr
       if (is16) { rg16(b, regF); b.storeU16(0); }
@@ -96,6 +97,7 @@ export function emitALU_rm(
     }
   } else {
     // Memory operand
+    emitAddrMask(b);
     if (isDstReg) {
       // reg OP [mem] — addr on stack, load value
       b.teeLocal(tmp1); // save addr
@@ -203,7 +205,8 @@ export function emitGroup83(
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
     }
   } else {
-    // Memory operand — addr on stack
+    // Memory operand — addr on stack, mask to 128MB
+    emitAddrMask(b);
     b.teeLocal(tmp1); // save addr
     if (is16) { b.loadU16(0); } else { b.loadI32Unaligned(0); }
     b.setLocal(tmp2); // old value
@@ -255,7 +258,8 @@ export function emitTEST_rm(
       val2 = () => b.getLocal(regF);
     }
   } else {
-    // Memory operand
+    // Memory operand — mask to 128MB
+    emitAddrMask(b);
     b.teeLocal(tmp1);
     if (is8bit) { b.loadU8(0); } else if (is16) { b.loadU16(0); } else { b.loadI32Unaligned(0); }
     const memVal = b.allocLocal();

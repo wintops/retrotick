@@ -8,7 +8,8 @@ import type { Memory } from '../memory';
 /** A basic block in the control flow graph */
 export interface WasmBasicBlock {
   addr: number;           // start linear address
-  endAddr: number;        // address after last instruction byte
+  endAddr: number;        // address after last instruction byte (including terminator)
+  terminatorAddr: number; // address of the terminator instruction (Jcc/JMP/RET/etc)
   instrCount: number;     // number of x86 instructions
   successors: number[];   // addresses of successor blocks (0, 1, or 2)
   isConditional: boolean; // ends with Jcc?
@@ -282,9 +283,9 @@ function decodeInsn(mem: Memory, addr: number, use32: boolean): DecodedInsn {
     // ENTER
     case 0xC8: pos += 3; break;
 
-    // Port I/O — block boundary
-    case 0xE4: case 0xE5: case 0xE6: case 0xE7: pos += 1; result.blockEnd = true; break;
-    case 0xEC: case 0xED: case 0xEE: case 0xEF: result.blockEnd = true; break;
+    // Port I/O — NOT a block boundary (handled by imported portIn/portOut)
+    case 0xE4: case 0xE5: case 0xE6: case 0xE7: pos += 1; break;
+    case 0xEC: case 0xED: case 0xEE: case 0xEF: break;
 
     // HLT
     case 0xF4: result.blockEnd = true; result.isUnconditional = true; break;
@@ -396,7 +397,8 @@ export function analyzeRegion(
         }
 
         blocks.set(blockAddr, {
-          addr: blockAddr, endAddr: addr, instrCount, successors,
+          addr: blockAddr, endAddr: addr, terminatorAddr: addr - insn.length,
+          instrCount, successors,
           isConditional: insn.isConditional, branchTarget, fallthrough,
           exitType, conditionCode: insn.conditionCode,
         });
@@ -406,8 +408,8 @@ export function analyzeRegion(
       // Check if we're running into an already-known block start
       if (blocks.has(addr) || visited.has(addr)) {
         blocks.set(blockAddr, {
-          addr: blockAddr, endAddr: addr, instrCount,
-          successors: [addr], isConditional: false,
+          addr: blockAddr, endAddr: addr, terminatorAddr: addr,
+          instrCount, successors: [addr], isConditional: false,
           branchTarget: addr, fallthrough: addr, exitType: 'fallthrough',
           conditionCode: -1,
         });
@@ -437,7 +439,8 @@ function splitAtBranchTargets(blocks: Map<number, WasmBasicBlock>): void {
       if (target > b.addr && target < b.endAddr) {
         // Split: b becomes [addr, target), new block is [target, endAddr)
         const newBlock: WasmBasicBlock = {
-          addr: target, endAddr: b.endAddr, instrCount: 0,
+          addr: target, endAddr: b.endAddr, terminatorAddr: b.terminatorAddr,
+          instrCount: 0,
           successors: b.successors, isConditional: b.isConditional,
           branchTarget: b.branchTarget, fallthrough: b.fallthrough, exitType: b.exitType,
           conditionCode: b.conditionCode,
@@ -445,6 +448,7 @@ function splitAtBranchTargets(blocks: Map<number, WasmBasicBlock>): void {
         // Recount instructions (approximate — set to 1 for now, will be refined during codegen)
         newBlock.instrCount = Math.max(1, b.instrCount - 1);
         b.endAddr = target;
+        b.terminatorAddr = target; // old block now falls through
         b.instrCount = Math.max(1, b.instrCount - newBlock.instrCount);
         b.successors = [target];
         b.isConditional = false;

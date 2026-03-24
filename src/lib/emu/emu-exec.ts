@@ -880,7 +880,7 @@ export function emuTick(emu: Emulator): void {
           }
           // Record hotness and trigger async compilation
           // Wait 180 ticks (~3s) before compiling — let PMODE/W finish rewriting memory
-          if (emu._tickCount > 180 && !emu._wasmPending.has(regionBase) && !emu._wasmBlacklist.has(regionBase)) {
+          if (emu._tickCount > 180 && emu._wasmPending.size === 0 && !emu._wasmBlacklist.has(regionBase)) {
             const count = (emu._wasmHotness.get(regionBase) || 0) + 1;
             emu._wasmHotness.set(regionBase, count);
             if (count >= 50) {
