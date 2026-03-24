@@ -486,6 +486,12 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 const BATCH_SIZE = 500000;
 const DOS_POST_KEY_STEPS = 0x80;
 
+// WASM JIT diagnostics — logs every ~1s
+let _diagWasmRuns = 0, _diagWasmInsns = 0, _diagInterpInsns = 0;
+let _diagWasmExits: Record<number, number> = {};
+let _diagTickCount = 0, _diagTickTotalMs = 0;
+let _diagLastLog = 0;
+
 export function emuTick(emu: Emulator): void {
   if (!emu.running || emu.halted) return;
   // Guard against reentrant tick() calls — can happen when multiple
@@ -820,6 +826,15 @@ export function emuTick(emu: Emulator): void {
           const regionBase = eip & ~0xFFFF;
           const region = emu.wasmRegions.get(regionBase);
           if (region) {
+            // Staleness check: verify compiled code matches current memory
+            // (PMODE/W overwrites real-mode code during init → stale modules)
+            const expectedDword = region.entryChecks.get(eip);
+            if (expectedDword !== undefined && emu.memory.readU32(eip) !== expectedDword) {
+              emu.wasmRegions.delete(regionBase);
+              emu._wasmBlacklist.add(regionBase);
+              tkHitA = tkHitB = tkHitC = 0;
+              continue;
+            }
             const entryIdx = region.entryMap.get(eip);
             if (entryIdx !== undefined) {
               const flat = emu.flatMemory;
@@ -828,18 +843,44 @@ export function emuTick(emu: Emulator): void {
               flat.writeFlags(emu.cpu);
               flat.writeSegBases(emu.cpu);
               flat.dv.setInt32(OFF_ENTRY, entryIdx, true);
-              region.run();
-              flat.readRegs(emu.cpu);
-              flat.readFlags(emu.cpu);
-              emu.cpu.eip = flat.readEip();
-              stepCount += 4096;
-              emu._pitInsnCount += 4096;
-              tkHitA = tkHitB = 0;
+              try {
+                region.run();
+                flat.readRegs(emu.cpu);
+                flat.readFlags(emu.cpu);
+                emu.cpu.eip = flat.readEip();
+                const wasmInsns = flat.readCounter();
+                const exitReason = flat.readExitReason();
+                _diagWasmRuns++;
+                _diagWasmInsns += wasmInsns;
+                _diagWasmExits[exitReason] = (_diagWasmExits[exitReason] || 0) + 1;
+                stepCount += wasmInsns;
+                emu._pitInsnCount += wasmInsns;
+                if (wasmInsns > 64) {
+                  // WASM did real work — advance i and force time/PIT check
+                  i = (i + wasmInsns) | 0xFFF;
+                } else if (exitReason === 2) {
+                  // Unsupported opcode on first instruction — blacklist this region
+                  region.failCount = (region.failCount || 0) + 1;
+                  if (region.failCount > 10) {
+                    emu.wasmRegions.delete(regionBase);
+                    emu._wasmBlacklist.add(regionBase);
+                  }
+                }
+              } catch {
+                // WASM OOB or other runtime error — discard this region and fall back to interpreter
+                flat.readRegs(emu.cpu);
+                flat.readFlags(emu.cpu);
+                emu.cpu.eip = flat.readEip() || eip; // restore EIP
+                emu.wasmRegions.delete(regionBase);
+                emu._wasmBlacklist.add(regionBase);
+              }
+              tkHitA = tkHitB = tkHitC = 0;
               continue;
             }
           }
           // Record hotness and trigger async compilation
-          if (!emu._wasmPending.has(regionBase)) {
+          // Wait 180 ticks (~3s) before compiling — let PMODE/W finish rewriting memory
+          if (emu._tickCount > 180 && !emu._wasmPending.has(regionBase) && !emu._wasmBlacklist.has(regionBase)) {
             const count = (emu._wasmHotness.get(regionBase) || 0) + 1;
             emu._wasmHotness.set(regionBase, count);
             if (count >= 50) {
@@ -968,6 +1009,16 @@ export function emuTick(emu: Emulator): void {
       }
     }
   }
+  _diagInterpInsns += stepCount;
+  _diagTickCount++;
+  _diagTickTotalMs += performance.now() - tickStart;
+  const now2 = performance.now();
+  if (now2 - _diagLastLog > 2000) {
+    console.log(`[WASM-DIAG] ${_diagTickCount} ticks in ${_diagTickTotalMs.toFixed(0)}ms | WASM: ${_diagWasmRuns} runs, ${_diagWasmInsns} insns | Interp: ${_diagInterpInsns} insns | exits: ${JSON.stringify(_diagWasmExits)} | avg tick: ${(_diagTickTotalMs/_diagTickCount).toFixed(1)}ms | use32=${emu.cpu.use32} realMode=${emu.cpu.realMode}`);
+    _diagWasmRuns = 0; _diagWasmInsns = 0; _diagInterpInsns = 0;
+    _diagWasmExits = {}; _diagTickCount = 0; _diagTickTotalMs = 0;
+    _diagLastLog = now2;
+  }
   emu.cpuSteps += stepCount;
   emu._pitInsnCount += stepCount;
   } catch (err) {
@@ -1012,8 +1063,6 @@ export function emuTick(emu: Emulator): void {
         setTimeout(emu.tick, delay);
       }
     } else if (emu.isDOS) {
-      // DOS games need maximum throughput — MessageChannel avoids setTimeout's
-      // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
       scheduleImmediate(emu.tick);
     } else {
       requestAnimationFrame(emu.tick);

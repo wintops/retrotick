@@ -7,21 +7,12 @@
 
 import type { WasmBuilder } from './wasm-builder';
 import type { Memory } from '../memory';
-import { OFF_REGS, OFF_FLAGS, OFF_SEGBASES, OFF_EIP, OFF_EXIT } from './flat-memory';
-import {
-  emitLoadU8, emitLoadU16, emitLoadI32, emitLoadS8, emitLoadS16,
-  emitStoreU8WithVGA, emitStoreU16WithVGA, emitStoreI32WithVGA,
-  emitStoreU8Direct, emitStoreU16Direct, emitStoreI32Direct,
-  emitAddSegBase, emitModRM16Addr,
-} from './wasm-codegen-mem';
+import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
+import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16 } from './wasm-codegen-mem';
 import { emitMOV_rm, emitALU_rm, emitLEA, emitGroup83, emitTEST_rm } from './wasm-codegen-modrm';
-import {
-  LOP_ADD8, LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,
-  LOP_AND8, LOP_AND16, LOP_AND32, LOP_XOR8, LOP_XOR16, LOP_XOR32,
-  LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32,
-  LOP_SHL8, LOP_SHL16, LOP_SHL32, LOP_SHR8, LOP_SHR16, LOP_SHR32,
-  emitSetLazyFlags, emitSetLazyFlagsImm,
-} from './wasm-codegen-flags';
+import { LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
+import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_moffs_AL, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
+import { emitGroup80, emitGroup81, emitGroupFE, emitGroupFF, emitGroupF6, emitGroupF7 } from './wasm-codegen-grp';
 
 // Register local indices (must match the local allocation in wasm-module.ts)
 export const REG_EAX = 0, REG_ECX = 1, REG_EDX = 2, REG_EBX = 3;
@@ -33,7 +24,6 @@ let STATE_LOCAL = 11, COUNTER_LOCAL = 12;
 
 const DS_BASE = OFF_SEGBASES + 4;
 const SS_BASE = OFF_SEGBASES + 12;
-const ES_BASE = OFF_SEGBASES + 8;
 
 /** Codegen context — tracks state during block compilation */
 export interface CodegenCtx {
@@ -61,12 +51,12 @@ export function initCodegenLocals(
 }
 
 /** Emit 16-bit register get: (reg & 0xFFFF) */
-function emitRegGet16(b: WasmBuilder, reg: number): void {
+export function emitRegGet16(b: WasmBuilder, reg: number): void {
   b.getLocal(reg); b.constI32(0xFFFF); b.andI32();
 }
 
 /** Emit 16-bit register set: reg = (reg & ~0xFFFF) | (val & 0xFFFF) */
-function emitRegSet16(b: WasmBuilder, reg: number): void {
+export function emitRegSet16(b: WasmBuilder, reg: number): void {
   // Stack has: value (16-bit)
   b.constI32(0xFFFF); b.andI32(); // mask to 16
   b.getLocal(reg); b.constI32(~0xFFFF); b.andI32(); // high bits of reg
@@ -75,7 +65,7 @@ function emitRegSet16(b: WasmBuilder, reg: number): void {
 }
 
 /** Emit 8-bit register get: AL=r[0]&0xFF, AH=(r[0]>>8)&0xFF, etc */
-function emitReg8Get(b: WasmBuilder, r8: number): void {
+export function emitReg8Get(b: WasmBuilder, r8: number): void {
   if (r8 < 4) {
     b.getLocal(r8); b.constI32(0xFF); b.andI32();
   } else {
@@ -84,7 +74,7 @@ function emitReg8Get(b: WasmBuilder, r8: number): void {
 }
 
 /** Emit 8-bit register set. Stack has: new 8-bit value */
-function emitReg8Set(b: WasmBuilder, r8: number): void {
+export function emitReg8Set(b: WasmBuilder, r8: number): void {
   if (r8 < 4) {
     b.constI32(0xFF); b.andI32();
     b.getLocal(r8); b.constI32(~0xFF); b.andI32();
@@ -119,6 +109,8 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
 
   const is16 = !opSize32;
   const immSize = is16 ? 2 : 4;
+  // Update module-level address size so emitModRM32Addr bails on 16-bit memory operands
+  setAddrSize16(addrSize16);
   const op = mem.readU8(pos); pos++;
 
   switch (op) {
@@ -313,6 +305,67 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
       break;
     }
+
+    // MOV r/m8, reg8 (0x88) and MOV reg8, r/m8 (0x8A)
+    case 0x88: { const n = emitMOV8_rm(ctx, pos, false); if (n < 0) return -1; pos += n; break; }
+    case 0x8A: { const n = emitMOV8_rm(ctx, pos, true); if (n < 0) return -1; pos += n; break; }
+
+    // MOV AL, [moffs] (A0)
+    case 0xA0: {
+      if (addrSize16) {
+        const moffs = mem.readU16(pos);
+        b.constI32(moffs); emitAddSegBase(b, DS_BASE); emitLoadU8(b); emitReg8Set(b, 0);
+        pos += 2;
+      } else {
+        const moffs = mem.readU32(pos) | 0;
+        b.constI32(moffs); emitAddSegBase(b, DS_BASE); emitLoadU8(b); emitReg8Set(b, 0);
+        pos += 4;
+      }
+      break;
+    }
+
+    case 0xA1: { const n = emitMOV_moffs_AL(ctx, pos, true, is16); if (n < 0) return -1; pos += n; break; }
+    case 0xC6: { const n = emitMOV_rm8_imm8(ctx, pos); if (n < 0) return -1; pos += n; break; }
+    case 0xC7: { const n = emitMOV_rm_imm(ctx, pos, is16); if (n < 0) return -1; pos += n; break; }
+
+    // PUSH imm
+    case 0x6A: { pos += emitPUSH_imm8(ctx, pos, is16); break; }
+    case 0x68: { pos += emitPUSH_imm(ctx, pos, is16); break; }
+
+    // Port I/O
+    case 0xE4: { pos += emitIN_AL_imm8(ctx, pos); break; }
+    case 0xEC: { emitIN_AL_DX(ctx); break; }
+    case 0xE6: { pos += emitOUT_imm8_AL(ctx, pos); break; }
+    case 0xEE: { emitOUT_DX_AL(ctx); break; }
+
+    // ALU EAX, imm
+    case 0x05: { const n = emitALU_eax_imm(ctx, pos, 0, is16); if (n < 0) return -1; pos += n; break; }
+    case 0x25: { const n = emitALU_eax_imm(ctx, pos, 4, is16); if (n < 0) return -1; pos += n; break; }
+    case 0xA9: { const n = emitALU_eax_imm(ctx, pos, 0xFF, is16); if (n < 0) return -1; pos += n; break; }
+
+    // Shifts
+    case 0xC1: { const n = emitShift_imm8(ctx, pos, is16); if (n < 0) return -1; pos += n; break; }
+    case 0xD0: { const n = emitShift_by1(ctx, pos, true, false); if (n < 0) return -1; pos += n; break; }
+    case 0xD1: { const n = emitShift_by1(ctx, pos, false, is16); if (n < 0) return -1; pos += n; break; }
+
+    // Group opcodes
+    // 8-bit ALU r/m8, reg8 and reg8, r/m8
+    case 0x00: case 0x08: case 0x28: case 0x30: case 0x38:
+    case 0x02: case 0x0A: case 0x2A: case 0x32: case 0x3A:
+    {
+      const aluType = (op >> 3) & 7;
+      const toReg = !!(op & 2);
+      const n = emit8bitALU(ctx, pos, aluType, toReg);
+      if (n < 0) return -1;
+      pos += n;
+      break;
+    }
+    case 0x80: { const n = emitGroup80(b, mem, pos, tmp1, tmp2, ctx.writeVGAIdx); if (n < 0) return -1; pos += n; break; }
+    case 0x81: { const n = emitGroup81(b, mem, pos, is16, tmp1, tmp2); if (n < 0) return -1; pos += n; break; }
+    case 0xFE: { const n = emitGroupFE(ctx, pos); if (n < 0) return -1; pos += n; break; }
+    case 0xFF: { const n = emitGroupFF(ctx, pos, is16); if (n < 0) return -1; pos += n; break; }
+    case 0xF6: { const n = emitGroupF6(ctx, pos); if (n < 0) return -1; pos += n; break; }
+    case 0xF7: { const n = emitGroupF7(ctx, pos, is16); if (n < 0) return -1; pos += n; break; }
 
     // Anything else: unsupported
     default:

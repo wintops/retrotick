@@ -7,7 +7,7 @@
  *   0x08000000 - 0x0800001F:  CPU registers (8 x i32)
  *   0x08000020 - 0x08000037:  Lazy flags (6 x i32)
  *   0x08000038 - 0x08000047:  Segment bases (4 x i32)
- *   0x08000048 - 0x0800004F:  Control (EIP + exit_reason)
+ *   0x08000048 - 0x08000053:  Control (EIP + exit_reason + entry + counter)
  */
 
 import type { Memory } from '../memory';
@@ -23,6 +23,7 @@ export const OFF_SEGBASES = 0x08000038;  // CS_base, DS_base, ES_base, SS_base
 export const OFF_EIP      = 0x08000048;
 export const OFF_EXIT     = 0x0800004C;
 export const OFF_ENTRY    = 0x08000050; // br_table entry state index
+export const OFF_COUNTER  = 0x08000054; // instruction counter (written by WASM on exit)
 
 export class FlatMemory {
   readonly wasmMemory: WebAssembly.Memory;
@@ -119,5 +120,10 @@ export class FlatMemory {
   /** Read exit reason from flat buffer */
   readExitReason(): number {
     return this.dv.getInt32(OFF_EXIT, true);
+  }
+
+  /** Read instruction counter written by WASM on exit */
+  readCounter(): number {
+    return this.dv.getInt32(OFF_COUNTER, true);
   }
 }

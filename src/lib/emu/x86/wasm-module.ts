@@ -4,7 +4,7 @@
  */
 
 import { WasmBuilder } from './wasm-builder';
-import { FlatMemory, OFF_REGS, OFF_FLAGS, OFF_EIP, OFF_EXIT, OFF_ENTRY } from './flat-memory';
+import { FlatMemory, OFF_REGS, OFF_FLAGS, OFF_EIP, OFF_EXIT, OFF_ENTRY, OFF_COUNTER } from './flat-memory';
 import { analyzeRegion, type WasmBasicBlock } from './wasm-analyzer';
 import { emitInstruction, initCodegenLocals, type CodegenCtx } from './wasm-codegen';
 import { emitFusedJcc } from './wasm-codegen-flags';
@@ -12,7 +12,11 @@ import type { Memory } from '../memory';
 import type { Label } from './wasm-builder';
 
 const TYPE_I32 = 0x7F;
-const MAX_INSN_PER_ENTRY = 8192;
+const MAX_INSN_PER_ENTRY = 2048;
+
+/** Track unsupported opcodes across all compilations */
+const _unsupportedOps = new Set<string>();
+let _lastUnsupportedLog = 0;
 
 /** A compiled WASM region ready for execution */
 export interface WasmCompiledRegion {
@@ -20,6 +24,10 @@ export interface WasmCompiledRegion {
   entryMap: Map<number, number>;  // EIP → br_table state index
   blockCount: number;
   segKeys: number[];
+  use32: boolean;  // operand size mode at compile time
+  /** First 4 bytes at each entry point — used to detect stale modules after memory changes */
+  entryChecks: Map<number, number>;
+  failCount?: number;  // tracks consecutive unsupported-opcode exits for blacklisting
 }
 
 /** WASM import functions provided by the emulator */
@@ -129,6 +137,13 @@ export async function compileWasmRegion(
       // Terminators (Jcc, JMP, RET) are handled specially below
       const nextInsnResult = emitInstruction(ctx, instrAddr);
       if (nextInsnResult < 0) {
+        // Log unsupported opcode for diagnostics
+        let diagPos = instrAddr;
+        const PREFIX_SET2 = new Set([0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3]);
+        while (PREFIX_SET2.has(mem.readU8(diagPos))) diagPos++;
+        const failOp = mem.readU8(diagPos);
+        const failOp2 = failOp === 0x0F ? mem.readU8(diagPos + 1) : -1;
+        _unsupportedOps.add(failOp2 >= 0 ? `0F ${failOp2.toString(16).padStart(2,'0')}` : failOp.toString(16).padStart(2,'0'));
         // Unsupported opcode — store EIP and exit
         emittedAll = false;
         // Store current EIP
@@ -154,6 +169,9 @@ export async function compileWasmRegion(
 
   b.end(); // close loop
   b.end(); // close exit block
+
+  // Store instruction counter to shared memory
+  b.constI32(0); b.getLocal(counterLocal); b.storeI32(OFF_COUNTER);
 
   // Store registers back to shared memory
   for (let i = 0; i < 8; i++) {
@@ -200,11 +218,26 @@ export async function compileWasmRegion(
       segKeys.add((block.endAddr - 1) >>> 16);
     }
 
+    // Log unsupported opcodes periodically
+    const now = performance.now();
+    if (_unsupportedOps.size > 0 && now - _lastUnsupportedLog > 5000) {
+      console.log(`[WASM-JIT] Unsupported opcodes: ${[..._unsupportedOps].sort().join(', ')}`);
+      _lastUnsupportedLog = now;
+    }
+
+    // Store first dword of each entry point for staleness detection
+    const entryChecks = new Map<number, number>();
+    for (const addr of blockAddrs) {
+      entryChecks.set(addr, mem.readU32(addr));
+    }
+
     return {
       run,
       entryMap: addrToState,
       blockCount: blocks.size,
       segKeys: [...segKeys],
+      use32,
+      entryChecks,
     };
   } catch {
     return null;

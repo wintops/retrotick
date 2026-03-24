@@ -9,7 +9,7 @@ import { emitModRM32Addr, type ModRMDecoded } from './wasm-codegen-mem';
 import { OFF_FLAGS } from './flat-memory';
 import {
   LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,
-  LOP_AND8, LOP_AND16, LOP_AND32, LOP_XOR16, LOP_XOR32,
+  LOP_AND8, LOP_AND16, LOP_AND32, LOP_OR16, LOP_OR32, LOP_XOR16, LOP_XOR32,
   emitSetLazyFlags, emitSetLazyFlagsImm,
 } from './wasm-codegen-flags';
 
@@ -30,6 +30,7 @@ export function emitMOV_rm(
 ): number {
   const modrm = mem.readU8(pos);
   const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   const regF = mr.reg;
   const rm = mr.rm;
 
@@ -69,6 +70,7 @@ export function emitALU_rm(
 ): number {
   const modrm = mem.readU8(pos);
   const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   const regF = mr.reg;
   const rm = mr.rm;
 
@@ -140,11 +142,11 @@ export function emitALU_rm(
 }
 
 /** Emit the ALU operation, return the LazyOp */
-function emitAluOp(b: WasmBuilder, aluType: number, is16: boolean): number {
+export function emitAluOp(b: WasmBuilder, aluType: number, is16: boolean): number {
   switch (aluType) {
     case 0: b.addI32(); return is16 ? LOP_ADD16 : LOP_ADD32;
-    case 1: b.orI32(); return is16 ? LOP_XOR16 : LOP_XOR32;
-    case 4: b.andI32(); return is16 ? LOP_XOR16 : LOP_XOR32;
+    case 1: b.orI32(); return is16 ? LOP_OR16 : LOP_OR32;
+    case 4: b.andI32(); return is16 ? LOP_AND16 : LOP_AND32;
     case 5: b.subI32(); return is16 ? LOP_SUB16 : LOP_SUB32;
     case 6: b.xorI32(); return is16 ? LOP_XOR16 : LOP_XOR32;
     case 7: b.subI32(); return is16 ? LOP_SUB16 : LOP_SUB32;
@@ -160,6 +162,7 @@ export function emitLEA(
 ): number {
   const modrm = mem.readU8(pos);
   const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   if (mr.isReg) return -1; // LEA with register operand is invalid
   // Address is on WASM stack — store to reg
   if (is16) { rs16(b, mr.reg); } else { b.setLocal(mr.reg); }
@@ -175,6 +178,7 @@ export function emitGroup83(
 ): number {
   const modrm = mem.readU8(pos);
   const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   const aluOp = mr.reg;
   let imm = mem.readU8(pos + mr.extraBytes);
   if (imm > 127) imm -= 256;
@@ -233,6 +237,7 @@ export function emitTEST_rm(
 ): number {
   const modrm = mem.readU8(pos);
   const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
   const regF = mr.reg;
 
   let val1: () => void;

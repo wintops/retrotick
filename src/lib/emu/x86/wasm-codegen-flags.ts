@@ -16,9 +16,11 @@ export const LOP_AND8 = 7, LOP_AND16 = 8, LOP_AND32 = 9;
 export const LOP_XOR8 = 13, LOP_XOR16 = 14, LOP_XOR32 = 15;
 export const LOP_INC8 = 16, LOP_INC16 = 17, LOP_INC32 = 18;
 export const LOP_DEC8 = 19, LOP_DEC16 = 20, LOP_DEC32 = 21;
+export const LOP_OR8 = 10, LOP_OR16 = 11, LOP_OR32 = 12;
 export const LOP_SHL8 = 22, LOP_SHL16 = 23, LOP_SHL32 = 24;
 export const LOP_SHR8 = 25, LOP_SHR16 = 26, LOP_SHR32 = 27;
 export const LOP_SAR8 = 28, LOP_SAR16 = 29, LOP_SAR32 = 30;
+export const LOP_NEG8 = 31, LOP_NEG16 = 32, LOP_NEG32 = 33;
 
 /** Emit code to store lazy flag state to shared memory */
 export function emitSetLazyFlags(

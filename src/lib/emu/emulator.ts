@@ -408,6 +408,7 @@ export class Emulator {
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
   _wasmPending = new Set<number>();  // addresses with pending compilations
   _wasmHotness = new Map<number, number>();  // address → hit count
+  _wasmBlacklist = new Set<number>();  // regions that consistently fail — never recompile
   _wasmFlatSynced = false;  // true after initial flat memory sync
 
   // VGA state
