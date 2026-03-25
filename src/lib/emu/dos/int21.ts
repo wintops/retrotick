@@ -859,6 +859,74 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         cmdTail += String.fromCharCode(ch);
       }
 
+      if (al === 3) {
+        // AL=3: Load Overlay — load MZ/COM into memory at caller-specified segment
+        // Parameter block (ES:BX): word loadSeg, word relocFactor
+        const loadSeg = cpu.mem.readU16(paramBlock);
+        const relocFactor = cpu.mem.readU16(paramBlock + 2);
+        const ovlResolved = dosResolvePath(emu, progName);
+        const ovlInfo = emu.fs.findFile(ovlResolved, emu.additionalFiles);
+        let ovlData: Uint8Array | null = null;
+        if (ovlInfo) ovlData = getSyncFileData(emu.fs, ovlInfo, emu, ovlResolved);
+        if (!ovlData) {
+          const bn = ovlResolved.replace(/^.*[\\\/]/, '').toUpperCase();
+          for (const [key, buf] of emu.additionalFiles) {
+            if (key.toUpperCase() === bn || key.toUpperCase().endsWith('\\' + bn) || key.toUpperCase().endsWith('/' + bn)) {
+              ovlData = new Uint8Array(buf);
+              break;
+            }
+          }
+        }
+        if (!ovlData) {
+          // Async fallback
+          if (ovlInfo) {
+            emu.fs.fetchFileData(ovlInfo, emu.additionalFiles, ovlResolved).then(() => {
+              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+            });
+            cpu.eip -= 2; emu._dosFileOpenPending = true; emu.waitingForMessage = true;
+            break;
+          }
+          console.warn(`[INT 21h] EXEC overlay not found: "${progName}"`);
+          cpu.setFlag(CF, true);
+          cpu.setReg16(EAX, 2);
+          break;
+        }
+        // Load the overlay
+        const isMzOvl = ovlData[0] === 0x4D && ovlData[1] === 0x5A;
+        if (isMzOvl) {
+          const ovlDv = new DataView(ovlData.buffer, ovlData.byteOffset, ovlData.byteLength);
+          const hdrParas = ovlDv.getUint16(0x08, true);
+          const hdrSize = hdrParas * 16;
+          const ecp = ovlDv.getUint16(0x04, true);
+          const ecblp = ovlDv.getUint16(0x02, true);
+          let imgSize = ecp === 0 ? ovlData.length - hdrSize : (ecp - 1) * 512 + (ecblp || 512) - hdrSize;
+          imgSize = Math.min(imgSize, ovlData.length - hdrSize);
+          // Copy image to loadSeg
+          const loadLin = loadSeg * 16;
+          for (let i = 0; i < imgSize; i++) cpu.mem.writeU8(loadLin + i, ovlData[hdrSize + i]);
+          // Apply relocations
+          const relocCount = ovlDv.getUint16(0x06, true);
+          const relocTableOff = ovlDv.getUint16(0x18, true);
+          for (let i = 0; i < relocCount; i++) {
+            const rOff = relocTableOff + i * 4;
+            if (rOff + 4 > ovlData.length) break;
+            const off = ovlDv.getUint16(rOff, true);
+            const seg = ovlDv.getUint16(rOff + 2, true);
+            const addr = loadLin + seg * 16 + off;
+            const oldVal = cpu.mem.readU16(addr);
+            cpu.mem.writeU16(addr, (oldVal + relocFactor) & 0xFFFF);
+          }
+          console.log(`[INT 21h] EXEC overlay "${progName}" loaded at seg ${loadSeg.toString(16)} reloc=${relocFactor.toString(16)} imgSize=${imgSize} relocs=${relocCount}`);
+        } else {
+          // COM overlay: just copy raw data
+          const loadLin = loadSeg * 16;
+          for (let i = 0; i < ovlData.length; i++) cpu.mem.writeU8(loadLin + i, ovlData[i]);
+          console.log(`[INT 21h] EXEC overlay "${progName}" (COM) loaded at seg ${loadSeg.toString(16)} size=${ovlData.length}`);
+        }
+        cpu.setFlag(CF, false);
+        break;
+      }
+
       if (al !== 0) {
         console.warn(`[INT 21h] EXEC AL=${al} not supported: "${progName}" params="${cmdTail}"`);
         cpu.setFlag(CF, true);
