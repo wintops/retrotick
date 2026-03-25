@@ -1658,7 +1658,7 @@ export class Emulator {
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
   /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
-  _hwIntPMState: { cr0: number; cs: number; ss: number; segBases: Map<number, number> } | undefined;
+  _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; segBases: Map<number, number> } | undefined;
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;

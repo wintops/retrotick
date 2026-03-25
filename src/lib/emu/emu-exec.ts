@@ -668,6 +668,8 @@ export function emuTick(emu: Emulator): void {
         emu.cpu.realMode = false;
         emu.cpu.cs = emu._hwIntPMState.cs;
         emu.cpu.ss = emu._hwIntPMState.ss;
+        emu.cpu.ds = emu._hwIntPMState.ds;
+        emu.cpu.es = emu._hwIntPMState.es;
         emu.cpu.segBases = emu._hwIntPMState.segBases;
         emu._hwIntPMState = undefined;
       }
@@ -782,6 +784,8 @@ export function emuTick(emu: Emulator): void {
             cr0: emu._cr0,
             cs: emu.cpu.cs,
             ss: emu.cpu.ss,
+            ds: emu.cpu.ds,
+            es: emu.cpu.es,
             segBases: new Map(emu.cpu.segBases),
           };
           emu._cr0 = 0;
