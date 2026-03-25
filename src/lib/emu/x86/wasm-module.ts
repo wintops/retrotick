@@ -249,9 +249,28 @@ function emitBlockTerminator(
   stateLocal: number, dispatchLabel: Label, exitLabel: Label,
   use32: boolean, testCCIdx: number,
 ): void {
-  // All terminators bail to interpreter — WASM handles the block body,
-  // interpreter handles control flow (Jcc/JMP/RET/CALL).
-  // TODO: inline Jcc/JMP for inter-block WASM execution once validated.
+  if (block.exitType === 'jcc') {
+    const takenState = addrToState.get(block.branchTarget);
+    const fallState = addrToState.get(block.fallthrough);
+    const cc = block.conditionCode;
+
+    // Inline ZF-based conditions (JE=4, JNE=5) by reading lazyResult directly.
+    // Other conditions bail to interpreter.
+    // Jcc: bail to interpreter (inline ZF test has display corruption bug — needs investigation)
+  } else if (block.exitType === 'jmp') {
+    const targetState = addrToState.get(block.branchTarget);
+    if (targetState !== undefined) {
+      b.constI32(targetState); b.setLocal(stateLocal); b.br(dispatchLabel);
+      return;
+    }
+  } else if (block.exitType === 'fallthrough') {
+    const nextState = addrToState.get(block.fallthrough);
+    if (nextState !== undefined) {
+      b.constI32(nextState); b.setLocal(stateLocal); b.br(dispatchLabel);
+      return;
+    }
+  }
+  // Everything else: exit to interpreter
   b.constI32(0); b.constI32(block.terminatorAddr); b.storeI32(OFF_EIP);
   b.constI32(0); b.constI32(0); b.storeI32(OFF_EXIT);
   b.br(exitLabel);
