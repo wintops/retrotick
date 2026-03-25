@@ -2,6 +2,9 @@
 
 import type { Emulator } from '../emulator';
 
+/** VGA refresh rate in Hz (standard CRT = 70). Increase to speed up frame-locked demos. */
+export const VGA_REFRESH_HZ = 70;
+
 export interface VGAMode {
   mode: number;
   width: number;
@@ -152,8 +155,10 @@ export class VGAState {
     // scanline including double-scanned ones.
     const vdeLow = this.crtcRegs[0x12];
     const overflow = this.crtcRegs[0x07];
-    this._cachedVisibleLines = (vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0)) + 1;
-    const totalLines = (this._cachedVisibleLines <= 400) ? 449 : 525;
+    const visibleScanlines = (vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0)) + 1;
+    const nativeTotalLines = (visibleScanlines <= 400) ? 449 : 525;
+    const totalLines = Math.round((1000000 / VGA_REFRESH_HZ) / 31.778);
+    this._cachedVisibleLines = Math.round(totalLines * visibleScanlines / nativeTotalLines);
     this._cachedFrameUs = totalLines * 31.778;
     this._retraceConstsDirty = false;
   }
