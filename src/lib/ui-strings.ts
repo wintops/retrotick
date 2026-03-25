@@ -76,6 +76,16 @@ export interface UiStrings {
   newFolderPrompt: string;
   empty: string;
   confirmOverwrite: string;
+  // Properties dialog
+  properties: string;
+  propType: string;
+  propLocation: string;
+  propSize: string;
+  propCreated: string;
+  propContains: string;
+  propApplication: string;
+  propFileFolder: string;
+  propFilesAndFolders: string;
 }
 
 const en: UiStrings = {
@@ -148,6 +158,15 @@ const en: UiStrings = {
   newFolderPrompt: 'New folder name:',
   empty: '(empty)',
   confirmOverwrite: '{0} already exists.\nDo you want to replace it?',
+  properties: 'Properties',
+  propType: 'Type:',
+  propLocation: 'Location:',
+  propSize: 'Size:',
+  propCreated: 'Created:',
+  propContains: 'Contains:',
+  propApplication: 'Application',
+  propFileFolder: 'File Folder',
+  propFilesAndFolders: '{0} files, {1} folders',
 };
 
 const fr: UiStrings = {
@@ -219,7 +238,16 @@ const fr: UiStrings = {
   importFromPC: "Importer depuis l'ordinateur...",
   newFolderPrompt: 'Nom du nouveau dossier :',
   empty: '(vide)',
-  confirmOverwrite: '{0} existe d\u00e9j\u00e0.\nVoulez-vous le remplacer ?',
+  confirmOverwrite: '{0} existe d\u00e9j\u00e0.\nVoulez-vous le remplacer\u00a0?',
+  properties: 'Propri\u00e9t\u00e9s',
+  propType: 'Type\u00a0:',
+  propLocation: 'Emplacement\u00a0:',
+  propSize: 'Taille\u00a0:',
+  propCreated: 'Cr\u00e9\u00e9 le\u00a0:',
+  propContains: 'Contient\u00a0:',
+  propApplication: 'Application',
+  propFileFolder: 'Dossier de fichiers',
+  propFilesAndFolders: '{0} fichiers, {1} dossiers',
 };
 
 const de: UiStrings = {
@@ -292,6 +320,15 @@ const de: UiStrings = {
   newFolderPrompt: 'Name des neuen Ordners:',
   empty: '(leer)',
   confirmOverwrite: '{0} ist bereits vorhanden.\nM\u00f6chten Sie die Datei ersetzen?',
+  properties: 'Eigenschaften',
+  propType: 'Typ:',
+  propLocation: 'Ort:',
+  propSize: 'Gr\u00f6\u00dfe:',
+  propCreated: 'Erstellt:',
+  propContains: 'Enth\u00e4lt:',
+  propApplication: 'Anwendung',
+  propFileFolder: 'Dateiordner',
+  propFilesAndFolders: '{0} Dateien, {1} Ordner',
 };
 
 const es: UiStrings = {
@@ -364,6 +401,15 @@ const es: UiStrings = {
   newFolderPrompt: 'Nombre de la nueva carpeta:',
   empty: '(vac\u00edo)',
   confirmOverwrite: '{0} ya existe.\n\u00bfDesea reemplazarlo?',
+  properties: 'Propiedades',
+  propType: 'Tipo:',
+  propLocation: 'Ubicaci\u00f3n:',
+  propSize: 'Tama\u00f1o:',
+  propCreated: 'Creado:',
+  propContains: 'Contiene:',
+  propApplication: 'Aplicaci\u00f3n',
+  propFileFolder: 'Carpeta de archivos',
+  propFilesAndFolders: '{0} archivos, {1} carpetas',
 };
 
 const ja: UiStrings = {
@@ -436,6 +482,15 @@ const ja: UiStrings = {
   newFolderPrompt: '\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0\u540d:',
   empty: '(\u7a7a)',
   confirmOverwrite: '{0} \u306f\u65e2\u306b\u5b58\u5728\u3057\u307e\u3059\u3002\n\u7f6e\u304d\u63db\u3048\u307e\u3059\u304b?',
+  properties: '\u30d7\u30ed\u30d1\u30c6\u30a3',
+  propType: '\u7a2e\u985e:',
+  propLocation: '\u5834\u6240:',
+  propSize: '\u30b5\u30a4\u30ba:',
+  propCreated: '\u4f5c\u6210\u65e5\u6642:',
+  propContains: '\u5185\u5bb9:',
+  propApplication: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3',
+  propFileFolder: '\u30d5\u30a1\u30a4\u30eb \u30d5\u30a9\u30eb\u30c0',
+  propFilesAndFolders: '{0} \u30d5\u30a1\u30a4\u30eb\u3001{1} \u30d5\u30a9\u30eb\u30c0',
 };
 
 const zhCN: UiStrings = {
@@ -508,6 +563,15 @@ const zhCN: UiStrings = {
   newFolderPrompt: '\u65b0\u5efa\u6587\u4ef6\u5939\u540d\u79f0:',
   empty: '(\u7a7a)',
   confirmOverwrite: '{0} \u5df2\u7ecf\u5b58\u5728\u3002\n\u8981\u66ff\u6362\u5b83\u5417\uff1f',
+  properties: '\u5c5e\u6027',
+  propType: '\u7c7b\u578b:',
+  propLocation: '\u4f4d\u7f6e:',
+  propSize: '\u5927\u5c0f:',
+  propCreated: '\u521b\u5efa\u65f6\u95f4:',
+  propContains: '\u5305\u542b:',
+  propApplication: '\u5e94\u7528\u7a0b\u5e8f',
+  propFileFolder: '\u6587\u4ef6\u5939',
+  propFilesAndFolders: '{0} \u4e2a\u6587\u4ef6\uff0c{1} \u4e2a\u6587\u4ef6\u5939',
 };
 
 const ptBR: UiStrings = {
@@ -580,6 +644,15 @@ const ptBR: UiStrings = {
   newFolderPrompt: 'Nome da nova pasta:',
   empty: '(vazio)',
   confirmOverwrite: '{0} j\u00e1 existe.\nDeseja substitu\u00ed-lo?',
+  properties: 'Propriedades',
+  propType: 'Tipo:',
+  propLocation: 'Local:',
+  propSize: 'Tamanho:',
+  propCreated: 'Criado em:',
+  propContains: 'Cont\u00e9m:',
+  propApplication: 'Aplicativo',
+  propFileFolder: 'Pasta de arquivos',
+  propFilesAndFolders: '{0} arquivos, {1} pastas',
 };
 
 const it: UiStrings = {
@@ -652,6 +725,15 @@ const it: UiStrings = {
   newFolderPrompt: 'Nome della nuova cartella:',
   empty: '(vuoto)',
   confirmOverwrite: '{0} esiste gi\u00e0.\nSostituirlo?',
+  properties: 'Propriet\u00e0',
+  propType: 'Tipo:',
+  propLocation: 'Percorso:',
+  propSize: 'Dimensione:',
+  propCreated: 'Creato il:',
+  propContains: 'Contiene:',
+  propApplication: 'Applicazione',
+  propFileFolder: 'Cartella di file',
+  propFilesAndFolders: '{0} file, {1} cartelle',
 };
 
 const pl: UiStrings = {
@@ -724,6 +806,15 @@ const pl: UiStrings = {
   newFolderPrompt: 'Nazwa nowego folderu:',
   empty: '(pusty)',
   confirmOverwrite: '{0} ju\u017c istnieje.\nCzy chcesz go zast\u0105pi\u0107?',
+  properties: 'W\u0142a\u015bciwo\u015bci',
+  propType: 'Typ:',
+  propLocation: 'Lokalizacja:',
+  propSize: 'Rozmiar:',
+  propCreated: 'Utworzony:',
+  propContains: 'Zawiera:',
+  propApplication: 'Aplikacja',
+  propFileFolder: 'Folder plik\u00f3w',
+  propFilesAndFolders: '{0} plik\u00f3w, {1} folder\u00f3w',
 };
 
 const ko: UiStrings = {
@@ -796,6 +887,15 @@ const ko: UiStrings = {
   newFolderPrompt: '\uc0c8 \ud3f4\ub354 \uc774\ub984:',
   empty: '(\ube44\uc5b4 \uc788\uc74c)',
   confirmOverwrite: '{0}\uc774(\uac00) \uc774\ubbf8 \uc788\uc2b5\ub2c8\ub2e4.\n\ubc14\uafb8\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
+  properties: '\uc18d\uc131',
+  propType: '\uc720\ud615:',
+  propLocation: '\uc704\uce58:',
+  propSize: '\ud06c\uae30:',
+  propCreated: '\ub9cc\ub4e0 \ub0a0\uc9dc:',
+  propContains: '\ud3ec\ud568:',
+  propApplication: '\uc751\uc6a9 \ud504\ub85c\uadf8\ub7a8',
+  propFileFolder: '\ud30c\uc77c \ud3f4\ub354',
+  propFilesAndFolders: '\ud30c\uc77c {0}\uac1c, \ud3f4\ub354 {1}\uac1c',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
