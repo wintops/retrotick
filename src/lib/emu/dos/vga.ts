@@ -146,7 +146,12 @@ export class VGAState {
 
   /** Refresh retrace constants when CRTC regs change */
   private _updateRetraceConsts(): void {
-    this._cachedVisibleLines = this.getVisibleHeight();
+    // Use raw VDE+1 (actual scanlines on CRT) for retrace timing, NOT getVisibleHeight()
+    // which divides by maxScanLine for double-scan. The CRTC line counter counts every
+    // scanline including double-scanned ones.
+    const vdeLow = this.crtcRegs[0x12];
+    const overflow = this.crtcRegs[0x07];
+    this._cachedVisibleLines = (vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0)) + 1;
     const totalLines = (this._cachedVisibleLines <= 400) ? 449 : 525;
     this._cachedFrameUs = totalLines * 31.778;
     this._retraceConstsDirty = false;
