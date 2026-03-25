@@ -129,7 +129,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       cpu.setReg16(EAX, 0x0002);
       return true;
     }
-    case 0x67: return handleInt67(cpu, emu); // EMS (Expanded Memory)
+    case 0x67: return handleInt67(cpu, emu);
     case 0x79: return handleInt79(cpu, emu);
     case 0x7F: return handleInt7F(cpu, emu);
     case XMS_INT: return handleXms(cpu, emu);

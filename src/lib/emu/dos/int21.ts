@@ -491,7 +491,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x4C: { // Terminate with return code
       const retCode = al;
-      console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)} hwSP=${emu._hwIntSavedSP} pmState=${!!emu._hwIntPMState} realMode=${cpu.realMode}`);
+      if (retCode !== 0) console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)}`);
       xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
       dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
       if (dosExecReturn(cpu, emu, retCode)) break;
@@ -1139,7 +1139,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       emu._dosPspDriveState.set(newPspSeg, { drive: emu.currentDrive, dirs: new Map(emu.currentDirs) });
       // Mark PSP for IVT cleanup on exit (stale vectors in freed memory get reset to BIOS default)
       emu._dosPspSavedIVT.set(newPspSeg, { ivt: new Uint8Array(0), intVectors: new Map() });
-      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)}) SI=${pspSi.toString(16)} hwSP=${emu._hwIntSavedSP} pmState=${!!emu._hwIntPMState}`);
+      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)})`);
       break;
     }
 
