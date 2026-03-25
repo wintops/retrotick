@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { parsePE, parseCOM, extractIcons } from '../lib/pe';
+import { useState, useEffect, useCallback } from 'preact/hooks';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
-import { getRootItems, addFile, addFolder, deleteFile, deleteFolder, moveFile, renameEntry, isFolder, displayName, type StoredFile, getAllFiles, readDroppedItems } from '../lib/file-store';
+import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles, readDroppedItems } from '../lib/file-store';
 import type { Emulator } from '../lib/emu/emulator';
+import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
+import { useFolderTools } from '../hooks/useFolderTools';
 import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
 import { MenuDropdown } from './win2k/MenuBar';
-import { Window, WS_CAPTION, WS_SYSMENU } from './win2k/Window';
-import { Button } from './win2k/Button';
+import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { PropertiesDialog } from './PropertiesDialog';
 import { t } from '../lib/regional-settings';
 
@@ -17,109 +17,25 @@ interface Props {
   onOpenFolder: (path: string) => void;
 }
 
-interface DesktopFile {
-  name: string;
-  iconUrl: string | null;
-  isExe: boolean;
-  isFolder: boolean;
-  size: number;
-  addedAt: number;
-}
-
-function extractFirstIconUrl(data: ArrayBuffer): string | null {
-  try {
-    const peInfo = parsePE(data);
-    const icons = extractIcons(peInfo, data);
-    if (icons.length > 0) return URL.createObjectURL(icons[0].blob);
-  } catch {}
-  return null;
-}
-
-function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peInfo?: PEInfo } {
-  if (name?.toLowerCase().endsWith('.com')) {
-    return { ok: true, peInfo: parseCOM(data) };
-  }
-  try {
-    const peInfo = parsePE(data);
-    if (peInfo.isMZ) return { ok: true, peInfo };
-    if (peInfo.isNE) return { ok: true, peInfo };
-    const isDll = (peInfo.coffHeader.characteristics & 0x2000) !== 0;
-    const isI386 = peInfo.coffHeader.machine === 0x014C;
-    if (isDll && name?.toLowerCase().endsWith('.cpl') && isI386) return { ok: true, peInfo };
-    return { ok: !isDll && isI386, peInfo };
-  } catch {
-    return { ok: false };
-  }
-}
-
 export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
-  const [files, setFiles] = useState<DesktopFile[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; name: string; isExe: boolean; isScr: boolean; isFolder: boolean } | null>(null);
-  const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const fetchItems = useCallback(() => getRootItems(), []);
+  const fm = useFolderTools('', fetchItems);
   const [dragOver, setDragOver] = useState(false);
-  const [propertiesFile, setPropertiesFile] = useState<DesktopFile | null>(null);
-  const [propsFlash, setPropsFlash] = useState(0);
-  const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
-  const iconUrls = useRef<string[]>([]);
 
-  const loadFiles = useCallback(async () => {
-    for (const u of iconUrls.current) URL.revokeObjectURL(u);
-    iconUrls.current = [];
-
-    const stored = await getRootItems();
-    const desktopFiles: DesktopFile[] = stored.map(f => {
-      const isFolderEntry = isFolder(f.name);
-      let url: string | null = null;
-      let isExe = false;
-      if (!isFolderEntry) {
-        url = extractFirstIconUrl(f.data);
-        if (url) iconUrls.current.push(url);
-        isExe = isExeFile(f.data, f.name).ok;
-      }
-      return { name: f.name, iconUrl: url, isExe, isFolder: isFolderEntry, size: f.data.byteLength, addedAt: f.addedAt };
-    });
-    desktopFiles.sort((a, b) => {
-      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
-      return 0;
-    });
-    setFiles(desktopFiles);
+  // Auto-open from URL param on first load
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const autoOpen = params.get('open');
+    if (autoOpen) {
+      window.history.replaceState({}, '', window.location.pathname);
+      handleOpen(autoOpen, false);
+    }
   }, []);
-
-  useEffect(() => {
-    loadFiles().then(() => {
-      const params = new URLSearchParams(window.location.search);
-      const autoOpen = params.get('open');
-      if (autoOpen) {
-        // Remove the param so it doesn't re-trigger on HMR
-        window.history.replaceState({}, '', window.location.pathname);
-        handleOpen(autoOpen, false);
-      }
-    });
-    const onRefresh = () => { loadFiles(); };
-    window.addEventListener('desktop-files-changed', onRefresh);
-    return () => window.removeEventListener('desktop-files-changed', onRefresh);
-  }, [loadFiles]);
-
-  useEffect(() => {
-    if (!propertiesFile?.isFolder) { setFolderContents(null); return; }
-    const folderPrefix = propertiesFile.name.endsWith('/') ? propertiesFile.name : propertiesFile.name + '/';
-    getAllFiles().then(all => {
-      let files = 0, folders = 0, totalSize = 0;
-      for (const f of all) {
-        if (!f.name.startsWith(folderPrefix)) continue;
-        if (isFolder(f.name)) folders++; else { files++; totalSize += f.data.byteLength; }
-      }
-      setFolderContents({ files, folders, totalSize });
-    });
-  }, [propertiesFile]);
 
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     setDragOver(false);
 
-    // Internal drag: move item to desktop root
     const internalPath = e.dataTransfer?.getData(INTERNAL_MIME);
     if (internalPath) {
       const dName = displayName(internalPath);
@@ -127,43 +43,16 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
       const newName = isDir ? dName + '/' : dName;
       if (internalPath !== newName) {
         await renameEntry(internalPath, newName);
-        await loadFiles();
+        await fm.loadItems();
         window.dispatchEvent(new Event('desktop-files-changed'));
       }
       return;
     }
 
-    // External file/folder drop
     if (!e.dataTransfer) return;
     const items = await readDroppedItems(e.dataTransfer);
-    for (const item of items) {
-      await addFile(item.path, item.data);
-    }
-    await loadFiles();
-  }
-
-  async function handleInternalDropOnFolder(folderName: string, draggedPath: string) {
-    // Don't drop folder into itself
-    if (draggedPath === folderName) return;
-    const folderPrefix = folderName.endsWith('/') ? folderName : folderName + '/';
-    if (draggedPath.startsWith(folderPrefix)) return; // already inside
-
-    const dName = displayName(draggedPath);
-    const isDir = isFolder(draggedPath);
-    const newName = folderPrefix + dName + (isDir ? '/' : '');
-    await renameEntry(draggedPath, newName);
-    await loadFiles();
-    window.dispatchEvent(new Event('desktop-files-changed'));
-  }
-
-  async function handleExternalDropOnFolder(folderName: string, e: DragEvent) {
-    if (!e.dataTransfer) return;
-    const folderPrefix = folderName.endsWith('/') ? folderName : folderName + '/';
-    const items = await readDroppedItems(e.dataTransfer, folderPrefix);
-    for (const item of items) {
-      await addFile(item.path, item.data);
-    }
-    await loadFiles();
+    for (const item of items) await addFile(item.path, item.data);
+    await fm.loadItems();
   }
 
   async function runExeWithArgs(name: string, commandLine?: string) {
@@ -173,130 +62,65 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
     const result = isExeFile(f.data, name);
     if (result.ok && result.peInfo) {
       const additional = new Map<string, ArrayBuffer>();
-      for (const s of stored) {
-        if (s.name !== name) additional.set(s.name, s.data);
-      }
+      for (const s of stored) if (s.name !== name) additional.set(s.name, s.data);
       onRunExe(f.data, result.peInfo, additional, name, commandLine);
     } else {
-      // Try to open with a default app based on file extension
-      const opened = await openWithDefaultApp(name, stored);
+      const opened = await openWithDefaultApp(name, stored, onRunExe);
       if (!opened) onViewResources(f.data, name);
     }
   }
 
-  async function openWithDefaultApp(name: string, stored: { name: string; data: ArrayBuffer }[]): Promise<boolean> {
-    const ext = name.toLowerCase().split('.').pop();
-    const NOTEPAD_EXTS = new Set(['txt', 'ini', 'log', 'nfo', 'diz', '1st']);
-    if (!ext || !NOTEPAD_EXTS.has(ext)) return false;
-    // Find notepad.exe in stored files
-    const notepad = stored.find(s => s.name.toLowerCase().replace(/^.*\//, '') === 'notepad.exe');
-    if (!notepad) return false;
-    const result = isExeFile(notepad.data, notepad.name);
-    if (!result.ok || !result.peInfo) return false;
-    const additional = new Map<string, ArrayBuffer>();
-    for (const s of stored) {
-      if (s.name !== notepad.name) additional.set(s.name, s.data);
-    }
-    // Pass file path as command line (D:\filename for root files)
-    const filePath = 'D:\\' + name.replace(/\//g, '\\');
-    onRunExe(notepad.data, result.peInfo, additional, notepad.name, filePath);
-    return true;
-  }
-
   async function handleOpen(name: string, fileIsFolder: boolean) {
-    if (fileIsFolder) {
-      onOpenFolder(name);
-      return;
-    }
+    if (fileIsFolder) { onOpenFolder(name); return; }
     const isScr = name.toLowerCase().endsWith('.scr');
     await runExeWithArgs(name, isScr ? '/s' : undefined);
   }
 
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [confirmFlash, setConfirmFlash] = useState(0);
-
-  async function handleDelete(name: string) {
-    if (isFolder(name)) {
-      await deleteFolder(name);
-    } else {
-      await deleteFile(name);
-    }
-    setConfirmDelete(null);
-    setContextMenu(null);
-    await loadFiles();
-  }
-
   async function handleViewResources(name: string) {
-    setContextMenu(null);
+    fm.setContextMenu(null);
     const stored = await getAllFiles();
     const f = stored.find(s => s.name === name);
     if (f) onViewResources(f.data, name);
-  }
-
-  async function handleNewFolder() {
-    setBgContextMenu(null);
-    let name = t().newFolder;
-    let suffix = 0;
-    const existingNames = new Set(files.map(f => displayName(f.name)));
-    while (existingNames.has(name)) { suffix++; name = `${t().newFolder} (${suffix})`; }
-    const fullPath = name + '/';
-    await addFolder(fullPath);
-    await loadFiles();
-    setEditingName(fullPath);
-    setSelected(fullPath);
-  }
-
-  async function handleRename(oldName: string, newDisplayName: string) {
-    setEditingName(null);
-    const oldDisplay = displayName(oldName);
-    if (newDisplayName === oldDisplay) return;
-    const newName = newDisplayName + (isFolder(oldName) ? '/' : '');
-    await renameEntry(oldName, newName);
-    await loadFiles();
   }
 
   return (
     <div
       class="w-full select-none"
       style={{ minHeight: '100%' }}
-      onClick={() => { if (confirmDelete) return; setSelected(null); setEditingName(null); setContextMenu(null); setBgContextMenu(null); }}
+      onClick={() => { if (fm.confirmDelete) return; fm.setSelected(null); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
       onContextMenu={(e: MouseEvent) => {
-        if (confirmDelete) { e.preventDefault(); return; }
+        if (fm.confirmDelete) { e.preventDefault(); return; }
         if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
           e.preventDefault();
-          setContextMenu(null);
-          setBgContextMenu({ x: e.clientX, y: e.clientY });
+          fm.setContextMenu(null);
+          fm.setBgContextMenu({ x: e.clientX, y: e.clientY });
         }
       }}
       onDragOver={(e: DragEvent) => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* Drop overlay — only show for external file drops, not internal drags */}
       {dragOver && (
-        <div class="absolute inset-0 z-50 pointer-events-none"
-          style={{ background: 'rgba(0,0,0,0.15)' }}>
-        </div>
+        <div class="absolute inset-0 z-50 pointer-events-none" style={{ background: 'rgba(0,0,0,0.15)' }} />
       )}
 
-      {/* Icons grid */}
       <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
-        {files.map(f => (
+        {fm.items.map(f => (
           <DesktopIcon
             key={f.name}
-            name={displayName(f.name)}
+            name={f.displayName}
             storePath={f.name}
             iconUrl={f.iconUrl}
             isFolder={f.isFolder}
             isExe={f.isExe}
-            selected={selected === f.name}
-            editing={editingName === f.name}
-            onSelect={() => setSelected(f.name)}
+            selected={fm.selected === f.name}
+            editing={fm.editingName === f.name}
+            onSelect={() => fm.setSelected(f.name)}
             onOpen={() => handleOpen(f.name, f.isFolder)}
-            onRename={(newName) => handleRename(f.name, newName)}
-            onContextMenu={(e: MouseEvent) => { setBgContextMenu(null); setContextMenu({ x: e.clientX, y: e.clientY, name: f.name, isExe: f.isExe, isScr: f.name.toLowerCase().endsWith('.scr'), isFolder: f.isFolder }); }}
-            onDropOnIcon={(draggedPath) => handleInternalDropOnFolder(f.name, draggedPath)}
-            onDropExternalOnIcon={(e) => handleExternalDropOnFolder(f.name, e)}
+            onRename={(newName) => fm.handleRename(f.name, newName)}
+            onContextMenu={(e: MouseEvent) => { fm.setBgContextMenu(null); fm.setContextMenu({ x: e.clientX, y: e.clientY, item: f }); }}
+            onDropOnIcon={(draggedPath) => fm.handleDropOnFolder(f.name, draggedPath)}
+            onDropExternalOnIcon={(e) => fm.handleExternalDropOnFolder(f.name, e)}
           />
         ))}
         <div style={{ position: 'absolute', bottom: '4px', right: '8px', zIndex: 1, font: '11px Tahoma, sans-serif', textAlign: 'right', lineHeight: '1.6' }}>
@@ -304,150 +128,109 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
             {t().dropHint}<br />
             {t().rightClickHint}
           </div>
-          <a
-            href="https://github.com/lqs/retrotick"
-            target="_blank"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              height: '22px',
-              padding: '0 8px',
-              marginTop: '4px',
-              background: '#D4D0C8',
-              border: '1px solid',
-              borderColor: '#FFF #404040 #404040 #FFF',
-              boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
-              color: '#000',
-              textDecoration: 'none',
-              font: 'bold 11px/1 "Tahoma", "MS Sans Serif", sans-serif',
-              whiteSpace: 'nowrap',
-            }}
-          >
+          <a href="https://github.com/lqs/retrotick" target="_blank"
+            style={{ display: 'inline-flex', alignItems: 'center', height: '22px', padding: '0 8px', marginTop: '4px', background: '#D4D0C8', border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF', boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080', color: '#000', textDecoration: 'none', font: 'bold 11px/1 "Tahoma", "MS Sans Serif", sans-serif', whiteSpace: 'nowrap' }}>
             Star on GitHub
           </a>
         </div>
       </div>
 
       {/* Background context menu */}
-      {bgContextMenu && (() => {
-        const CMD_NEW_FOLDER = 1;
-        const CMD_REFRESH = 2;
+      {fm.bgContextMenu && (() => {
+        const CMD_NEW_FOLDER = 1, CMD_REFRESH = 2;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
-        const items: MenuItem[] = [
-          mi(CMD_NEW_FOLDER, t().newFolder),
-          { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
-          mi(CMD_REFRESH, t().refresh),
-        ];
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
-              items={items}
-              x={bgContextMenu.x} y={bgContextMenu.y}
+              items={[
+                mi(CMD_NEW_FOLDER, t().newFolder),
+                { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                mi(CMD_REFRESH, t().refresh),
+              ]}
+              x={fm.bgContextMenu.x} y={fm.bgContextMenu.y}
               onCommand={(id) => {
-                setBgContextMenu(null);
-                if (id === CMD_NEW_FOLDER) handleNewFolder();
-                else if (id === CMD_REFRESH) { setFiles([]); setTimeout(loadFiles, 60); }
+                fm.setBgContextMenu(null);
+                if (id === CMD_NEW_FOLDER) fm.handleNewFolder();
+                else if (id === CMD_REFRESH) { fm.setItems([]); setTimeout(fm.loadItems, 60); }
               }}
-              onClose={() => setBgContextMenu(null)}
+              onClose={() => fm.setBgContextMenu(null)}
             />
           </div>
         );
       })()}
 
       {/* File context menu */}
-      {contextMenu && (() => {
+      {fm.contextMenu && (() => {
+        const { item } = fm.contextMenu;
+        const isScr = item.name.toLowerCase().endsWith('.scr');
         const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_DELETE = 4, CMD_RENAME = 5, CMD_PROPS = 6;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
-        const items: MenuItem[] = [];
-        if (contextMenu.isFolder) {
-          items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
-          items.push(mi(CMD_RENAME, t().rename));
-          items.push(sep);
-          items.push(mi(CMD_DELETE, t().delete_));
+        const menuItems: MenuItem[] = [];
+        if (item.isFolder) {
+          menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true }));
+          menuItems.push(mi(CMD_RENAME, t().rename));
+          menuItems.push(sep);
+          menuItems.push(mi(CMD_DELETE, t().delete_));
         } else {
-          if (contextMenu.isExe) items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
-          if (contextMenu.isScr && contextMenu.isExe) items.push(mi(CMD_CONFIGURE, t().configure));
-          items.push(mi(CMD_VIEW, t().viewResources, { isDefault: !contextMenu.isExe }));
-          items.push(mi(CMD_RENAME, t().rename));
-          items.push(sep);
-          items.push(mi(CMD_DELETE, t().delete_));
+          if (item.isExe) menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true }));
+          if (isScr && item.isExe) menuItems.push(mi(CMD_CONFIGURE, t().configure));
+          menuItems.push(mi(CMD_VIEW, t().viewResources, { isDefault: !item.isExe }));
+          menuItems.push(mi(CMD_RENAME, t().rename));
+          menuItems.push(sep);
+          menuItems.push(mi(CMD_DELETE, t().delete_));
         }
-        items.push({ ...sep });
-        items.push(mi(CMD_PROPS, t().properties));
+        menuItems.push({ ...sep });
+        menuItems.push(mi(CMD_PROPS, t().properties));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
-              items={items}
-              x={contextMenu.x} y={contextMenu.y}
+              items={menuItems}
+              x={fm.contextMenu.x} y={fm.contextMenu.y}
               onCommand={(id) => {
-                setContextMenu(null);
-                if (id === CMD_OPEN) handleOpen(contextMenu.name, contextMenu.isFolder);
-                else if (id === CMD_CONFIGURE) runExeWithArgs(contextMenu.name, '/c');
-                else if (id === CMD_VIEW) handleViewResources(contextMenu.name);
-                else if (id === CMD_RENAME) { setEditingName(contextMenu.name); setSelected(contextMenu.name); }
-                else if (id === CMD_DELETE) { setConfirmDelete(contextMenu.name); setContextMenu(null); }
-                else if (id === CMD_PROPS) {
-                  const f = files.find(df => df.name === contextMenu.name);
-                  if (f) setPropertiesFile(f);
-                }
+                fm.setContextMenu(null);
+                if (id === CMD_OPEN) handleOpen(item.name, item.isFolder);
+                else if (id === CMD_CONFIGURE) runExeWithArgs(item.name, '/c');
+                else if (id === CMD_VIEW) handleViewResources(item.name);
+                else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.setSelected(item.name); }
+                else if (id === CMD_DELETE) { fm.setConfirmDelete(item.name); fm.setContextMenu(null); }
+                else if (id === CMD_PROPS) fm.setPropertiesItem(item);
               }}
-              onClose={() => setContextMenu(null)}
+              onClose={() => fm.setContextMenu(null)}
             />
           </div>
         );
       })()}
 
-      {/* Delete confirmation dialog */}
-      {confirmDelete && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onPointerDown={(e) => { e.preventDefault(); setConfirmFlash(c => c + 1); }} onContextMenu={(e: Event) => e.preventDefault()}>
-          <div onPointerDown={(e) => e.stopPropagation()} style={{ font: '11px/1 "Tahoma", "MS Sans Serif", sans-serif', minWidth: '280px', maxWidth: '400px' }}>
-            <Window title={isFolder(confirmDelete) ? t().confirmFolderDelete : t().confirmFileDelete} style={WS_CAPTION | WS_SYSMENU} focused={true} draggable flashTrigger={confirmFlash} onClose={() => setConfirmDelete(null)}>
-              <div style={{ padding: '12px 12px 8px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="16" cy="16" r="14" fill="#FFFF00" stroke="#000" stroke-width="1"/>
-                  <rect x="14" y="7" width="4" height="12" fill="#000"/>
-                  <rect x="14" y="22" width="4" height="4" fill="#000"/>
-                </svg>
-                <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {isFolder(confirmDelete)
-                    ? t().confirmDeleteFolder.replace('{0}', displayName(confirmDelete))
-                    : t().confirmDeleteFile.replace('{0}', confirmDelete)}
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', padding: '4px 12px 8px' }}>
-                <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => handleDelete(confirmDelete)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif' isDefault>{t().yes}</Button>
-                </div>
-                <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }} onClick={() => setConfirmDelete(null)}>
-                  <Button fontCSS='11px/1 "Tahoma", "MS Sans Serif", sans-serif'>{t().no}</Button>
-                </div>
-              </div>
-            </Window>
-          </div>
-        </div>
+      {fm.confirmDelete && (
+        <DeleteConfirmDialog
+          name={fm.confirmDelete}
+          flashTrigger={fm.confirmFlash}
+          onConfirm={() => fm.handleDelete(fm.confirmDelete!)}
+          onCancel={() => fm.setConfirmDelete(null)}
+          onFlash={() => fm.setConfirmFlash(c => c + 1)}
+        />
       )}
 
-      {/* Properties dialog */}
-      {propertiesFile && (
-        <div onPointerDown={() => setPropsFlash(c => c + 1)}>
+      {fm.propertiesItem && (
+        <div onPointerDown={() => fm.setPropsFlash(c => c + 1)}>
           <PropertiesDialog
             info={{
-              displayName: displayName(propertiesFile.name),
-              isFolder: propertiesFile.isFolder,
-              isExe: propertiesFile.isExe,
-              iconUrl: propertiesFile.iconUrl,
-              size: propertiesFile.size,
-              addedAt: propertiesFile.addedAt,
+              displayName: fm.propertiesItem.displayName,
+              isFolder: fm.propertiesItem.isFolder,
+              isExe: fm.propertiesItem.isExe,
+              iconUrl: fm.propertiesItem.iconUrl,
+              size: fm.propertiesItem.size,
+              addedAt: fm.propertiesItem.addedAt,
               location: 'D:\\',
-              folderContents,
+              folderContents: fm.folderContents,
             }}
-            flashTrigger={propsFlash}
-            onClose={() => setPropertiesFile(null)}
+            flashTrigger={fm.propsFlash}
+            onClose={() => fm.setPropertiesItem(null)}
           />
         </div>
       )}
