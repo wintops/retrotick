@@ -19,6 +19,8 @@ import { FileDialog } from './win2k/FileDialog';
 import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
 import { loadRegistry, saveRegistry } from '../lib/registry-db';
+import { ProfileStore } from '../lib/profile-store';
+import { loadProfiles, saveProfiles } from '../lib/profile-db';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
 import { loadSettings, getKeyboardLayout, t } from '../lib/regional-settings';
 
@@ -443,8 +445,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const emu = new Emulator();
     emu.configuredLcid = loadSettings().localeId;
 
-    // Async init for registry, then start emulator
+    // Async init for registry + profiles, then start emulator
     let regFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let profFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const initAndRun = async () => {
       // Set up registry store with IndexedDB persistence
       const regStore = new RegistryStore();
@@ -463,6 +466,24 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }, 500);
       };
       emu.registryStore = regStore;
+
+      // Set up profile store with IndexedDB persistence
+      const profStore = new ProfileStore();
+      try {
+        const saved = await loadProfiles();
+        if (saved) profStore.deserialize(saved);
+      } catch (e) {
+        console.warn('[PROF] Failed to load profiles from IndexedDB:', e);
+      }
+      profStore.onChange = () => {
+        if (profFlushTimer !== null) clearTimeout(profFlushTimer);
+        profFlushTimer = setTimeout(() => {
+          saveProfiles(profStore.serialize()).catch(e =>
+            console.warn('[PROF] Failed to save profiles:', e)
+          );
+        }, 500);
+      };
+      emu.profileStore = profStore;
     };
 
     try {

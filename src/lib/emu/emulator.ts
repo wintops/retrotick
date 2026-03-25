@@ -9,6 +9,7 @@ import type { TreeViewItem, ListViewColumn, ListViewItem } from './win32/user32/
 import type { PEInfo, MenuItem } from '../pe/types';
 import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
+import type { ProfileStore } from '../profile-store';
 import { DefaultFileManager } from './file-manager';
 import { VGAState, isVGAPort, syncGraphics } from './dos/vga';
 import { DosAudio } from './dos/audio';
@@ -289,6 +290,7 @@ export class Emulator {
 
   windowsVersion: WindowsVersion = WINDOWS_2000;
   registryStore?: RegistryStore;
+  profileStore?: ProfileStore;
 
   pe!: LoadedPE;
   peInfo!: PEInfo;

@@ -110,10 +110,40 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
   kernel.register('FileCDR', 6, () => 0, 130);
   // --- Ordinal 141: InitTask1(str ptr) — 8 bytes ---
   kernel.register('InitTask1', 8, () => 0, 141);
-  // --- Ordinal 142: GetProfileSectionNames(str) — 4 bytes ---
-  kernel.register('GetProfileSectionNames', 4, () => 0, 142);
-  // --- Ordinal 143: GetPrivateProfileSectionNames(str) — 4 bytes ---
-  kernel.register('GetPrivateProfileSectionNames', 4, () => 0, 143);
+  // --- Ordinal 142: GetProfileSectionNames(lpBuffer:ptr, nSize:word) — 6 bytes ---
+  kernel.register('GetProfileSectionNames', 6, () => {
+    const [lpBufRaw, nSize] = emu.readPascalArgs16([4, 2]);
+    const dst = emu.resolveFarPtr(lpBufRaw);
+    if (!dst || nSize === 0) return 0;
+    const s = emu.profileStore;
+    const names = s ? s.getSectionNames('win.ini') : [];
+    let pos = 0;
+    for (const name of names) {
+      if (pos + name.length + 1 >= nSize - 1) break;
+      for (let i = 0; i < name.length; i++) emu.memory.writeU8(dst + pos++, name.charCodeAt(i));
+      emu.memory.writeU8(dst + pos++, 0);
+    }
+    emu.memory.writeU8(dst + pos, 0);
+    return pos;
+  }, 142);
+  // --- Ordinal 143: GetPrivateProfileSectionNames(lpBuffer:ptr, nSize:word, lpFileName:str) — 10 bytes ---
+  kernel.register('GetPrivateProfileSectionNames', 10, () => {
+    const [lpBufRaw, nSize, lpFileNameRaw] = emu.readPascalArgs16([4, 2, 4]);
+    const dst = emu.resolveFarPtr(lpBufRaw);
+    if (!dst || nSize === 0) return 0;
+    const lpFileName = emu.resolveFarPtr(lpFileNameRaw);
+    const file = lpFileName ? emu.memory.readCString(lpFileName) : 'win.ini';
+    const s = emu.profileStore;
+    const names = s ? s.getSectionNames(file) : [];
+    let pos = 0;
+    for (const name of names) {
+      if (pos + name.length + 1 >= nSize - 1) break;
+      for (let i = 0; i < name.length; i++) emu.memory.writeU8(dst + pos++, name.charCodeAt(i));
+      emu.memory.writeU8(dst + pos++, 0);
+    }
+    emu.memory.writeU8(dst + pos, 0);
+    return pos;
+  }, 143);
   // --- Ordinal 144: CreateDirectory(long) — 4 bytes ---
   // (duplicate ordinal for compat; use same as ord_147)
   kernel.register('CreateDirectory', 4, () => 0, 144);

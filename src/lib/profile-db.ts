@@ -21,22 +21,22 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function loadRegistry(): Promise<object | null> {
+export async function loadProfiles(): Promise<object | null> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('registry', 'readonly');
-    const store = tx.objectStore('registry');
+    const tx = db.transaction('profiles', 'readonly');
+    const store = tx.objectStore('profiles');
     const req = store.get('data');
     req.onsuccess = () => resolve(req.result ?? null);
     req.onerror = () => reject(req.error);
   });
 }
 
-export async function saveRegistry(data: object): Promise<void> {
+export async function saveProfiles(data: object): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('registry', 'readwrite');
-    const store = tx.objectStore('registry');
+    const tx = db.transaction('profiles', 'readwrite');
+    const store = tx.objectStore('profiles');
     store.put(data, 'data');
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);

@@ -6,7 +6,7 @@ export interface StoredFile {
 
 const DB_NAME = 'exeviewer';
 const STORE_NAME = 'files';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -18,6 +18,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains('registry')) {
         db.createObjectStore('registry');
+      }
+      if (!db.objectStoreNames.contains('profiles')) {
+        db.createObjectStore('profiles');
       }
     };
     req.onsuccess = () => resolve(req.result);
