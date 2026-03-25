@@ -7,11 +7,17 @@ import { execFPU_DC, execFPU_DD, execFPU_DE, execFPU_DF } from './fpu-dcdf';
 export function fpuPush(cpu: CPU, val: number): void {
   cpu.fpuTop = (cpu.fpuTop - 1) & 7;
   cpu.fpuStack[cpu.fpuTop] = val;
+  cpu.fpuI64[cpu.fpuTop] = undefined;
+  cpu.fpuRaw64[cpu.fpuTop] = undefined;
+  cpu.fpuRaw80[cpu.fpuTop] = undefined;
   cpu.fpuTW &= ~(3 << (cpu.fpuTop * 2));
 }
 
 export function fpuPop(cpu: CPU): number {
   const val = cpu.fpuStack[cpu.fpuTop];
+  cpu.fpuI64[cpu.fpuTop] = undefined;
+  cpu.fpuRaw64[cpu.fpuTop] = undefined;
+  cpu.fpuRaw80[cpu.fpuTop] = undefined;
   cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
   cpu.fpuTop = (cpu.fpuTop + 1) & 7;
   return val;
@@ -22,8 +28,12 @@ export function fpuST(cpu: CPU, i: number): number {
 }
 
 export function fpuSetST(cpu: CPU, i: number, val: number): void {
-  cpu.fpuStack[(cpu.fpuTop + i) & 7] = val;
-  cpu.fpuTW &= ~(3 << (((cpu.fpuTop + i) & 7) * 2));
+  const slot = (cpu.fpuTop + i) & 7;
+  cpu.fpuStack[slot] = val;
+  cpu.fpuI64[slot] = undefined;
+  cpu.fpuRaw64[slot] = undefined;
+  cpu.fpuRaw80[slot] = undefined;
+  cpu.fpuTW &= ~(3 << (slot * 2));
 }
 
 export function execFPU(cpu: CPU, opcode: number): void {

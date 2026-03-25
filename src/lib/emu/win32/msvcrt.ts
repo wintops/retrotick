@@ -802,6 +802,22 @@ export function registerMsvcrt(emu: Emulator): void {
   msvcrt.register('_crt_atexit', 0, () => 0);
   msvcrt.register('_configure_narrow_argv', 0, () => 0);
   msvcrt.register('_configure_wide_argv', 0, () => 0);
+  msvcrt.register('_initialize_narrow_environment', 0, () => 0);
+  msvcrt.register('_initialize_wide_environment', 0, () => 0);
+  msvcrt.register('_initialize_onexit_table', 0, () => 0);
+  msvcrt.register('_register_onexit_function', 0, () => 0);
+  msvcrt.register('_set_new_mode', 0, () => 0); // returns previous mode
+  msvcrt.register('_get_initial_narrow_environment', 0, () => {
+    // Returns char** environ — allocate a NULL-terminated array
+    const ptr = emu.allocHeap(4);
+    emu.memory.writeU32(ptr, 0); // empty environ: just a NULL pointer
+    return ptr;
+  });
+  msvcrt.register('_get_initial_wide_environment', 0, () => {
+    const ptr = emu.allocHeap(4);
+    emu.memory.writeU32(ptr, 0);
+    return ptr;
+  });
 
   // puts(const char* str) — write string + newline to stdout
   msvcrt.register('puts', 0, () => {

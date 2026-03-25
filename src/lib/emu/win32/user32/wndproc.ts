@@ -5,7 +5,8 @@ import {
   WM_NCCREATE, WM_NCDESTROY, WM_NCCALCSIZE, WM_NCPAINT, WM_NCACTIVATE,
   WM_GETMINMAXINFO, WM_SHOWWINDOW, WM_ACTIVATE, WM_SETCURSOR, WM_NCHITTEST,
   WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED, WM_ACTIVATEAPP, WM_SIZE,
-  SC_CLOSE, HTCLIENT, SYS_COLORS, COLOR_BTNFACE, IDCANCEL,
+  SC_CLOSE, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE,
+  HTCLIENT, SYS_COLORS, COLOR_BTNFACE, IDCANCEL,
 } from '../types';
 
 export function registerWndProc(emu: Emulator): void {
@@ -34,15 +35,31 @@ export function registerWndProc(emu: Emulator): void {
     const lParam = emu.readArg(3);
 
     switch (message) {
-      case WM_SYSCOMMAND:
-        if ((wParam & 0xFFF0) === SC_CLOSE) {
-          // Real Windows sends WM_CLOSE synchronously (SendMessage), not PostMessage
-          const scWnd = emu.handles.get<WindowInfo>(hwnd);
+      case WM_SYSCOMMAND: {
+        const scCmd = wParam & 0xFFF0;
+        const scWnd = emu.handles.get<WindowInfo>(hwnd);
+        if (scCmd === SC_CLOSE) {
           if (scWnd?.wndProc) {
             emu.callWndProc(scWnd.wndProc, hwnd, WM_CLOSE, 0, 0);
           }
+        } else if (scCmd === SC_MINIMIZE) {
+          if (scWnd) {
+            scWnd.minimized = true;
+            scWnd.maximized = false;
+          }
+        } else if (scCmd === SC_MAXIMIZE) {
+          if (scWnd) {
+            scWnd.maximized = true;
+            scWnd.minimized = false;
+          }
+        } else if (scCmd === SC_RESTORE) {
+          if (scWnd) {
+            scWnd.minimized = false;
+            scWnd.maximized = false;
+          }
         }
         return 0;
+      }
       case WM_CLOSE: {
         // Real Windows: DefWindowProc calls DestroyWindow(hwnd) synchronously
         const closeWnd = emu.handles.get<WindowInfo>(hwnd);

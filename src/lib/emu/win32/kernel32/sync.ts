@@ -138,6 +138,21 @@ export function registerSync(emu: Emulator): void {
     return 1;
   });
 
+  // WaitForMultipleObjectsEx(nCount, lpHandles, bWaitAll, dwMilliseconds, bAlertable) → DWORD
+  kernel32.register('WaitForMultipleObjectsEx', 5, () => {
+    const nCount = emu.readArg(0);
+    const lpHandles = emu.readArg(1);
+    for (let i = 0; i < nCount; i++) {
+      const h = emu.memory.readU32(lpHandles + i * 4);
+      const ev = emu.handles.get<{ signaled?: boolean }>(h);
+      if (ev && ev.signaled) {
+        ev.signaled = false;
+        return i; // WAIT_OBJECT_0 + i
+      }
+    }
+    return WAIT_TIMEOUT;
+  });
+
   // OpenMutexW: return 0 (not found) — sakura checks single instance
   kernel32.register('OpenMutexW', 3, () => 0);
 

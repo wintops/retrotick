@@ -93,6 +93,24 @@ export function registerInput(emu: Emulator): void {
     return 0;
   });
   user32.register('GetKeyNameTextA', 3, () => 0);
+  user32.register('GetKeyNameTextW', 3, () => 0);
+
+  // MapVirtualKeyW — same as A version
+  user32.register('MapVirtualKeyW', 2, () => {
+    const uCode = emu.readArg(0);
+    const uMapType = emu.readArg(1);
+    if (uMapType === MAPVK_VK_TO_VSC) {
+      if (uCode >= 0x41 && uCode <= 0x5A) return uCode - 0x41 + 0x1E;
+      if (uCode >= 0x30 && uCode <= 0x39) return uCode - 0x30 + 0x02;
+      return 0;
+    }
+    if (uMapType === MAPVK_VSC_TO_VK) {
+      if (uCode >= 0x1E && uCode <= 0x37) return uCode - 0x1E + 0x41;
+      if (uCode >= 0x02 && uCode <= 0x0B) return uCode - 0x02 + 0x30;
+      return 0;
+    }
+    return 0;
+  });
 
   // VkKeyScanA(ch) → low byte = VK code, high byte = shift state; -1 if not found
   user32.register('VkKeyScanA', 1, () => {
@@ -115,7 +133,11 @@ export function registerInput(emu: Emulator): void {
     return layout.hkl;
   });
 
-  // LoadKeyboardLayoutA(pwszKLID, Flags) — return current HKL
+  // LoadKeyboardLayoutA/W(pwszKLID, Flags) — return current HKL
+  user32.register('LoadKeyboardLayoutW', 2, () => {
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    return layout.hkl;
+  });
   user32.register('LoadKeyboardLayoutA', 2, () => {
     const layout = getKeyboardLayout(loadSettings().keyboardLayout);
     return layout.hkl;
@@ -145,5 +167,17 @@ export function registerInput(emu: Emulator): void {
     if (nTypeFlag === 1) return 0;   // subtype (OEM dependent)
     if (nTypeFlag === 2) return 12;  // number of function keys
     return 0;
+  });
+
+  // GetKeyboardLayoutNameW(pwszKLID) → BOOL — writes "00000409" etc
+  user32.register('GetKeyboardLayoutNameW', 1, () => {
+    const pwszKLID = emu.readArg(0);
+    if (pwszKLID) {
+      const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+      const name = layout.hkl.toString(16).padStart(8, '0');
+      for (let i = 0; i < name.length; i++) emu.memory.writeU16(pwszKLID + i * 2, name.charCodeAt(i));
+      emu.memory.writeU16(pwszKLID + name.length * 2, 0);
+    }
+    return 1;
   });
 }

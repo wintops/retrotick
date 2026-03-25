@@ -617,6 +617,9 @@ export function registerMenu(emu: Emulator): void {
 
   user32.register('HiliteMenuItem', 4, () => 1);
   user32.register('MenuItemFromPoint', 3, () => 0xFFFFFFFF);
+
+  // EndMenu() → BOOL — cancels any active menu
+  user32.register('EndMenu', 0, () => 1);
 }
 
 // --- MENUITEMINFO helpers ---

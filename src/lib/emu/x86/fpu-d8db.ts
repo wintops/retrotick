@@ -254,6 +254,7 @@ export function execFPU_DB(cpu: CPU, mod: number, regField: number, rm: number, 
       case 2: mem.writeU32(addr, fpuRound(cpu, fpuST(cpu, 0))); break;
       case 3: mem.writeU32(addr, fpuRound(cpu, fpuPop(cpu))); break;
       case 5: {
+        // FLD m80real: preserve raw 10 bytes for FSTP round-trip
         const lo = mem.readU32(addr);
         const hi = mem.readU32(addr + 4);
         const exp_sign = mem.readU16(addr + 8);
@@ -267,10 +268,23 @@ export function execFPU_DB(cpu: CPU, mod: number, regField: number, rm: number, 
           const mantissa = hi * 0x100000000 + lo;
           fpuPush(cpu, sign * mantissa * Math.pow(2, exp - 16383 - 63));
         }
+        cpu.fpuRaw80[cpu.fpuTop] = [lo, hi, exp_sign];
         break;
       }
       case 7: {
-        // FSTP m80 — store as 80-bit extended precision
+        // FSTP m80 — use raw bytes if available for exact preservation
+        const raw80 = cpu.fpuRaw80[cpu.fpuTop];
+        if (raw80) {
+          mem.writeU32(addr, raw80[0]);
+          mem.writeU32(addr + 4, raw80[1]);
+          mem.writeU16(addr + 8, raw80[2]);
+          cpu.fpuRaw80[cpu.fpuTop] = undefined;
+          cpu.fpuI64[cpu.fpuTop] = undefined;
+          cpu.fpuRaw64[cpu.fpuTop] = undefined;
+          cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
+          cpu.fpuTop = (cpu.fpuTop + 1) & 7;
+          break;
+        }
         const val = fpuPop(cpu);
         const sign = (val < 0 || Object.is(val, -0)) ? 1 : 0;
         const abs = Math.abs(val);

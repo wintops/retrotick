@@ -145,6 +145,16 @@ export function registerOle32(emu: Emulator): void {
     return 0;
   });
 
+  // IsEqualGUID(rguid1, rguid2) → BOOL — compare two 16-byte GUIDs
+  ole32.register('IsEqualGUID', 2, () => {
+    const rguid1 = emu.readArg(0);
+    const rguid2 = emu.readArg(1);
+    for (let i = 0; i < 16; i++) {
+      if (emu.memory.readU8(rguid1 + i) !== emu.memory.readU8(rguid2 + i)) return 0;
+    }
+    return 1;
+  });
+
   // OleGetClipboard(ppDataObj) — 1 arg
   ole32.register('OleGetClipboard', 1, () => {
     const ppDataObj = emu.readArg(0);

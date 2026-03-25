@@ -353,4 +353,7 @@ export function registerResource(emu: Emulator): void {
   user32.register('DestroyIcon', 1, () => 1);
   user32.register('DestroyCursor', 1, () => 1);
   user32.register('GetIconInfo', 2, () => 0);
+
+  // CopyImage(h, type, cx, cy, flags) → HANDLE — return same handle
+  user32.register('CopyImage', 5, () => emu.readArg(0));
 }

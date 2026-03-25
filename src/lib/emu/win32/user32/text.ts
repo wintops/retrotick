@@ -624,4 +624,15 @@ export function registerText(emu: Emulator): void {
   user32.register('TabbedTextOutW', 8, () => (8 << 16) | 8);
 
   user32.register('GrayStringW', 9, () => 1);
+
+  // CharUpperBuffW(lpsz, cchLength) → DWORD (number of chars processed)
+  user32.register('CharUpperBuffW', 2, () => {
+    const lpsz = emu.readArg(0);
+    const cchLength = emu.readArg(1);
+    for (let i = 0; i < cchLength; i++) {
+      const ch = emu.memory.readU16(lpsz + i * 2);
+      if (ch >= 0x61 && ch <= 0x7A) emu.memory.writeU16(lpsz + i * 2, ch - 0x20);
+    }
+    return cchLength;
+  });
 }

@@ -33,6 +33,7 @@ import { registerImm32 } from './win32/imm32';
 import { registerNtdll } from './win32/ntdll';
 import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
+import { registerNetapi32 } from './win32/netapi32';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
@@ -357,6 +358,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   registerMsimg32(emu);
   registerImm32(emu);
   registerNtdll(emu);
+  registerNetapi32(emu);
   registerVdmdbg(emu);
 
   // Build thunk dispatch table with argument count detection

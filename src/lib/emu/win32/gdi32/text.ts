@@ -361,7 +361,9 @@ export function registerText(emu: Emulator): void {
   gdi32.register('EnumFontFamiliesW', 4, () => 1);
   gdi32.register('EnumFontFamiliesExW', 5, () => 1);
   gdi32.register('AddFontResourceA', 1, () => 0);
+  gdi32.register('AddFontResourceW', 1, () => 0);
   gdi32.register('RemoveFontResourceA', 1, () => 0);
+  gdi32.register('RemoveFontResourceW', 1, () => 0);
 
   gdi32.register('GetTextFaceW', 3, () => {
     const _hdc = emu.readArg(0);

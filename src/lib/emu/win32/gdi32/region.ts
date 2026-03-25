@@ -16,4 +16,17 @@ export function registerRegion(emu: Emulator): void {
   // FillRgn(hdc, hrgn, hbr) → BOOL
   gdi32.register('FillRgn', 3, () => 1);
   gdi32.register('OffsetRgn', 3, () => 1); // SIMPLEREGION
+  // FrameRgn(hdc, hrgn, hbr, w, h) → BOOL
+  gdi32.register('FrameRgn', 5, () => 1);
+  // GetRgnBox(hRgn, lprc) → int — return SIMPLEREGION
+  gdi32.register('GetRgnBox', 2, () => {
+    const lprc = emu.readArg(1);
+    if (lprc) {
+      emu.memory.writeU32(lprc, 0);
+      emu.memory.writeU32(lprc + 4, 0);
+      emu.memory.writeU32(lprc + 8, 100);
+      emu.memory.writeU32(lprc + 12, 100);
+    }
+    return 2; // SIMPLEREGION
+  });
 }

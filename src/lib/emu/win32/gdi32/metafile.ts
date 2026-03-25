@@ -16,4 +16,6 @@ export function registerMetafile(emu: Emulator): void {
   gdi32.register('PlayMetaFile', 2, () => 1);
   gdi32.register('EnumMetaFile', 5, () => 1);
   gdi32.register('PlayMetaFileRecord', 4, () => 1);
+  gdi32.register('CopyEnhMetaFileW', 2, () => 0);
+  gdi32.register('GetEnhMetaFileDescriptionW', 3, () => 0);
 }

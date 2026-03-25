@@ -217,6 +217,39 @@ export function registerMessage(emu: Emulator): void {
     return undefined;
   });
 
+  // MsgWaitForMultipleObjectsEx(nCount, pHandles, dwMilliseconds, dwWakeMask, dwFlags) → DWORD
+  user32.register('MsgWaitForMultipleObjectsEx', 5, () => {
+    const nCount = emu.readArg(0);
+    const dwMilliseconds = emu.readArg(2);
+
+    if (emu.messageQueue.length > 0) return nCount;
+    for (const [, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
+      if (wnd && wnd.needsPaint && (wnd.wndProc || (wnd.needsErase && wnd.classInfo.hbrBackground))) {
+        return nCount;
+      }
+    }
+    if (dwMilliseconds === 0) return WAIT_TIMEOUT;
+
+    const stackBytes = emu._currentThunkStackBytes;
+    emu.waitingForMessage = true;
+    const timerId = setTimeout(() => {
+      emu._onMessageAvailable = null;
+      emu.waitingForMessage = false;
+      emuCompleteThunk(emu, WAIT_TIMEOUT, stackBytes);
+      if (emu.running && !emu.halted) requestAnimationFrame(emu.tick);
+    }, dwMilliseconds);
+    emu._onMessageAvailable = () => {
+      clearTimeout(timerId);
+      emu.waitingForMessage = false;
+      emuCompleteThunk(emu, nCount, stackBytes);
+      if (emu.running && !emu.halted) requestAnimationFrame(emu.tick);
+    };
+    return undefined;
+  });
+
+  // GetMessageExtraInfo() → LPARAM
+  user32.register('GetMessageExtraInfo', 0, () => 0);
+
   user32.register('TranslateMessage', 1, () => {
     // No-op (keyboard translation not emulated)
     return 0;
@@ -1489,34 +1522,81 @@ export function registerMessage(emu: Emulator): void {
 
     // TabControl messages
     if (cn === 'SYSTABCONTROL32') {
-      const TCM_INSERTITEMW = 0x133E;
-      const TCM_INSERTITEMA = 0x1307;
-      const TCM_SETCURSEL = 0x130C;
-      const TCM_GETCURSEL = 0x130B;
+      const TCM_GETIMAGELIST = 0x1302;
+      const TCM_SETIMAGELIST = 0x1303;
       const TCM_GETITEMCOUNT = 0x1304;
+      const TCM_GETITEMA = 0x1305;
+      const TCM_SETITEMA = 0x1306;
+      const TCM_INSERTITEMA = 0x1307;
+      const TCM_DELETEITEM = 0x1308;
       const TCM_DELETEALLITEMS = 0x1309;
+      const TCM_GETITEMRECT = 0x130A;
+      const TCM_GETCURSEL = 0x130B;
+      const TCM_SETCURSEL = 0x130C;
+      const TCM_HITTEST = 0x130D;
       const TCM_ADJUSTRECT = 0x1328;
+      const TCM_SETPADDING = 0x132B;
+      const TCM_GETROWCOUNT = 0x132C;
+      const TCM_GETCURFOCUS = 0x132F;
+      const TCM_SETCURFOCUS = 0x1330;
+      const TCM_SETMINTABWIDTH = 0x1331;
+      const TCM_DESELECTALL = 0x1332;
+      const TCM_SETITEMW = 0x133D;
+      const TCM_INSERTITEMW = 0x133E;
+      const TCM_GETITEMW = 0x133F;
+      const TCIF_TEXT = 0x0001;
+      // Helper: read text from TCITEM at lParam (A or W variant)
+      const tcitemReadText = (wide: boolean): string => {
+        const mask = emu.memory.readU32(lParam);
+        if (!(mask & TCIF_TEXT)) return '';
+        const pszText = emu.memory.readU32(lParam + 12);
+        if (!pszText) return '';
+        return wide ? emu.memory.readUTF16String(pszText) : emu.memory.readCString(pszText);
+      };
+      // Helper: write text into TCITEM at lParam (A or W variant)
+      const tcitemWriteText = (text: string, wide: boolean): void => {
+        const mask = emu.memory.readU32(lParam);
+        if (!(mask & TCIF_TEXT)) return;
+        const pszText = emu.memory.readU32(lParam + 12);
+        const cchMax = emu.memory.readU32(lParam + 16);
+        if (!pszText || !cchMax) return;
+        const n = Math.min(text.length, cchMax - 1);
+        if (wide) {
+          for (let i = 0; i < n; i++) emu.memory.writeU16(pszText + i * 2, text.charCodeAt(i));
+          emu.memory.writeU16(pszText + n * 2, 0);
+        } else {
+          for (let i = 0; i < n; i++) emu.memory.writeU8(pszText + i, text.charCodeAt(i) & 0xFF);
+          emu.memory.writeU8(pszText + n, 0);
+        }
+      };
+
       if (message === TCM_INSERTITEMW || message === TCM_INSERTITEMA) {
         if (!wnd.tabItems) wnd.tabItems = [];
         const idx = wParam;
-        // TCITEM: mask(4) dwState(4) dwStateMask(4) pszText(4) cchTextMax(4) iImage(4)
-        const mask = emu.memory.readU32(lParam);
-        let text = '';
-        if (mask & 0x1) { // TCIF_TEXT
-          const pszText = emu.memory.readU32(lParam + 12);
-          text = message === TCM_INSERTITEMW
-            ? (pszText ? emu.memory.readUTF16String(pszText) : '')
-            : (pszText ? emu.memory.readCString(pszText) : '');
-        }
+        const text = tcitemReadText(message === TCM_INSERTITEMW);
         const item = { text };
         if (idx >= wnd.tabItems.length) wnd.tabItems.push(item);
         else wnd.tabItems.splice(idx, 0, item);
         if (wnd.tabSelectedIndex === undefined) wnd.tabSelectedIndex = 0;
         return idx;
       }
+      if (message === TCM_SETITEMA || message === TCM_SETITEMW) {
+        const idx = wParam;
+        if (!wnd.tabItems || idx >= wnd.tabItems.length) return 0;
+        const mask = emu.memory.readU32(lParam);
+        if (mask & TCIF_TEXT) wnd.tabItems[idx].text = tcitemReadText(message === TCM_SETITEMW);
+        return 1;
+      }
+      if (message === TCM_GETITEMA || message === TCM_GETITEMW) {
+        const idx = wParam;
+        if (!wnd.tabItems || idx >= wnd.tabItems.length) return 0;
+        tcitemWriteText(wnd.tabItems[idx].text, message === TCM_GETITEMW);
+        return 1;
+      }
       if (message === TCM_SETCURSEL) {
+        const prev = wnd.tabSelectedIndex ?? -1;
         wnd.tabSelectedIndex = wParam;
-        return 0;
+        return prev;
       }
       if (message === TCM_GETCURSEL) {
         return wnd.tabSelectedIndex ?? -1;
@@ -1524,16 +1604,45 @@ export function registerMessage(emu: Emulator): void {
       if (message === TCM_GETITEMCOUNT) {
         return wnd.tabItems?.length ?? 0;
       }
+      if (message === TCM_DELETEITEM) {
+        const idx = wParam;
+        if (wnd.tabItems && idx < wnd.tabItems.length) {
+          wnd.tabItems.splice(idx, 1);
+          if (wnd.tabSelectedIndex !== undefined && wnd.tabSelectedIndex >= wnd.tabItems.length) {
+            wnd.tabSelectedIndex = Math.max(0, wnd.tabItems.length - 1);
+          }
+          return 1;
+        }
+        return 0;
+      }
       if (message === TCM_DELETEALLITEMS) {
         wnd.tabItems = [];
         wnd.tabSelectedIndex = 0;
         return 1;
       }
+      if (message === TCM_GETITEMRECT) {
+        // Approximate: each tab ~80px wide, 22px tall
+        const idx = wParam;
+        if (lParam) {
+          emu.memory.writeU32(lParam + 0, idx * 80);  // left
+          emu.memory.writeU32(lParam + 4, 0);          // top
+          emu.memory.writeU32(lParam + 8, (idx + 1) * 80); // right
+          emu.memory.writeU32(lParam + 12, 22);        // bottom
+        }
+        return 1;
+      }
+      if (message === TCM_HITTEST) {
+        // TCHITTESTINFO: POINT(8) + flags(4). Return tab index or -1
+        const x = emu.memory.readI32(lParam);
+        const y = emu.memory.readI32(lParam + 4);
+        if (y < 0 || y >= 22 || !wnd.tabItems) return -1;
+        const idx = Math.floor(x / 80);
+        if (idx < 0 || idx >= wnd.tabItems.length) return -1;
+        emu.memory.writeU32(lParam + 8, 0x01); // TCHT_ONITEM
+        return idx;
+      }
       if (message === TCM_ADJUSTRECT) {
-        // wParam=TRUE: convert display rect to window rect; FALSE: window rect to display rect
-        // lParam points to RECT. Adjust by tab bar height (~22px)
         if (!wParam) {
-          // Window rect -> display rect: shrink top by tab height
           const top = emu.memory.readI32(lParam + 4);
           emu.memory.writeU32(lParam + 0, emu.memory.readI32(lParam + 0) + 2);
           emu.memory.writeU32(lParam + 4, top + 22);
@@ -1542,6 +1651,18 @@ export function registerMessage(emu: Emulator): void {
         }
         return 0;
       }
+      if (message === TCM_SETIMAGELIST) {
+        const old = wnd.tabImageList ?? 0;
+        wnd.tabImageList = lParam;
+        return old;
+      }
+      if (message === TCM_GETIMAGELIST) return wnd.tabImageList ?? 0;
+      if (message === TCM_GETCURFOCUS) return wnd.tabSelectedIndex ?? 0;
+      if (message === TCM_SETCURFOCUS) { wnd.tabSelectedIndex = wParam; return 0; }
+      if (message === TCM_GETROWCOUNT) return 1;
+      if (message === TCM_SETMINTABWIDTH) return 0;
+      if (message === TCM_SETPADDING) return 0;
+      if (message === TCM_DESELECTALL) return 0;
       // Default for unhandled tab messages
       if (message >= 0x1300 && message < 0x1400) return 0;
     }

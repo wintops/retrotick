@@ -80,6 +80,13 @@ export function registerOleaut32(emu: Emulator): void {
     return 0;
   });
 
+  // GetErrorInfo(dwReserved, pperrinfo) → HRESULT
+  oleaut32.register('GetErrorInfo', 2, () => {
+    const pperrinfo = emu.readArg(1);
+    if (pperrinfo) emu.memory.writeU32(pperrinfo, 0);
+    return 1; // S_FALSE — no error info
+  });
+
   // SafeArrayCreate(vt, cDims, rgsabound) — stub, return 0 (failure)
   oleaut32.register('SafeArrayCreate', 3, () => 0);
   // SafeArrayGetLBound(psa, nDim, plLbound) — stub

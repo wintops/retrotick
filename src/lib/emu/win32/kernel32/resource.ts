@@ -99,4 +99,7 @@ export function registerResource(emu: Emulator): void {
   });
 
   kernel32.register('FreeResource', 1, () => 0);
+
+  // EnumResourceNamesW(hModule, lpType, lpEnumFunc, lParam) → BOOL
+  kernel32.register('EnumResourceNamesW', 4, () => 0);
 }

@@ -86,9 +86,21 @@ function readI64AsFloat(mem: Memory, addr: number): number {
   return hi * 0x100000000 + lo;
 }
 
+function readI64AsBigInt(mem: Memory, addr: number): bigint {
+  const lo = BigInt(mem.readU32(addr)) & 0xFFFFFFFFn;
+  const hi = BigInt(mem.readU32(addr + 4)) & 0xFFFFFFFFn;
+  return (hi << 32n) | lo;
+}
+
 function writeFloatAsI64(mem: Memory, addr: number, val: number): void {
   const bi = BigInt(Math.trunc(val));
   const u64 = bi & 0xFFFFFFFFFFFFFFFFn;
+  mem.writeU32(addr, Number(u64 & 0xFFFFFFFFn));
+  mem.writeU32(addr + 4, Number((u64 >> 32n) & 0xFFFFFFFFn));
+}
+
+function writeBigIntAsI64(mem: Memory, addr: number, val: bigint): void {
+  const u64 = val & 0xFFFFFFFFFFFFFFFFn;
   mem.writeU32(addr, Number(u64 & 0xFFFFFFFFn));
   mem.writeU32(addr + 4, Number((u64 >> 32n) & 0xFFFFFFFFn));
 }
@@ -131,10 +143,36 @@ export function execFPU_DD(cpu: CPU, mod: number, regField: number, rm: number, 
   const isMem = mod !== 3;
   if (isMem) {
     switch (regField) {
-      case 0: fpuPush(cpu, readF64(mem, addr)); break;
+      case 0: {
+        // FLD m64real: store raw U32 pair for NaN bit pattern preservation
+        const lo = mem.readU32(addr);
+        const hi = mem.readU32(addr + 4);
+        fpuPush(cpu, readF64(mem, addr));
+        cpu.fpuRaw64[cpu.fpuTop] = [lo, hi];
+        break;
+      }
       case 1: writeFloatAsI64(mem, addr, Math.trunc(fpuPop(cpu))); break;
-      case 2: writeF64(mem, addr, fpuST(cpu, 0)); break;
-      case 3: writeF64(mem, addr, fpuPop(cpu)); break;
+      case 2: {
+        // FST m64real: use raw bits if available
+        const raw = cpu.fpuRaw64[cpu.fpuTop];
+        if (raw) { mem.writeU32(addr, raw[0]); mem.writeU32(addr + 4, raw[1]); }
+        else writeF64(mem, addr, fpuST(cpu, 0));
+        break;
+      }
+      case 3: {
+        // FSTP m64real: use raw bits if available
+        const raw = cpu.fpuRaw64[cpu.fpuTop];
+        if (raw) {
+          mem.writeU32(addr, raw[0]); mem.writeU32(addr + 4, raw[1]);
+          cpu.fpuRaw64[cpu.fpuTop] = undefined;
+          cpu.fpuI64[cpu.fpuTop] = undefined;
+          cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
+          cpu.fpuTop = (cpu.fpuTop + 1) & 7;
+        } else {
+          writeF64(mem, addr, fpuPop(cpu));
+        }
+        break;
+      }
       case 4: break;
       case 6: break;
       case 7: mem.writeU16(addr, cpu.fpuSW | (cpu.fpuTop << 11)); break;
@@ -205,8 +243,26 @@ export function execFPU_DF(cpu: CPU, mod: number, regField: number, rm: number, 
       }
       case 2: mem.writeU16(addr, fpuRound(cpu, fpuST(cpu, 0)) & 0xFFFF); break;
       case 3: mem.writeU16(addr, fpuRound(cpu, fpuPop(cpu)) & 0xFFFF); break;
-      case 5: fpuPush(cpu, readI64AsFloat(mem, addr)); break;
-      case 7: writeFloatAsI64(mem, addr, fpuPop(cpu)); break;
+      case 5: {
+        // FILD m64int: load 64-bit integer, preserve exact BigInt for FISTP round-trip
+        const rawI64 = readI64AsBigInt(mem, addr);
+        fpuPush(cpu, readI64AsFloat(mem, addr));
+        cpu.fpuI64[cpu.fpuTop] = rawI64;
+        break;
+      }
+      case 7: {
+        // FISTP m64int: if raw BigInt available (no arithmetic since FILD), use it
+        const rawI64 = cpu.fpuI64[cpu.fpuTop];
+        if (rawI64 !== undefined) {
+          writeBigIntAsI64(mem, addr, rawI64);
+          cpu.fpuI64[cpu.fpuTop] = undefined;
+          cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
+          cpu.fpuTop = (cpu.fpuTop + 1) & 7;
+        } else {
+          writeFloatAsI64(mem, addr, fpuPop(cpu));
+        }
+        break;
+      }
       default:
         console.warn(`FPU DF /${regField} mem unimplemented at EIP=0x${((cpu.eip) >>> 0).toString(16)}`);
         break;

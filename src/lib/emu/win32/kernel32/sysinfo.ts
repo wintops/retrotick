@@ -132,6 +132,25 @@ export function registerSysinfo(emu: Emulator): void {
   kernel32.register('EncodePointer', 1, () => emu.readArg(0));
   kernel32.register('DecodePointer', 1, () => emu.readArg(0));
 
+  // VirtualQueryEx(hProcess, lpAddress, lpBuffer, dwLength) → SIZE_T
+  kernel32.register('VirtualQueryEx', 4, () => {
+    const lpAddress = emu.readArg(1);
+    const lpBuffer = emu.readArg(2);
+    const dwLength = emu.readArg(3);
+    const MBI_SIZE = 28;
+    if (lpBuffer && dwLength >= MBI_SIZE) {
+      const pageBase = lpAddress & ~0xFFF;
+      emu.memory.writeU32(lpBuffer + 0, pageBase);   // BaseAddress
+      emu.memory.writeU32(lpBuffer + 4, pageBase);   // AllocationBase
+      emu.memory.writeU32(lpBuffer + 8, 0x04);       // AllocationProtect = PAGE_READWRITE
+      emu.memory.writeU32(lpBuffer + 12, 0x1000);    // RegionSize = 4KB
+      emu.memory.writeU32(lpBuffer + 16, 0x1000);    // State = MEM_COMMIT
+      emu.memory.writeU32(lpBuffer + 20, 0x04);      // Protect = PAGE_READWRITE
+      emu.memory.writeU32(lpBuffer + 24, 0x20000);   // Type = MEM_PRIVATE
+    }
+    return MBI_SIZE;
+  });
+
   kernel32.register('VirtualQuery', 3, () => {
     const lpAddress = emu.readArg(0);
     const lpBuffer = emu.readArg(1);

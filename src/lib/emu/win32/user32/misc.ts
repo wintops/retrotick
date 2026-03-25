@@ -659,6 +659,9 @@ export function registerMisc(emu: Emulator): void {
   });
   user32.register('DdeUninitialize', 1, () => 1);
   user32.register('DdeConnect', 4, () => 0); // NULL = failure
+  // CopyIcon(hIcon) → HICON — just return the same handle
+  user32.register('CopyIcon', 1, () => emu.readArg(0));
+
   user32.register('DdeDisconnect', 1, () => 1);
   user32.register('DdeCreateStringHandleA', 3, () => 0);
   user32.register('DdeNameService', 4, () => 0);

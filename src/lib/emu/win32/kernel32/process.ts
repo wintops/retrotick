@@ -661,6 +661,14 @@ export function registerProcess(emu: Emulator): void {
   kernel32.register('SetupComm', 3, () => 1);
   kernel32.register('GetOverlappedResult', 4, () => 0); // fail
 
+  // GetExitCodeThread(hThread, lpExitCode) → BOOL
+  kernel32.register('GetExitCodeThread', 2, () => {
+    const lpExitCode = emu.readArg(1);
+    const STILL_ACTIVE = 259;
+    if (lpExitCode) emu.memory.writeU32(lpExitCode, STILL_ACTIVE);
+    return 1;
+  });
+
   // FatalAppExitA(uAction, lpMessageText) — terminate the emulated app
   kernel32.register('FatalAppExitA', 2, () => {
     const msgPtr = emu.readArg(1);

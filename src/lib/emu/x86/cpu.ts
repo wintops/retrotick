@@ -39,6 +39,19 @@ export class CPU {
   fpuCW = 0x037F; // control word: all exceptions masked, double precision, round to nearest
   fpuSW = 0;      // status word
   fpuTW = 0xFFFF; // tag word: all empty
+  // Raw 64-bit integer storage for FILD/FISTP QWORD precision preservation.
+  // JS doubles only have 53-bit mantissa; 64-bit integers >2^53 lose precision.
+  // When FILD QWORD loads a value, the exact BigInt is stored here.
+  // FISTP QWORD uses this if available, bypassing double conversion.
+  // Cleared by any arithmetic FPU operation that modifies the slot.
+  fpuI64: (bigint | undefined)[] = [undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined];
+  // Raw 64-bit double storage for FLD/FSTP QWORD NaN bit pattern preservation.
+  // JS Float64Array canonicalizes NaN payloads (all NaN → 0x7FF8000000000000).
+  // For memory copy via FPU (FLD m64/FSTP m64), store raw lo/hi U32 pair.
+  fpuRaw64: ([number, number] | undefined)[] = [undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined];
+  // Raw 80-bit (10-byte) storage for FLD/FSTP TBYTE (m80real) precision preservation.
+  // 80-bit extended has 64-bit mantissa; JS double has only 53. Round-trip loses 11 bits.
+  fpuRaw80: ([number, number, number] | undefined)[] = [undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined];
 
   // Halt / thunk state
   halted = false;

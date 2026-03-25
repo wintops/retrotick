@@ -278,4 +278,21 @@ export function registerComctl32(emu: Emulator): void {
 
   // MenuHelp(uMsg, wParam, lParam, hMainMenu, hInst, hwndStatus, lpwIDs) — 7 args
   comctl32.register('MenuHelp', 7, () => {});
+
+  // FlatSB stubs
+  comctl32.register('InitializeFlatSB', 1, () => 0); // S_OK
+  comctl32.register('FlatSB_SetScrollInfo', 4, () => 0);
+  comctl32.register('FlatSB_GetScrollInfo', 3, () => 0);
+  comctl32.register('FlatSB_SetScrollProp', 4, () => 1);
+  comctl32.register('FlatSB_SetScrollPos', 4, () => 0);
+  comctl32.register('FlatSB_GetScrollPos', 2, () => 0);
+
+  // _TrackMouseEvent(lpEventTrack) → BOOL
+  comctl32.register('_TrackMouseEvent', 1, () => 1);
+
+  // Additional ImageList stubs
+  comctl32.register('ImageList_SetImageCount', 2, () => 1);
+  comctl32.register('ImageList_Copy', 5, () => 1);
+  comctl32.register('ImageList_GetIcon', 3, () => 0); // return NULL icon
+  comctl32.register('ImageList_SetOverlayImage', 3, () => 1);
 }

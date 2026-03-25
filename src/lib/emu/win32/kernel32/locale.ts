@@ -8,11 +8,16 @@ export function registerLocale(emu: Emulator): void {
     return getLocalePreset(emu.configuredLcid).ansiCodePage;
   });
 
+  // CPINFO: MaxCharSize(4) + DefaultChar[2](2) + LeadByte[12](12) = 18 bytes
   kernel32.register('GetCPInfo', 2, () => {
     const _cp = emu.readArg(0);
     const ptr = emu.readArg(1);
-    emu.memory.writeU32(ptr, 1); // MaxCharSize
-    emu.memory.writeU8(ptr + 4, 0); // DefaultChar
+    // Zero-fill entire struct first
+    for (let i = 0; i < 18; i++) emu.memory.writeU8(ptr + i, 0);
+    emu.memory.writeU32(ptr, 1); // MaxCharSize = 1 (single-byte)
+    // DefaultChar[2] at offset 4 = {0x3F, 0} ('?')
+    emu.memory.writeU8(ptr + 4, 0x3F);
+    // LeadByte[12] at offset 6 = all zeros (no lead bytes for single-byte CP)
     return 1;
   });
 
@@ -134,12 +139,92 @@ export function registerLocale(emu: Emulator): void {
     return fillCharTypeA(dwInfoType, lpSrcStr, cchSrc, lpCharType);
   });
 
+  const LCMAP_LOWERCASE = 0x00000100;
+  const LCMAP_UPPERCASE = 0x00000200;
+  const LCMAP_SORTKEY   = 0x00000400;
+
   kernel32.register('LCMapStringA', 6, () => {
-    return 0;
+    const _locale = emu.readArg(0);
+    const dwMapFlags = emu.readArg(1);
+    const lpSrcStr = emu.readArg(2);
+    let cchSrc = emu.readArg(3) | 0;
+    const lpDestStr = emu.readArg(4);
+    const cchDest = emu.readArg(5);
+
+    if (cchSrc === -1) {
+      cchSrc = 0;
+      while (emu.memory.readU8(lpSrcStr + cchSrc) !== 0) cchSrc++;
+      cchSrc++; // include null
+    }
+
+    if (dwMapFlags & LCMAP_SORTKEY) {
+      // Sort key: produce simplified byte sequence (char + 1 for each byte, terminated by 0x01 0x01 0x00)
+      const needed = cchSrc + 3;
+      if (cchDest === 0) return needed;
+      const n = Math.min(cchSrc, cchDest - 3);
+      for (let i = 0; i < n; i++) {
+        const ch = emu.memory.readU8(lpSrcStr + i);
+        const lower = (ch >= 0x41 && ch <= 0x5A) ? ch + 0x20 : ch;
+        emu.memory.writeU8(lpDestStr + i, lower + 1);
+      }
+      if (n + 2 < cchDest) { emu.memory.writeU8(lpDestStr + n, 0x01); emu.memory.writeU8(lpDestStr + n + 1, 0x01); emu.memory.writeU8(lpDestStr + n + 2, 0x00); }
+      return n + 3;
+    }
+
+    if (cchDest === 0) return cchSrc;
+    const n = Math.min(cchSrc, cchDest);
+    for (let i = 0; i < n; i++) {
+      let ch = emu.memory.readU8(lpSrcStr + i);
+      if (dwMapFlags & LCMAP_LOWERCASE) {
+        if (ch >= 0x41 && ch <= 0x5A) ch += 0x20;
+      } else if (dwMapFlags & LCMAP_UPPERCASE) {
+        if (ch >= 0x61 && ch <= 0x7A) ch -= 0x20;
+      }
+      emu.memory.writeU8(lpDestStr + i, ch);
+    }
+    return n;
   });
 
   kernel32.register('LCMapStringW', 6, () => {
-    return 0;
+    const _locale = emu.readArg(0);
+    const dwMapFlags = emu.readArg(1);
+    const lpSrcStr = emu.readArg(2);
+    let cchSrc = emu.readArg(3) | 0;
+    const lpDestStr = emu.readArg(4);
+    const cchDest = emu.readArg(5);
+
+    if (cchSrc === -1) {
+      cchSrc = 0;
+      while (emu.memory.readU16(lpSrcStr + cchSrc * 2) !== 0) cchSrc++;
+      cchSrc++; // include null
+    }
+
+    if (dwMapFlags & LCMAP_SORTKEY) {
+      // Sort key: output byte array (not wide), 1 byte per char + separators + null
+      const needed = cchSrc + 3;
+      if (cchDest === 0) return needed;
+      const n = Math.min(cchSrc, cchDest - 3);
+      for (let i = 0; i < n; i++) {
+        const ch = emu.memory.readU16(lpSrcStr + i * 2);
+        const lower = (ch >= 0x41 && ch <= 0x5A) ? ch + 0x20 : ch;
+        emu.memory.writeU8(lpDestStr + i, (lower < 0xFF ? lower : 0xFF) + 1);
+      }
+      if (n + 2 < cchDest) { emu.memory.writeU8(lpDestStr + n, 0x01); emu.memory.writeU8(lpDestStr + n + 1, 0x01); emu.memory.writeU8(lpDestStr + n + 2, 0x00); }
+      return n + 3;
+    }
+
+    if (cchDest === 0) return cchSrc;
+    const n = Math.min(cchSrc, cchDest);
+    for (let i = 0; i < n; i++) {
+      let ch = emu.memory.readU16(lpSrcStr + i * 2);
+      if (dwMapFlags & LCMAP_LOWERCASE) {
+        if (ch >= 0x41 && ch <= 0x5A) ch += 0x20;
+      } else if (dwMapFlags & LCMAP_UPPERCASE) {
+        if (ch >= 0x61 && ch <= 0x7A) ch -= 0x20;
+      }
+      emu.memory.writeU16(lpDestStr + i * 2, ch);
+    }
+    return n;
   });
 
   function getLocaleDefaults(): Record<number, string> {
@@ -774,5 +859,23 @@ export function registerLocale(emu: Emulator): void {
       emu.memory.writeU8(lpBuf + toWrite.length, 0);
     }
     return result.length + 1;
+  });
+
+  // EnumCalendarInfoW(lpCalInfoEnumProc, Locale, Calendar, CalType) → BOOL
+  kernel32.register('EnumCalendarInfoW', 4, () => 0);
+
+  // VerSetConditionMask(conditionMask_lo, conditionMask_hi, typeMask, condition) → ULONGLONG
+  // Real API encodes condition (3 bits) into specific bit positions based on typeMask.
+  // Each VER_xxx type occupies bits [type*3 .. type*3+2] in the 64-bit mask.
+  kernel32.register('VerSetConditionMask', 3, () => {
+    const condMask = emu.readArg(0); // low 32 bits of existing mask
+    const typeMask = emu.readArg(1);
+    const condition = emu.readArg(2) & 0x07;
+    // Map typeMask to bit position: each VER_xxx type is a power of 2
+    // VER_MINORVERSION=1, VER_MAJORVERSION=2, VER_BUILDNUMBER=4, ...
+    // Shift = log2(typeMask) * 3
+    if (typeMask === 0 || condition === 0) return condMask;
+    const shift = (Math.log2(typeMask & -typeMask) | 0) * 3;
+    return (condMask | (condition << shift)) >>> 0;
   });
 }

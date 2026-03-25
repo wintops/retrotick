@@ -826,4 +826,12 @@ export function registerAdvapi32(emu: Emulator): void {
     if (peUse) emu.memory.writeU32(peUse, SidTypeUser);
     return 1;
   });
+
+  // Registry stubs for remote/backup operations
+  advapi32.register('RegConnectRegistryW', 3, () => ERROR_FILE_NOT_FOUND);
+  advapi32.register('RegLoadKeyW', 3, () => ERROR_FILE_NOT_FOUND);
+  advapi32.register('RegUnLoadKeyW', 2, () => ERROR_SUCCESS);
+  advapi32.register('RegSaveKeyW', 3, () => ERROR_SUCCESS);
+  advapi32.register('RegReplaceKeyW', 4, () => ERROR_SUCCESS);
+  advapi32.register('RegRestoreKeyW', 3, () => ERROR_SUCCESS);
 }
