@@ -8,10 +8,10 @@
 import type { WasmBuilder } from './wasm-builder';
 import type { Memory } from '../memory';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
-import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU8WithVGA, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16 } from './wasm-codegen-mem';
+import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU8WithVGA, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16, setSegOverride } from './wasm-codegen-mem';
 import { emitMOV_rm, emitALU_rm, emitLEA, emitGroup83, emitTEST_rm } from './wasm-codegen-modrm';
 import { LOP_ADD8, LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_OR8, LOP_XOR8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
-import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_moffs_AL, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
+import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
 import { emitGroup80, emitGroup81, emitGroupFE, emitGroupFF, emitGroupF6, emitGroupF7 } from './wasm-codegen-grp';
 
 // Register local indices (must match the local allocation in wasm-module.ts)
@@ -98,23 +98,26 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
   let addrSize16 = !ctx.use32;
 
   // Handle prefixes
-  let hasSegOverride = false;
+  let segOverrideOff = -1; // -1 = default DS/SS
   const PREFIX_SET = new Set([0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3]);
   while (PREFIX_SET.has(mem.readU8(pos))) {
     const pfx = mem.readU8(pos);
     if (pfx === 0x66) opSize32 = !opSize32;
     else if (pfx === 0x67) addrSize16 = !addrSize16;
-    else if (pfx === 0x26 || pfx === 0x2E || pfx === 0x36 || pfx === 0x3E || pfx === 0x64 || pfx === 0x65) hasSegOverride = true;
-    else if (pfx === 0xF2 || pfx === 0xF3 || pfx === 0xF0) hasSegOverride = true; // REP/LOCK also bail
+    else if (pfx === 0x26) segOverrideOff = OFF_SEGBASES + 8;  // ES
+    else if (pfx === 0x2E) segOverrideOff = OFF_SEGBASES + 0;  // CS
+    else if (pfx === 0x36) segOverrideOff = OFF_SEGBASES + 12; // SS
+    else if (pfx === 0x3E) segOverrideOff = OFF_SEGBASES + 4;  // DS
+    else if (pfx === 0xF2 || pfx === 0xF3 || pfx === 0xF0) return -1; // REP/LOCK: bail
+    else if (pfx === 0x64 || pfx === 0x65) return -1; // FS/GS: bail (no base stored)
     pos++;
   }
-  // Bail on segment overrides — codegen always uses default DS/SS
-  if (hasSegOverride) return -1;
 
   const is16 = !opSize32;
   const immSize = is16 ? 2 : 4;
-  // Update module-level address size so emitModRM32Addr bails on 16-bit memory operands
+  // Update module-level state for ModRM decoders
   setAddrSize16(addrSize16);
+  setSegOverride(segOverrideOff);
   const op = mem.readU8(pos); pos++;
 
   switch (op) {
@@ -338,36 +341,78 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
 
     // MOV AL, [moffs] (A0)
     case 0xA0: {
-      if (addrSize16) {
-        const moffs = mem.readU16(pos);
-        b.constI32(moffs); emitAddSegBase(b, DS_BASE); emitLoadU8(b); emitReg8Set(b, 0);
-        pos += 2;
-      } else {
-        const moffs = mem.readU32(pos) | 0;
-        b.constI32(moffs); emitAddSegBase(b, DS_BASE); emitLoadU8(b); emitReg8Set(b, 0);
-        pos += 4;
-      }
-      break;
+      const addrLen = addrSize16 ? 2 : 4;
+      const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
+      const seg = segOverrideOff >= 0 ? segOverrideOff : DS_BASE;
+      b.constI32(moffs); emitAddSegBase(b, seg); emitLoadU8(b); emitReg8Set(b, 0);
+      pos += addrLen; break;
     }
 
-    case 0xA1: { const n = emitMOV_moffs_AL(ctx, pos, true, is16); if (n < 0) return -1; pos += n; break; }
+    // MOV AX/EAX, [moffs] (A1)
+    case 0xA1: {
+      const addrLen = addrSize16 ? 2 : 4;
+      const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
+      const seg = segOverrideOff >= 0 ? segOverrideOff : DS_BASE;
+      b.constI32(moffs); emitAddSegBase(b, seg);
+      if (is16) { emitLoadU16(b); emitRegSet16(b, 0); }
+      else { emitLoadI32(b); b.setLocal(0); }
+      pos += addrLen; break;
+    }
 
-    // MOV [moffs], AL (A2) / MOV [moffs], AX/EAX (A3)
+    // MOV [moffs], AL (A2)
     case 0xA2: {
       const addrLen = addrSize16 ? 2 : 4;
       const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
-      b.constI32(moffs); emitAddSegBase(b, DS_BASE);
-      emitReg8Get(b, 0); // AL
+      const seg = segOverrideOff >= 0 ? segOverrideOff : DS_BASE;
+      b.constI32(moffs); emitAddSegBase(b, seg);
+      emitReg8Get(b, 0);
       emitStoreU8WithVGA(b, ctx.writeVGAIdx, tmp1, tmp2);
       pos += addrLen; break;
     }
+
+    // MOV [moffs], AX/EAX (A3)
     case 0xA3: {
       const addrLen = addrSize16 ? 2 : 4;
       const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
-      b.constI32(moffs); emitAddSegBase(b, DS_BASE);
+      const seg = segOverrideOff >= 0 ? segOverrideOff : DS_BASE;
+      b.constI32(moffs); emitAddSegBase(b, seg);
       if (is16) { emitRegGet16(b, 0); emitStoreU16Direct(b); }
       else { b.getLocal(0); emitStoreI32Direct(b); }
       pos += addrLen; break;
+    }
+
+    // LODSB (AC) — AL = [DS:SI], SI += 1/-1 (DF)
+    case 0xAC: {
+      const seg = segOverrideOff >= 0 ? segOverrideOff : DS_BASE;
+      // Compute address: DS_base + (SI & 0xFFFF) for 16-bit
+      if (addrSize16) {
+        emitRegGet16(b, REG_ESI); emitAddSegBase(b, seg);
+      } else {
+        b.getLocal(REG_ESI); emitAddSegBase(b, seg);
+      }
+      emitLoadU8(b); emitReg8Set(b, 0);
+      // Update SI: SI += (DF ? -1 : 1)
+      // Read DF from flagsCache in flat memory
+      b.constI32(0); b.loadI32(OFF_FLAGS + 16); // flagsCache
+      b.constI32(0x400); b.andI32(); // DF bit
+      b.ifVoid();
+        // DF=1: SI -= 1
+        if (addrSize16) {
+          emitRegGet16(b, REG_ESI); b.constI32(1); b.subI32(); b.constI32(0xFFFF); b.andI32();
+          emitRegSet16(b, REG_ESI);
+        } else {
+          b.getLocal(REG_ESI); b.constI32(1); b.subI32(); b.setLocal(REG_ESI);
+        }
+      b.elseBlock();
+        // DF=0: SI += 1
+        if (addrSize16) {
+          emitRegGet16(b, REG_ESI); b.constI32(1); b.addI32(); b.constI32(0xFFFF); b.andI32();
+          emitRegSet16(b, REG_ESI);
+        } else {
+          b.getLocal(REG_ESI); b.constI32(1); b.addI32(); b.setLocal(REG_ESI);
+        }
+      b.end();
+      break;
     }
 
     case 0xC6: { const n = emitMOV_rm8_imm8(ctx, pos); if (n < 0) return -1; pos += n; break; }

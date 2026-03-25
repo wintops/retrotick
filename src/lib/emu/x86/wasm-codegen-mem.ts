@@ -13,6 +13,11 @@ const ADDR_MASK = 0x07FFFFFF;
 let _addrSize16 = false;
 export function setAddrSize16(v: boolean): void { _addrSize16 = v; }
 
+/** Current instruction's segment override. -1 = default (DS/SS per ModRM rules).
+ *  Otherwise the flat-memory offset for the overridden segment base. */
+let _segOverride = -1;
+export function setSegOverride(off: number): void { _segOverride = off; }
+
 /** Emit: mask the address on the WASM stack to stay within the 128MB flat buffer.
  *  Prevents OOB traps from negative offsets or high 32-bit addresses. */
 export function emitAddrMask(b: WasmBuilder): void {
@@ -192,8 +197,11 @@ export function emitModRM32Addr(
   // 16-bit addressing: dispatch to emitModRM16Addr (includes segment base)
   if (_addrSize16) {
     const regLocals = [0, 1, 2, 3, 4, 5, 6, 7];
+    // Use segment override if set, otherwise default DS/SS per ModRM rules
+    const dsOff = _segOverride >= 0 ? _segOverride : OFF_SEGBASES + 4;
+    const ssOff = _segOverride >= 0 ? _segOverride : OFF_SEGBASES + 12;
     const dispBytes = emitModRM16Addr(b, regLocals, modrm, mem,
-      pos + 1, OFF_SEGBASES + 4, OFF_SEGBASES + 12);
+      pos + 1, dsOff, ssOff);
     return { isReg: false, reg, rm, extraBytes: 1 + dispBytes };
   }
 
