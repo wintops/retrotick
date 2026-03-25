@@ -206,6 +206,10 @@ export class Memory {
   /** Check if flat mode is active */
   get isFlat(): boolean { return this._flat !== null; }
 
+  // A20 gate: when disabled (default for DOS), bit 20 of addresses is masked to 0,
+  // wrapping addresses above 1MB back to 0. EXEPACK and other 8086-era programs rely on this.
+  a20Mask = 0xFFFFFFFF; // 0xFFFFF = A20 off (20-bit wrap), 0xFFFFFFFF = A20 on
+
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
   vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
   _hasVga = false;
@@ -241,12 +245,14 @@ export class Memory {
   }
 
   readU8(addr: number): number {
-    if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar.planarRead(addr & 0xFFFF);
+    addr = (addr & this.a20Mask) >>> 0;
+    if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
     if (this._flat && addr < this._flatMax) return this._flat[addr];
     return this.seg(addr)[addr & SEG_MASK];
   }
 
   readU16(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
     }
@@ -259,6 +265,7 @@ export class Memory {
   }
 
   readU32(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
         (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
@@ -299,6 +306,7 @@ export class Memory {
 
   _watchAddr = 0; // temporary memory write watch
   writeU8(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._watchAddr && addr === this._watchAddr) {
       console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
       console.trace();
@@ -309,6 +317,7 @@ export class Memory {
   }
 
   writeU16(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       this.writeU8(addr, val & 0xFF);
       this.writeU8(addr + 1, (val >> 8) & 0xFF);
@@ -325,6 +334,7 @@ export class Memory {
   }
 
   writeU32(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       this.writeU8(addr, val & 0xFF);
       this.writeU8(addr + 1, (val >> 8) & 0xFF);

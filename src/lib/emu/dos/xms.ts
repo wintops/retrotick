@@ -40,17 +40,21 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x03: // Global Enable A20
-    case 0x04: // Global Disable A20
     case 0x05: // Local Enable A20
-    case 0x06: { // Local Disable A20
-      // No A20 gate in emulator — always accessible
+      emu.memory.a20Mask = 0xFFFFFFFF;
       cpu.setReg16(EAX, 1);
-      cpu.setReg8(EBX, 0x00); // BL = no error
+      cpu.setReg8(EBX, 0x00);
+      return true;
+    case 0x04: // Global Disable A20
+    case 0x06: { // Local Disable A20
+      emu.memory.a20Mask = 0xFFFFF;
+      cpu.setReg16(EAX, 1);
+      cpu.setReg8(EBX, 0x00);
       return true;
     }
 
     case 0x07: { // Query A20 state
-      cpu.setReg16(EAX, 1); // A20 is enabled
+      cpu.setReg16(EAX, emu.memory.a20Mask === 0xFFFFFFFF ? 1 : 0);
       cpu.setReg8(EBX, 0x00);
       return true;
     }
