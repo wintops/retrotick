@@ -98,14 +98,18 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
   let addrSize16 = !ctx.use32;
 
   // Handle prefixes
+  let hasSegOverride = false;
   const PREFIX_SET = new Set([0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3]);
   while (PREFIX_SET.has(mem.readU8(pos))) {
     const pfx = mem.readU8(pos);
     if (pfx === 0x66) opSize32 = !opSize32;
-    if (pfx === 0x67) addrSize16 = !addrSize16;
-    // Segment overrides, LOCK, REP: noted but not yet fully handled
+    else if (pfx === 0x67) addrSize16 = !addrSize16;
+    else if (pfx === 0x26 || pfx === 0x2E || pfx === 0x36 || pfx === 0x3E || pfx === 0x64 || pfx === 0x65) hasSegOverride = true;
+    else if (pfx === 0xF2 || pfx === 0xF3 || pfx === 0xF0) hasSegOverride = true; // REP/LOCK also bail
     pos++;
   }
+  // Bail on segment overrides — codegen always uses default DS/SS
+  if (hasSegOverride) return -1;
 
   const is16 = !opSize32;
   const immSize = is16 ? 2 : 4;
