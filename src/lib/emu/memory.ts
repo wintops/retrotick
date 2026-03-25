@@ -188,6 +188,10 @@ export class Memory {
   private _cSeg1: Uint8Array = null!;
   private _cDV1: DataView = null!;
 
+  // A20 gate: when disabled (default for DOS), bit 20 of addresses is masked to 0,
+  // wrapping addresses above 1MB back to 0. EXEPACK and other 8086-era programs rely on this.
+  a20Mask = 0xFFFFFFFF; // 0xFFFFF = A20 off (20-bit wrap), 0xFFFFFFFF = A20 on
+
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
   vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
   _hasVga = false;
@@ -236,11 +240,13 @@ export class Memory {
   }
 
   readU8(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
     return this.seg(addr)[addr & SEG_MASK];
   }
 
   readU16(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
     }
@@ -252,6 +258,7 @@ export class Memory {
   }
 
   readU32(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
         (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
@@ -280,6 +287,7 @@ export class Memory {
 
   _watchAddr = 0; // temporary memory write watch
   writeU8(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._watchAddr && addr === this._watchAddr) {
       console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
       console.trace();
@@ -290,6 +298,7 @@ export class Memory {
   }
 
   writeU16(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     const off = addr & SEG_MASK;
@@ -302,6 +311,7 @@ export class Memory {
   }
 
   writeU32(addr: number, val: number): void {
+    addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     const off = addr & SEG_MASK;

@@ -135,6 +135,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.isDOS = true;
     emu.isConsole = true;
     emu.initConsoleBuffer();
+    emu.memory.a20Mask = 0xFFFFF; // A20 off for DOS programs
 
     const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
     setupDosEnvironment(emu, mz);
@@ -147,6 +148,9 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.isDOS = true;
     emu.isConsole = true;
     emu.initConsoleBuffer();
+    // A20 gate off by default: addresses wrap at 1MB (8086 compatibility).
+    // EXEPACK and other packers rely on this wrap behavior.
+    emu.memory.a20Mask = 0xFFFFF;
 
     // Make the executable itself available for self-reading (overlay data access)
     // Extract just the filename from exePath for DOS file lookup
