@@ -22,19 +22,28 @@ export const LOP_SHR8 = 25, LOP_SHR16 = 26, LOP_SHR32 = 27;
 export const LOP_SAR8 = 28, LOP_SAR16 = 29, LOP_SAR32 = 30;
 export const LOP_NEG8 = 31, LOP_NEG16 = 32, LOP_NEG32 = 33;
 
-/** Emit code to store lazy flag state to shared memory */
+/** Operand size mask from lazyOp: 8-bit → 0xFF, 16-bit → 0xFFFF, 32-bit → -1 (no mask) */
+export function opMask(lazyOp: number): number {
+  const mod = lazyOp % 3;
+  return mod === 1 ? 0xFF : mod === 2 ? 0xFFFF : -1;
+}
+
+/** Emit: mask value on WASM stack to operand size (no-op for 32-bit) */
+export function emitOpMask(b: WasmBuilder, lazyOp: number): void {
+  const mask = opMask(lazyOp);
+  if (mask > 0) { b.constI32(mask); b.andI32(); }
+}
+
+/** Emit code to store lazy flag state to shared memory.
+ *  Values are masked to the operand size encoded in lazyOp to match the interpreter. */
 export function emitSetLazyFlags(
   b: WasmBuilder, lazyOp: number, resultLocal: number, aLocal: number, bLocal: number
 ): void {
-  // lazyOp
+  const mask = opMask(lazyOp);
   b.constI32(0); b.constI32(lazyOp); b.storeI32(OFF_FLAGS);
-  // lazyResult
-  b.constI32(0); b.getLocal(resultLocal); b.storeI32(OFF_FLAGS + 4);
-  // lazyA
-  b.constI32(0); b.getLocal(aLocal); b.storeI32(OFF_FLAGS + 8);
-  // lazyB
-  b.constI32(0); b.getLocal(bLocal); b.storeI32(OFF_FLAGS + 12);
-  // flagsValid = false
+  b.constI32(0); b.getLocal(resultLocal); if (mask > 0) { b.constI32(mask); b.andI32(); } b.storeI32(OFF_FLAGS + 4);
+  b.constI32(0); b.getLocal(aLocal); if (mask > 0) { b.constI32(mask); b.andI32(); } b.storeI32(OFF_FLAGS + 8);
+  b.constI32(0); b.getLocal(bLocal); if (mask > 0) { b.constI32(mask); b.andI32(); } b.storeI32(OFF_FLAGS + 12);
   b.constI32(0); b.constI32(0); b.storeI32(OFF_FLAGS + 20);
 }
 
@@ -42,10 +51,11 @@ export function emitSetLazyFlags(
 export function emitSetLazyFlagsImm(
   b: WasmBuilder, lazyOp: number, resultLocal: number, aImm: number, bImm: number
 ): void {
+  const mask = opMask(lazyOp);
   b.constI32(0); b.constI32(lazyOp); b.storeI32(OFF_FLAGS);
-  b.constI32(0); b.getLocal(resultLocal); b.storeI32(OFF_FLAGS + 4);
-  b.constI32(0); b.constI32(aImm); b.storeI32(OFF_FLAGS + 8);
-  b.constI32(0); b.constI32(bImm); b.storeI32(OFF_FLAGS + 12);
+  b.constI32(0); b.getLocal(resultLocal); if (mask > 0) { b.constI32(mask); b.andI32(); } b.storeI32(OFF_FLAGS + 4);
+  b.constI32(0); b.constI32(mask > 0 ? (aImm & mask) : aImm); b.storeI32(OFF_FLAGS + 8);
+  b.constI32(0); b.constI32(mask > 0 ? (bImm & mask) : bImm); b.storeI32(OFF_FLAGS + 12);
   b.constI32(0); b.constI32(0); b.storeI32(OFF_FLAGS + 20);
 }
 

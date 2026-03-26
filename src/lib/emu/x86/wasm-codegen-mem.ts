@@ -81,25 +81,11 @@ export function emitLoadS16(b: WasmBuilder): void {
  * @param valLocal - temp local to hold value
  */
 export function emitStoreU8WithVGA(
-  b: WasmBuilder, writeVGAIdx: number, addrLocal: number, valLocal: number
+  b: WasmBuilder, writeVGAIdx: number, _addrLocal: number, _valLocal: number
 ): void {
-  // Save addr and val from stack
-  b.setLocal(valLocal);
-  b.teeLocal(addrLocal);
-  // Check if in VGA range: (addr >>> 16) === 0xA
-  b.constI32(16); b.shrUI32();
-  b.constI32(0xA); b.eqI32();
-  b.ifVoid();
-    // VGA path: call imported function
-    b.getLocal(addrLocal);
-    b.getLocal(valLocal);
-    b.call(writeVGAIdx);
-  b.elseBlock();
-    // Direct write (masked)
-    b.getLocal(addrLocal); emitAddrMask(b);
-    b.getLocal(valLocal);
-    b.storeU8(0);
-  b.end();
+  // Always use writeVGA import — it handles both VGA and non-VGA addresses
+  // correctly via memory.writeU8. Avoids WASM if/else which has label depth bugs.
+  b.call(writeVGAIdx);
 }
 
 /** Emit: store u8 directly (known non-VGA address). Stack: [addr, value] */
@@ -119,26 +105,15 @@ export function emitStoreU8Direct(b: WasmBuilder): void {
 export function emitStoreU16WithVGA(
   b: WasmBuilder, writeVGAIdx: number, addrLocal: number, valLocal: number
 ): void {
+  // Write two bytes via writeVGA import (avoids if/else WASM label bugs)
   b.setLocal(valLocal);
-  b.teeLocal(addrLocal);
-  b.constI32(16); b.shrUI32();
-  b.constI32(0xA); b.eqI32();
-  b.ifVoid();
-    // VGA: write two bytes via imported function
-    b.getLocal(addrLocal);
-    b.getLocal(valLocal);
-    b.constI32(0xFF); b.andI32();
-    b.call(writeVGAIdx);
-    b.getLocal(addrLocal); b.constI32(1); b.addI32();
-    b.getLocal(valLocal);
-    b.constI32(8); b.shrUI32();
-    b.constI32(0xFF); b.andI32();
-    b.call(writeVGAIdx);
-  b.elseBlock();
-    b.getLocal(addrLocal); emitAddrMask(b);
-    b.getLocal(valLocal);
-    b.storeU16(0);
-  b.end();
+  b.setLocal(addrLocal);
+  b.getLocal(addrLocal);
+  b.getLocal(valLocal); b.constI32(0xFF); b.andI32();
+  b.call(writeVGAIdx);
+  b.getLocal(addrLocal); b.constI32(1); b.addI32();
+  b.getLocal(valLocal); b.constI32(8); b.shrUI32(); b.constI32(0xFF); b.andI32();
+  b.call(writeVGAIdx);
 }
 
 /**
@@ -148,25 +123,17 @@ export function emitStoreU16WithVGA(
 export function emitStoreI32WithVGA(
   b: WasmBuilder, writeVGAIdx: number, addrLocal: number, valLocal: number
 ): void {
+  // Write four bytes via writeVGA import (avoids if/else WASM label bugs)
   b.setLocal(valLocal);
-  b.teeLocal(addrLocal);
-  b.constI32(16); b.shrUI32();
-  b.constI32(0xA); b.eqI32();
-  b.ifVoid();
-    // VGA: write four bytes via imported function
-    for (let i = 0; i < 4; i++) {
-      b.getLocal(addrLocal);
-      if (i > 0) { b.constI32(i); b.addI32(); }
-      b.getLocal(valLocal);
-      if (i > 0) { b.constI32(i * 8); b.shrUI32(); }
-      b.constI32(0xFF); b.andI32();
-      b.call(writeVGAIdx);
-    }
-  b.elseBlock();
-    b.getLocal(addrLocal); emitAddrMask(b);
+  b.setLocal(addrLocal);
+  for (let i = 0; i < 4; i++) {
+    b.getLocal(addrLocal);
+    if (i > 0) { b.constI32(i); b.addI32(); }
     b.getLocal(valLocal);
-    b.storeI32Unaligned(0);
-  b.end();
+    if (i > 0) { b.constI32(i * 8); b.shrUI32(); }
+    b.constI32(0xFF); b.andI32();
+    b.call(writeVGAIdx);
+  }
 }
 
 /** Result of ModRM decode at compile time */

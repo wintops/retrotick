@@ -822,7 +822,7 @@ export function emuTick(emu: Emulator): void {
         const it = tryFastLoop(emu.cpu, emu.memory);
         if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
-        if (emu.flatMemory && !(emu.cpu.flagsCache & 0x100)) {
+        if (emu.flatMemory && emu.wasmJitEnabled && !(emu.cpu.flagsCache & 0x100)) {
           const regionBase = eip & ~0xFFFF;
           const region = emu.wasmRegions.get(regionBase);
           if (region) {

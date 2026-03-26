@@ -10,7 +10,7 @@ import { OFF_FLAGS } from './flat-memory';
 import {
   LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,
   LOP_AND8, LOP_AND16, LOP_AND32, LOP_OR16, LOP_OR32, LOP_XOR16, LOP_XOR32,
-  emitSetLazyFlags, emitSetLazyFlagsImm,
+  emitSetLazyFlags, emitSetLazyFlagsImm, emitOpMask,
 } from './wasm-codegen-flags';
 
 /** Emit: get 16-bit reg value */
@@ -109,11 +109,11 @@ export function emitALU_rm(
       if (aluType === 7) {
         b.setLocal(tmp2);
         emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
-        b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+        b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       } else {
         if (is16) { rs16(b, regF); } else { b.setLocal(regF); }
         emitSetLazyFlagsImm(b, lop, regF, 0, 0);
-        b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+        b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       }
     }
     // Note: [mem] OP reg write-back is bailed early (before emitModRM32Addr)
@@ -178,12 +178,12 @@ export function emitGroup83(
     if (aluOp === 7) {
       b.setLocal(tmp2);
       emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
-      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
     } else {
       if (is16) { rs16(b, rm); } else { b.setLocal(rm); }
       emitSetLazyFlagsImm(b, lop, rm, 0, 0);
-      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
     }
   } else {

@@ -249,28 +249,10 @@ function emitBlockTerminator(
   stateLocal: number, dispatchLabel: Label, exitLabel: Label,
   use32: boolean, testCCIdx: number,
 ): void {
-  if (block.exitType === 'jcc') {
-    const takenState = addrToState.get(block.branchTarget);
-    const fallState = addrToState.get(block.fallthrough);
-    const cc = block.conditionCode;
-
-    // Jcc: bail to interpreter. Inline Jcc crashes (blocks produce wrong
-    // results when chained via br_table — needs per-instruction validation).
-    // See plans/plan-wasm-jit-fixes.md for investigation notes.
-  } else if (block.exitType === 'jmp') {
-    const targetState = addrToState.get(block.branchTarget);
-    if (targetState !== undefined) {
-      b.constI32(targetState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      return;
-    }
-  } else if (block.exitType === 'fallthrough') {
-    const nextState = addrToState.get(block.fallthrough);
-    if (nextState !== undefined) {
-      b.constI32(nextState); b.setLocal(stateLocal); b.br(dispatchLabel);
-      return;
-    }
-  }
-  // Everything else: exit to interpreter
+  // All terminators bail to interpreter. Block chaining via br_table causes
+  // rare display artifacts (black dots) — root cause unknown, possibly related
+  // to WASM if/else label depth or register state accumulation.
+  // TODO: fix chaining for 2x speedup on CPU-bound DOS programs.
   b.constI32(0); b.constI32(block.terminatorAddr); b.storeI32(OFF_EIP);
   b.constI32(0); b.constI32(0); b.storeI32(OFF_EXIT);
   b.br(exitLabel);

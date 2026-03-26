@@ -16,7 +16,7 @@ import {
   LOP_XOR8, LOP_XOR16, LOP_XOR32,
   LOP_INC8, LOP_INC16, LOP_INC32, LOP_DEC8, LOP_DEC16, LOP_DEC32,
   LOP_NEG8, LOP_NEG16, LOP_NEG32,
-  emitSetLazyFlags, emitSetLazyFlagsImm,
+  emitSetLazyFlags, emitSetLazyFlagsImm, emitOpMask,
 } from './wasm-codegen-flags';
 
 const SS_BASE = OFF_SEGBASES + 12;
@@ -127,12 +127,12 @@ export function emitGroup81(
     if (aluOp === 7) {
       b.setLocal(tmp2);
       emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
-      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
     } else {
       if (is16) { emitRegSet16(b, rm); } else { b.setLocal(rm); }
       emitSetLazyFlagsImm(b, lop, rm, 0, 0);
-      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.getLocal(tmp1); emitOpMask(b, lop); b.storeI32(OFF_FLAGS + 8);
       b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
     }
   } else {
