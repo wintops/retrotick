@@ -759,6 +759,9 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
+      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
+      // loops with CLI and rely on timer interrupts firing regardless. This is
+      // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       if (intNum >= 0x08 && intNum <= 0x0F) {
