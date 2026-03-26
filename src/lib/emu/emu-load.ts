@@ -682,6 +682,7 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
     }
     if (!dllBuf) {
       console.warn(`[NE DLL] Module ${modName} not found in additionalFiles`);
+      emu.missingDlls.push(modName);
       continue;
     }
 

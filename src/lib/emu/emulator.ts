@@ -708,6 +708,8 @@ export class Emulator {
   onMenuChanged?: () => void;
   onCrash?: (eip: string, description: string) => void;
   onExit?: () => void;
+  /** DLL modules requested by the executable but not found during loading */
+  missingDlls: string[] = [];
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 
