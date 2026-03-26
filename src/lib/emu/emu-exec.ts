@@ -758,8 +758,7 @@ export function emuTick(emu: Emulator): void {
       emu._hwKeyDelay = 0;
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
-      // _inhibitIRQ is set after MOV SS/POP SS — on real x86, this inhibits
-      // all maskable interrupts for one instruction (to allow atomic SS:SP switch).
+      // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       if (intNum >= 0x08 && intNum <= 0x0F) {
