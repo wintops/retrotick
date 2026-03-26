@@ -43,6 +43,8 @@ import type { ExportFunction } from '../pe';
 import { buildNEThunkTable } from './emu-thunks-ne';
 import { handleSehDispatchReturn } from './emu-window';
 import { loadMZ, loadCOM } from './mz-loader';
+import { ArmCPU, SP as ARM_SP, LR as ARM_LR, PC as ARM_PC } from './arm/cpu';
+import { registerCoredll, registerWs2 } from './wince/coredll';
 
 export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
   console.log('[EMU] load() called, arrayBuffer size:', arrayBuffer.byteLength);
@@ -299,6 +301,13 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu._dosDTA = dtaAddr;
 
     console.log(`[EMU] NE loaded: entry=0x${emu.ne.entryPoint.toString(16)} CS=${emu.ne.codeSegSelector} SS=${emu.ne.stackSegSelector} DS=${emu.ne.dataSegSelector} heapBase=0x${emu.heapBase.toString(16)}`);
+    return;
+  }
+
+  // ARM (WinCE) executable branch
+  const IMAGE_FILE_MACHINE_ARM = 0x01C0;
+  if (peInfo.coffHeader.machine === IMAGE_FILE_MACHINE_ARM) {
+    emuLoadARM(emu, arrayBuffer, peInfo);
     return;
   }
 
@@ -562,6 +571,16 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
   }
 
+  // Mark executable code sections as read-only (prevents code corruption from wild writes).
+  // On real Windows, .text is PAGE_EXECUTE_READ — writes trigger access violations.
+  const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
+  const IMAGE_SCN_MEM_WRITE = 0x80000000;
+  for (const sec of emu.pe.sections) {
+    if (sec.virtualSize > 0 && (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) && !(sec.characteristics & IMAGE_SCN_MEM_WRITE)) {
+      emu.memory.markReadOnly(emu.pe.imageBase + sec.virtualAddress, sec.virtualSize);
+    }
+  }
+
   // CPL applet support: if this is a .cpl file (DLL), call DllMain then bootstrap CPlApplet
   if (emu.exeName.toLowerCase().endsWith('.cpl') && (peInfo.coffHeader.characteristics & 0x2000)) {
     const cplAppletAddr = findCPlAppletExport(emu, arrayBuffer);
@@ -682,6 +701,7 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
     }
     if (!dllBuf) {
       console.warn(`[NE DLL] Module ${modName} not found in additionalFiles`);
+      emu.missingDlls.push(modName);
       continue;
     }
 
@@ -1073,4 +1093,65 @@ function findResourceInDir(emu: Emulator, imageBase: number, resRva: number, typ
     }
   }
   return null;
+}
+
+function emuLoadARM(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo): void {
+  emu.isARM = true;
+
+  // Create ARM CPU
+  const armCpu = new ArmCPU(emu.memory);
+  armCpu.emu = emu;
+  emu.armCpu = armCpu;
+
+  // Load PE into memory (reuse existing loader — it's architecture-neutral)
+  emu.pe = loadPE(arrayBuffer, emu.memory);
+  console.log(`[EMU] ARM/WinCE PE loaded: imageBase=0x${emu.pe.imageBase.toString(16)} entry=0x${emu.pe.entryPoint.toString(16)} thunkBase=0x${emu.pe.thunkBase.toString(16)} sizeOfImage=0x${emu.pe.sizeOfImage.toString(16)} apis=${emu.pe.apiMap.size}`);
+
+  // Initialize heap after PE image
+  emu.heapBase = ((emu.pe.stackTop + 0x10000 + 0xFFFF) & ~0xFFFF) >>> 0;
+  emu.heapPtr = emu.heapBase;
+  emu.virtualBase = ((emu.heapBase + 0x1000000 + 0xFFF) & ~0xFFF) >>> 0;
+  emu.virtualPtr = emu.virtualBase;
+  console.log(`[EMU] ARM stack top: 0x${emu.pe.stackTop.toString(16)}, heap base: 0x${emu.heapBase.toString(16)}, virtual base: 0x${emu.virtualBase.toString(16)}`);
+
+  // Initialize dynamic thunk allocator
+  emu.dynamicThunkPtr = ((emu.pe.thunkBase + emu.pe.apiMap.size * 4 + 0xFFF) & ~0xFFF) >>> 0;
+
+  // Register standard Win32 API handlers first — these provide the real GDI/user32
+  // implementations (OffscreenCanvas, bitmap selection, etc.). Then COREDLL copies
+  // relevant handlers from these DLL namespaces into the COREDLL.DLL namespace,
+  // and adds WinCE-specific functions (CRT, etc.).
+  registerKernel32(emu);
+  registerUser32(emu);
+  registerGdi32(emu);
+  registerMsvcrt(emu);
+  registerAdvapi32(emu);
+  registerComctl32(emu);
+  registerShell32(emu);
+
+  // Register COREDLL API handlers (copies from Win32 DLLs + WinCE-specific)
+  registerCoredll(emu);
+  registerWs2(emu);
+
+  // Build thunk dispatch table
+  buildThunkTable(emu);
+  rebuildThunkPages(emu);
+
+  // Initialize ARM registers
+  armCpu.reg[ARM_SP] = emu.pe.stackTop;
+  armCpu.reg[ARM_PC] = emu.pe.entryPoint;
+  // WinMain args: hInstance, hPrevInstance, lpCmdLine, nCmdShow
+  armCpu.reg[0] = emu.pe.imageBase; // hInstance
+  armCpu.reg[1] = 0;               // hPrevInstance
+  armCpu.reg[2] = 0;               // lpCmdLine
+  armCpu.reg[3] = 5;               // nCmdShow = SW_SHOW
+  // Set LR to 0 — when WinMain returns, it means the process should exit.
+  // The ARM tick loop detects PC=0 and treats it as ExitProcess.
+  armCpu.reg[ARM_LR] = 0;
+
+  // Set screen size
+  emu.screenWidth = emu.screenWidth || 240;
+  emu.screenHeight = emu.screenHeight || 320;
+
+  console.log(`[EMU] ARM entry: PC=0x${armCpu.reg[ARM_PC].toString(16)} SP=0x${armCpu.reg[ARM_SP].toString(16)} R0=0x${armCpu.reg[0].toString(16)}`);
 }

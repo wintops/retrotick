@@ -20,8 +20,9 @@ export function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peIn
     if (peInfo.isNE) return { ok: true, peInfo };
     const isDll = (peInfo.coffHeader.characteristics & 0x2000) !== 0;
     const isI386 = peInfo.coffHeader.machine === 0x014C;
+    const isARM = peInfo.coffHeader.machine === 0x01C0;
     if (isDll && name?.toLowerCase().endsWith('.cpl') && isI386) return { ok: true, peInfo };
-    return { ok: !isDll && isI386, peInfo };
+    return { ok: !isDll && (isI386 || isARM), peInfo };
   } catch {
     return { ok: false };
   }

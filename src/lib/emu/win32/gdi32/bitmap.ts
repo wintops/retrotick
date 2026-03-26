@@ -140,13 +140,15 @@ export function registerBitmap(emu: Emulator): void {
     const bmp = emu.handles.get<BitmapInfo>(hObj);
     if (bmp && cbBuffer >= SIZEOF_BITMAP) {
       // Fill BITMAP structure
+      const bitsPixel = bmp.monochrome ? 1 : (bmp.dibBpp || 32);
+      const widthBytes = Math.floor((bmp.width * bitsPixel + 31) / 32) * 4;
       emu.memory.writeU32(bufPtr, 0);       // bmType
       emu.memory.writeU32(bufPtr + 4, bmp.width);  // bmWidth
       emu.memory.writeU32(bufPtr + 8, bmp.height); // bmHeight
-      emu.memory.writeU32(bufPtr + 12, bmp.monochrome ? Math.ceil(bmp.width / 8) : bmp.width * 4); // bmWidthBytes
+      emu.memory.writeU32(bufPtr + 12, widthBytes); // bmWidthBytes
       emu.memory.writeU16(bufPtr + 16, 1);  // bmPlanes
-      emu.memory.writeU16(bufPtr + 18, bmp.monochrome ? 1 : 32); // bmBitsPixel
-      emu.memory.writeU32(bufPtr + 20, 0);  // bmBits
+      emu.memory.writeU16(bufPtr + 18, bitsPixel); // bmBitsPixel
+      emu.memory.writeU32(bufPtr + 20, bmp.dibBitsPtr || 0);  // bmBits
       return SIZEOF_BITMAP;
     }
     return 0;

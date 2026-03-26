@@ -15,9 +15,10 @@ interface Props {
   onRunExe: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles: Map<string, ArrayBuffer> | undefined, exeName: string, commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => void;
   onViewResources: (arrayBuffer: ArrayBuffer, fileName?: string) => void;
   onOpenFolder: (path: string) => void;
+  onShowDisplayProperties?: () => void;
 }
 
-export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
+export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplayProperties }: Props) {
   const fetchItems = useCallback(() => getRootItems(), []);
   const fm = useFolderTools('', fetchItems);
   const [dragOver, setDragOver] = useState(false);
@@ -137,23 +138,27 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
 
       {/* Background context menu */}
       {fm.bgContextMenu && (() => {
-        const CMD_NEW_FOLDER = 1, CMD_REFRESH = 2;
+        const CMD_NEW_FOLDER = 1, CMD_REFRESH = 2, CMD_PROPERTIES = 3;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
+        const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
               items={[
                 mi(CMD_NEW_FOLDER, t().newFolder),
-                { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                sep,
                 mi(CMD_REFRESH, t().refresh),
+                { ...sep },
+                mi(CMD_PROPERTIES, t().properties),
               ]}
               x={fm.bgContextMenu.x} y={fm.bgContextMenu.y}
               onCommand={(id) => {
                 fm.setBgContextMenu(null);
                 if (id === CMD_NEW_FOLDER) fm.handleNewFolder();
                 else if (id === CMD_REFRESH) { fm.setItems([]); setTimeout(fm.loadItems, 60); }
+                else if (id === CMD_PROPERTIES) onShowDisplayProperties?.();
               }}
               onClose={() => fm.setBgContextMenu(null)}
             />

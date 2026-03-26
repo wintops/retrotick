@@ -414,12 +414,14 @@ export function registerText(emu: Emulator): void {
 
     const lines = drawTextWrapLines(dc.ctx, text, right - left, format, DT_WORDBREAK, DT_SINGLELINE);
     let y = top;
-    if ((format & DT_VCENTER) && (format & DT_SINGLELINE)) {
+    if ((format & DT_VCENTER) && ((format & DT_SINGLELINE) || lines.length === 1)) {
       y = (top + bottom - lineH) / 2;
     }
-    for (const line of lines) {
-      if (y + lineH > bottom && !(format & DT_SINGLELINE)) break;
-      fillTextWithPrefix(dc.ctx, line, x, y, right - left, hasPrefix, fontSize);
+    for (let li = 0; li < lines.length; li++) {
+      // Skip lines that start below the rect — but always draw the first line
+      // (Windows draws oversized text and clips visually, never skips it entirely)
+      if (li > 0 && y >= bottom && !(format & DT_SINGLELINE)) break;
+      fillTextWithPrefix(dc.ctx, lines[li], x, y, right - left, hasPrefix, fontSize);
       y += lineH;
     }
 
@@ -504,9 +506,9 @@ export function registerText(emu: Emulator): void {
       dc.ctx.textAlign = 'left';
       const drawLines = drawTextWrapLines(dc.ctx, text, rectW, format, DT_WORDBREAK, DT_SINGLELINE);
       let dy = top;
-      for (const line of drawLines) {
-        if (dy + lineH > bottom && !(format & DT_SINGLELINE)) break;
-        fillTextWithPrefix(dc.ctx, line, left, dy, rectW, hasPrefix, fontSize);
+      for (let li = 0; li < drawLines.length; li++) {
+        if (li > 0 && dy >= bottom && !(format & DT_SINGLELINE)) break;
+        fillTextWithPrefix(dc.ctx, drawLines[li], left, dy, rectW, hasPrefix, fontSize);
         dy += lineH;
       }
     }

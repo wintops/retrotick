@@ -1,5 +1,6 @@
 import { Memory } from './memory';
 import { CPU } from './x86/cpu';
+import { ArmCPU, SP as ARM_SP, LR as ARM_LR, PC as ARM_PC } from './arm/cpu';
 import type { LoadedPE } from './pe-loader';
 import type { LoadedNE, NEResourceEntry } from './ne-loader';
 import { HandleTable } from './win32/handles';
@@ -18,6 +19,7 @@ import { renderChildControls as _renderChildControls, notifyControlOverlays as _
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
 import { emuLoad, emuFindResourceEntry } from './emu-load';
 import { emuTick, emuCallWndProc, emuCallWndProc16, emuCallNative, emuCallCallback } from './emu-exec';
+import { emuTickARM, emuCallWndProcARM } from './emu-exec-arm';
 import { Thread } from './thread';
 
 export { fillTextBitmap } from './emu-render';
@@ -328,6 +330,10 @@ export class Emulator {
   ne?: LoadedNE;
   _arrayBuffer?: ArrayBuffer;
 
+  // ARM (WinCE) mode
+  isARM = false;
+  armCpu: ArmCPU | null = null;
+
   // DOS (MZ) mode
   isDOS = false;
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
@@ -530,11 +536,13 @@ export class Emulator {
   }
   private _fallbackMessageQueue: WinMsg[] = [];
 
+  private _fallbackOnMessageAvailable: (() => void) | null = null;
   get _onMessageAvailable(): (() => void) | null {
-    return this.currentThread ? this.currentThread._onMessageAvailable : null;
+    return this.currentThread ? this.currentThread._onMessageAvailable : this._fallbackOnMessageAvailable;
   }
   set _onMessageAvailable(v: (() => void) | null) {
     if (this.currentThread) this.currentThread._onMessageAvailable = v;
+    else this._fallbackOnMessageAvailable = v;
   }
 
   get wndProcDepth(): number {
@@ -708,6 +716,8 @@ export class Emulator {
   onMenuChanged?: () => void;
   onCrash?: (eip: string, description: string) => void;
   onExit?: () => void;
+  /** DLL modules requested by the executable but not found during loading */
+  missingDlls: string[] = [];
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 
@@ -1032,8 +1042,13 @@ export class Emulator {
     return addr >>> 0;
   }
 
-  // Read stdcall argument from stack
+  // Read stdcall argument from stack (x86) or registers/stack (ARM)
   readArg(index: number): number {
+    if (this.isARM && this.armCpu) {
+      // ARM calling convention: R0-R3 for first 4 args, then stack
+      if (index < 4) return this.armCpu.reg[index] >>> 0;
+      return this.memory.readU32((this.armCpu.reg[ARM_SP] + (index - 4) * 4) >>> 0);
+    }
     return this.memory.readU32((this.cpu.reg[4] + 4 + index * 4) >>> 0);
   }
 
@@ -1293,6 +1308,7 @@ export class Emulator {
 
   // Delegated to emu-exec.ts
   callWndProc(wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
+    if (this.isARM) return emuCallWndProcARM(this, wndProc, hwnd, message, wParam, lParam);
     return emuCallWndProc(this, wndProc, hwnd, message, wParam, lParam);
   }
 
@@ -1685,6 +1701,10 @@ export class Emulator {
   }
 
   tick = (): void => {
-    emuTick(this);
+    if (this.isARM) {
+      emuTickARM(this);
+    } else {
+      emuTick(this);
+    }
   };
 }

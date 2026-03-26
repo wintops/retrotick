@@ -320,7 +320,7 @@ function findBackwardJcc(mem: { readU8(a: number): number; readU32(a: number): n
 function executeLoop(cpu: { reg: Int32Array; eip: number },
                      mem: { readU8(a: number): number; readU16(a: number): number; readU32(a: number): number;
                             writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void },
-                     loop: LoopInfo): number {
+                     loop: LoopInfo, startInsn = 0): number {
   const { insns, counterReg, endAddr } = loop;
   if (counterReg < 0) return 0;
   const count = cpu.reg[counterReg] | 0;
@@ -329,10 +329,11 @@ function executeLoop(cpu: { reg: Int32Array; eip: number },
   const r = new Int32Array(8);
   for (let i = 0; i < 8; i++) r[i] = cpu.reg[i];
   let carry = 0, iters = 0;
+  let firstInsn = startInsn; // skip already-executed instructions on first iteration
 
   for (let n = count; n > 0; n--) {
     carry = 0;
-    for (let i = 0; i < insns.length; i++) {
+    for (let i = firstInsn; i < insns.length; i++) {
       const I = insns[i]; let a: number, b: number, s: number, addr: number;
       switch (I.op) {
         case Op.ADD_RR: a = r[I.dst]>>>0; b = r[I.src]>>>0; r[I.dst] = (a+b)|0; carry = (a+b) > 0xFFFFFFFF ? 1 : 0; break;
@@ -369,10 +370,66 @@ function executeLoop(cpu: { reg: Int32Array; eip: number },
       }
     }
     iters++;
+    firstInsn = 0; // subsequent iterations execute all instructions
   }
   for (let i = 0; i < 8; i++) cpu.reg[i] = r[i];
   cpu.eip = endAddr;
   return iters;
+}
+
+// ---- Loop cache ----
+
+interface CachedLoop {
+  loop: LoopInfo;
+  jccAddr: number;  // end of loop body (exclusive of jcc instruction bytes)
+}
+
+// Cache of recently-detected loops, keyed by loopStart address.
+// When EIP enters a known loop range, skip the expensive full decode.
+const loopCache = new Map<number, CachedLoop>();
+const MAX_CACHE = 64;
+
+// Flat arrays for O(1)-ish cache lookup from hot loops.
+// Rebuilt whenever loopCache changes.
+let cacheStarts: number[] = [];
+let cacheEnds: number[] = [];
+let cacheEntries: CachedLoop[] = [];
+
+function rebuildCacheArrays(): void {
+  cacheStarts = [];
+  cacheEnds = [];
+  cacheEntries = [];
+  for (const [start, entry] of loopCache) {
+    cacheStarts.push(start);
+    cacheEnds.push(entry.jccAddr);
+    cacheEntries.push(entry);
+  }
+}
+
+/**
+ * Lightweight cache-only check: if EIP is inside a previously-detected loop,
+ * fast-forward immediately. Called from the main execution loops on every step
+ * (or every N steps) without waiting for the sampler.
+ */
+export function tryCachedLoop(cpu: { reg: Int32Array; eip: number },
+                              mem: { readU8(a: number): number; readU16(a: number): number; readU32(a: number): number;
+                                     writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): number {
+  const eip = cpu.eip >>> 0;
+  for (let i = 0; i < cacheStarts.length; i++) {
+    if (eip >= cacheStarts[i] && eip <= cacheEnds[i]) {
+      const cached = cacheEntries[i];
+      let startInsn = 0;
+      if (eip !== cacheStarts[i]) {
+        const partial = decodeLoopBody(mem, cacheStarts[i], eip);
+        if (!partial) continue;
+        startInsn = partial.length;
+        if (startInsn >= cached.loop.insns.length) continue;
+      }
+      const iters = executeLoop(cpu, mem, cached.loop, startInsn);
+      if (iters > 0) return iters;
+    }
+  }
+  return 0;
 }
 
 // ---- Public API ----
@@ -386,13 +443,27 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
                                    writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): number {
   const eip = cpu.eip >>> 0;
 
+  // --- Fast path: check cache for known loop ranges ---
+  for (const [startAddr, cached] of loopCache) {
+    if (eip >= startAddr && eip <= cached.jccAddr) {
+      let startInsn = 0;
+      if (eip !== startAddr) {
+        const partial = decodeLoopBody(mem, startAddr, eip);
+        if (!partial) continue;
+        startInsn = partial.length;
+        if (startInsn >= cached.loop.insns.length) continue;
+      }
+      const iters = executeLoop(cpu, mem, cached.loop, startInsn);
+      if (iters > 0) return iters;
+    }
+  }
+
+  // --- Slow path: full decode ---
   const jcc = findBackwardJcc(mem, eip);
   if (!jcc) return 0;
 
-  // Only fast-forward when EIP is exactly at the loop start.
-  // Stepping forward to reach loop start is unsafe: cpu.step() may write
-  // memory that we can't roll back, causing subtle data corruption.
-  if (eip !== jcc.loopStart) return 0;
+  // EIP must be at or inside the loop body
+  if (eip < jcc.loopStart || eip > jcc.jccAddr) return 0;
 
   const insns = decodeLoopBody(mem, jcc.loopStart, jcc.jccAddr);
   if (!insns || insns.length === 0 || insns.length > 32) return 0;
@@ -430,6 +501,15 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
   const hasWrite = insns.some(i => i.op === Op.STORE8 || i.op === Op.STORE16 || i.op === Op.STORE32);
   if (!hasWrite) return 0;
 
+  // Compute IR instruction offset when EIP is mid-loop.
+  let startInsn = 0;
+  if (eip !== jcc.loopStart) {
+    const partialInsns = decodeLoopBody(mem, jcc.loopStart, eip);
+    if (!partialInsns) return 0;
+    startInsn = partialInsns.length;
+    if (startInsn >= insns.length) return 0;
+  }
+
   const loop: LoopInfo = {
     startAddr: jcc.loopStart,
     endAddr: jcc.jccAddr + jcc.jccLen,
@@ -437,8 +517,15 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
     jccType: jcc.jccType,
   };
 
-  const iters = executeLoop(cpu, mem, loop);
+  const iters = executeLoop(cpu, mem, loop, startInsn);
   if (iters > 0) {
+    // Cache the loop for instant re-detection
+    if (loopCache.size >= MAX_CACHE) {
+      const firstKey = loopCache.keys().next().value!;
+      loopCache.delete(firstKey);
+    }
+    loopCache.set(jcc.loopStart, { loop, jccAddr: jcc.jccAddr });
+    rebuildCacheArrays();
     console.log(`[FAST-LOOP] ${iters} iters @ 0x${loop.startAddr.toString(16)}-0x${loop.endAddr.toString(16)} (${insns.length} ops, counter=r${counterReg})`);
   }
   return iters;

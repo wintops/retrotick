@@ -166,6 +166,11 @@ export function decodeMBCS(bytes: Uint8Array): string {
   }
 }
 
+/** Thrown when a write targets a read-only page (like .text section). */
+export class AccessViolationError extends Error {
+  constructor(public addr: number) { super(`Access violation writing 0x${addr.toString(16)}`); }
+}
+
 // Sparse 32-bit memory using 64KB segments, lazily allocated
 const SEG_BITS = 16;
 const SEG_SIZE = 1 << SEG_BITS; // 65536
@@ -182,6 +187,19 @@ export class Memory {
 
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
   vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
+
+  // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
+  private _readOnlyPages = new Set<number>();
+
+  markReadOnly(startAddr: number, size: number): void {
+    const startPage = startAddr >>> 12;
+    const endPage = (startAddr + size - 1) >>> 12;
+    for (let p = startPage; p <= endPage; p++) this._readOnlyPages.add(p);
+  }
+
+  private _isReadOnly(addr: number): boolean {
+    return this._readOnlyPages.has(addr >>> 12);
+  }
 
   private seg(addr: number): Uint8Array {
     const key = addr >>> SEG_BITS;
@@ -248,10 +266,12 @@ export class Memory {
       console.trace();
     }
     if (this.vgaPlanar && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
 
   writeU16(addr: number, val: number): void {
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
       this.dv(addr).setUint16(off, val, true);
@@ -262,6 +282,7 @@ export class Memory {
   }
 
   writeU32(addr: number, val: number): void {
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
       this.dv(addr).setUint32(off, val, true);

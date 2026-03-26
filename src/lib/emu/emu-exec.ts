@@ -2,10 +2,58 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
-import { tryFastLoop } from './fast-loops';
+import { tryFastLoop, tryCachedLoop } from './fast-loops';
+import { AccessViolationError } from './memory';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
+const STATUS_ACCESS_VIOLATION = 0xC0000005;
+
+/** Raise an access violation exception via SEH (same mechanism as RaiseException). */
+function raiseAccessViolation(emu: Emulator, faultAddr: number): void {
+  const eip = emu.cpu.eip >>> 0;
+  console.log(`[SEH] Access violation at EIP=0x${eip.toString(16)} writing 0x${faultAddr.toString(16)}`);
+
+  // Build EXCEPTION_RECORD
+  const excRec = emu.allocHeap(0x50);
+  emu.memory.writeU32(excRec + 0x00, STATUS_ACCESS_VIOLATION);
+  emu.memory.writeU32(excRec + 0x04, 0);           // flags: continuable
+  emu.memory.writeU32(excRec + 0x08, 0);           // chained record
+  emu.memory.writeU32(excRec + 0x0C, eip);         // exception address
+  emu.memory.writeU32(excRec + 0x10, 2);           // 2 params
+  emu.memory.writeU32(excRec + 0x14, 1);           // param0: 1 = write
+  emu.memory.writeU32(excRec + 0x18, faultAddr);   // param1: fault address
+
+  // Build CONTEXT
+  const ctx = emu.allocHeap(0x2CC);
+  emu.memory.writeU32(ctx + 0x00, 0x10007);
+  emu.memory.writeU32(ctx + 0x9C, emu.cpu.reg[7] >>> 0);
+  emu.memory.writeU32(ctx + 0xA0, emu.cpu.reg[6] >>> 0);
+  emu.memory.writeU32(ctx + 0xA4, emu.cpu.reg[3] >>> 0);
+  emu.memory.writeU32(ctx + 0xA8, emu.cpu.reg[2] >>> 0);
+  emu.memory.writeU32(ctx + 0xAC, emu.cpu.reg[1] >>> 0);
+  emu.memory.writeU32(ctx + 0xB0, emu.cpu.reg[0] >>> 0);
+  emu.memory.writeU32(ctx + 0xB4, emu.cpu.reg[5] >>> 0);
+  emu.memory.writeU32(ctx + 0xB8, eip);
+  emu.memory.writeU32(ctx + 0xBC, 0x1B);
+  emu.memory.writeU32(ctx + 0xC0, emu.cpu.getFlags());
+  emu.memory.writeU32(ctx + 0xC4, emu.cpu.reg[4] >>> 0);
+  emu.memory.writeU32(ctx + 0xC8, 0x23);
+
+  const dispCtx = emu.allocHeap(4);
+
+  // Find SEH chain head
+  const firstReg = emu.memory.readU32((emu.cpu.fsBase + 0) >>> 0);
+  if (firstReg === 0xFFFFFFFF || firstReg === 0) {
+    console.error(`[SEH] No handler for access violation at 0x${eip.toString(16)}`);
+    emu.haltReason = `access violation writing 0x${faultAddr.toString(16)}`;
+    emu.halted = true;
+    return;
+  }
+
+  emu._sehState = { excRecAddr: excRec, ctxAddr: ctx, currentReg: firstReg, dispCtxAddr: dispCtx };
+  emu.dispatchToSehHandler(firstReg);
+}
 
 export function emuCompleteThunk(emu: Emulator, retVal: number, stackBytes: number): void {
   emu.cpu.reg[0] = retVal | 0; // EAX
@@ -92,6 +140,17 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
 
+    // Fast path: check loop cache every 64 steps
+    if ((steps & 0x3F) === 0 && steps > 0) {
+      try {
+        const ci = tryCachedLoop(emu.cpu, emu.memory);
+        if (ci > 0) { steps += ci; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      } catch (e) {
+        if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        throw e;
+      }
+    }
+
     let csTry = false;
     if ((steps & 0xFF) === 0 && steps > 0) {
       if (eip === csEipA) { if (++csHitA >= 2) csTry = true; } else { csEipA = eip; csHitA = 0; }
@@ -104,8 +163,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
       }
     }
     if (csTry) {
-      const iters = tryFastLoop(emu.cpu, emu.memory);
-      if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      try {
+        const iters = tryFastLoop(emu.cpu, emu.memory);
+        if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+      } catch (e) {
+        if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        throw e;
+      }
       csHitA = csHitB = 0;
     }
 
@@ -157,7 +221,12 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         break;
       }
     } else {
-      emu.cpu.step();
+      try {
+        emu.cpu.step();
+      } catch (e) {
+        if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        throw e;
+      }
     }
     steps++;
   }
@@ -732,6 +801,16 @@ export function emuTick(emu: Emulator): void {
 
     // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
     {
+      // Fast path: check loop cache every 64 steps
+      if ((stepCount & 0x3F) === 0 && stepCount > 0) {
+        try {
+          const ci = tryCachedLoop(emu.cpu, emu.memory);
+          if (ci > 0) { stepCount += ci; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        } catch (e) {
+          if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          throw e;
+        }
+      }
       let tkTry = false;
       if ((stepCount & 0xFF) === 0 && stepCount > 0) {
         if (eip === tkEipA) { if (++tkHitA >= 2) tkTry = true; } else { tkEipA = eip; tkHitA = 0; }
@@ -741,14 +820,24 @@ export function emuTick(emu: Emulator): void {
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
       if (tkTry) {
-        const it = tryFastLoop(emu.cpu, emu.memory);
-        if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        try {
+          const it = tryFastLoop(emu.cpu, emu.memory);
+          if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        } catch (e) {
+          if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          throw e;
+        }
         tkHitA = tkHitB = 0;
       }
     }
 
     const prevEip = eip;
-    emu.cpu.step();
+    try {
+      emu.cpu.step();
+    } catch (e) {
+      if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+      throw e;
+    }
     emu._pitInsnCount++;
     if (emu.isDOS) {
       const curDosKeyBufferLen = emu.dosKeyBuffer.length;

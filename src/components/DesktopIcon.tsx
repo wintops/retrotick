@@ -128,9 +128,9 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
         <span
           class="text-[11px] leading-tight text-center break-all"
           style={{
-            color: '#000',
-            textShadow: 'none',
-            ...(selected ? { background: '#C0C0C0', outline: '1px dotted #000', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
+            color: '#FFF',
+            textShadow: '1px 1px 0 #000',
+            ...(selected ? { background: '#0A246A', textShadow: 'none', outline: '1px dotted #FFF', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
           }}
         >
           {name}

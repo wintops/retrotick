@@ -222,5 +222,6 @@ export function loadPE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedPE {
     sizeOfImage,
     resourceRva,
     resourceSize,
+    sections,
   };
 }
