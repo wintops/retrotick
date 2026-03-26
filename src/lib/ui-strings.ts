@@ -86,6 +86,19 @@ export interface UiStrings {
   propApplication: string;
   propFileFolder: string;
   propFilesAndFolders: string;
+  // Display Properties dialog
+  displayProperties: string;
+  background: string;
+  wallpaper: string;
+  bgNone: string;
+  bgCenter: string;
+  bgTile: string;
+  bgStretch: string;
+  bgPosition: string;
+  bgColor: string;
+  browse: string;
+  apply: string;
+  bgPreview: string;
 }
 
 const en: UiStrings = {
@@ -167,6 +180,18 @@ const en: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'File Folder',
   propFilesAndFolders: '{0} files, {1} folders',
+  displayProperties: 'Display Properties',
+  background: 'Background',
+  wallpaper: 'Wallpaper',
+  bgNone: '(None)',
+  bgCenter: 'Center',
+  bgTile: 'Tile',
+  bgStretch: 'Stretch',
+  bgPosition: 'Position:',
+  bgColor: 'Color:',
+  browse: 'Browse...',
+  apply: 'Apply',
+  bgPreview: 'Preview',
 };
 
 const fr: UiStrings = {
@@ -248,6 +273,18 @@ const fr: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'Dossier de fichiers',
   propFilesAndFolders: '{0} fichiers, {1} dossiers',
+  displayProperties: 'Propri\u00e9t\u00e9s d\u2019affichage',
+  background: 'Arri\u00e8re-plan',
+  wallpaper: 'Papier peint',
+  bgNone: '(Aucun)',
+  bgCenter: 'Centrer',
+  bgTile: 'Mosa\u00efque',
+  bgStretch: '\u00c9tirer',
+  bgPosition: 'Position\u00a0:',
+  bgColor: 'Couleur\u00a0:',
+  browse: 'Parcourir...',
+  apply: 'Appliquer',
+  bgPreview: 'Aper\u00e7u',
 };
 
 const de: UiStrings = {
@@ -329,6 +366,18 @@ const de: UiStrings = {
   propApplication: 'Anwendung',
   propFileFolder: 'Dateiordner',
   propFilesAndFolders: '{0} Dateien, {1} Ordner',
+  displayProperties: 'Anzeigeeigenschaften',
+  background: 'Hintergrund',
+  wallpaper: 'Hintergrundbild',
+  bgNone: '(Keins)',
+  bgCenter: 'Zentriert',
+  bgTile: 'Nebeneinander',
+  bgStretch: 'Gestreckt',
+  bgPosition: 'Anzeige:',
+  bgColor: 'Farbe:',
+  browse: 'Durchsuchen...',
+  apply: '\u00dcbernehmen',
+  bgPreview: 'Vorschau',
 };
 
 const es: UiStrings = {
@@ -410,6 +459,18 @@ const es: UiStrings = {
   propApplication: 'Aplicaci\u00f3n',
   propFileFolder: 'Carpeta de archivos',
   propFilesAndFolders: '{0} archivos, {1} carpetas',
+  displayProperties: 'Propiedades de pantalla',
+  background: 'Fondo',
+  wallpaper: 'Papel tapiz',
+  bgNone: '(Ninguno)',
+  bgCenter: 'Centrar',
+  bgTile: 'Mosaico',
+  bgStretch: 'Expandir',
+  bgPosition: 'Posici\u00f3n:',
+  bgColor: 'Color:',
+  browse: 'Examinar...',
+  apply: 'Aplicar',
+  bgPreview: 'Vista previa',
 };
 
 const ja: UiStrings = {
@@ -491,6 +552,18 @@ const ja: UiStrings = {
   propApplication: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3',
   propFileFolder: '\u30d5\u30a1\u30a4\u30eb \u30d5\u30a9\u30eb\u30c0',
   propFilesAndFolders: '{0} \u30d5\u30a1\u30a4\u30eb\u3001{1} \u30d5\u30a9\u30eb\u30c0',
+  displayProperties: '\u753b\u9762\u306e\u30d7\u30ed\u30d1\u30c6\u30a3',
+  background: '\u80cc\u666f',
+  wallpaper: '\u58c1\u7d19',
+  bgNone: '(\u306a\u3057)',
+  bgCenter: '\u4e2d\u592e\u306b\u8868\u793a',
+  bgTile: '\u4e26\u3079\u3066\u8868\u793a',
+  bgStretch: '\u62e1\u5927\u3057\u3066\u8868\u793a',
+  bgPosition: '\u8868\u793a\u4f4d\u7f6e:',
+  bgColor: '\u8272:',
+  browse: '\u53c2\u7167...',
+  apply: '\u9069\u7528',
+  bgPreview: '\u30d7\u30ec\u30d3\u30e5\u30fc',
 };
 
 const zhCN: UiStrings = {
@@ -572,6 +645,18 @@ const zhCN: UiStrings = {
   propApplication: '\u5e94\u7528\u7a0b\u5e8f',
   propFileFolder: '\u6587\u4ef6\u5939',
   propFilesAndFolders: '{0} \u4e2a\u6587\u4ef6\uff0c{1} \u4e2a\u6587\u4ef6\u5939',
+  displayProperties: '\u663e\u793a\u5c5e\u6027',
+  background: '\u80cc\u666f',
+  wallpaper: '\u58c1\u7eb8',
+  bgNone: '(\u65e0)',
+  bgCenter: '\u5c45\u4e2d',
+  bgTile: '\u5e73\u94fa',
+  bgStretch: '\u62c9\u4f38',
+  bgPosition: '\u663e\u793a\u65b9\u5f0f:',
+  bgColor: '\u989c\u8272:',
+  browse: '\u6d4f\u89c8...',
+  apply: '\u5e94\u7528',
+  bgPreview: '\u9884\u89c8',
 };
 
 const ptBR: UiStrings = {
@@ -653,6 +738,18 @@ const ptBR: UiStrings = {
   propApplication: 'Aplicativo',
   propFileFolder: 'Pasta de arquivos',
   propFilesAndFolders: '{0} arquivos, {1} pastas',
+  displayProperties: 'Propriedades de V\u00eddeo',
+  background: 'Plano de Fundo',
+  wallpaper: 'Papel de Parede',
+  bgNone: '(Nenhum)',
+  bgCenter: 'Centralizar',
+  bgTile: 'Lado a Lado',
+  bgStretch: 'Estender',
+  bgPosition: 'Posi\u00e7\u00e3o:',
+  bgColor: 'Cor:',
+  browse: 'Procurar...',
+  apply: 'Aplicar',
+  bgPreview: 'Visualiza\u00e7\u00e3o',
 };
 
 const it: UiStrings = {
@@ -734,6 +831,18 @@ const it: UiStrings = {
   propApplication: 'Applicazione',
   propFileFolder: 'Cartella di file',
   propFilesAndFolders: '{0} file, {1} cartelle',
+  displayProperties: 'Propriet\u00e0 dello schermo',
+  background: 'Sfondo',
+  wallpaper: 'Sfondo del desktop',
+  bgNone: '(Nessuno)',
+  bgCenter: 'Al centro',
+  bgTile: 'Affiancato',
+  bgStretch: 'Esteso',
+  bgPosition: 'Posizione:',
+  bgColor: 'Colore:',
+  browse: 'Sfoglia...',
+  apply: 'Applica',
+  bgPreview: 'Anteprima',
 };
 
 const pl: UiStrings = {
@@ -815,6 +924,18 @@ const pl: UiStrings = {
   propApplication: 'Aplikacja',
   propFileFolder: 'Folder plik\u00f3w',
   propFilesAndFolders: '{0} plik\u00f3w, {1} folder\u00f3w',
+  displayProperties: 'W\u0142a\u015bciwo\u015bci ekranu',
+  background: 'T\u0142o',
+  wallpaper: 'Tapeta',
+  bgNone: '(Brak)',
+  bgCenter: 'Na \u015brodku',
+  bgTile: 'S\u0105siaduj\u0105co',
+  bgStretch: 'Rozci\u0105gni\u0119ty',
+  bgPosition: 'Pozycja:',
+  bgColor: 'Kolor:',
+  browse: 'Przegl\u0105daj...',
+  apply: 'Zastosuj',
+  bgPreview: 'Podgl\u0105d',
 };
 
 const ko: UiStrings = {
@@ -896,6 +1017,18 @@ const ko: UiStrings = {
   propApplication: '\uc751\uc6a9 \ud504\ub85c\uadf8\ub7a8',
   propFileFolder: '\ud30c\uc77c \ud3f4\ub354',
   propFilesAndFolders: '\ud30c\uc77c {0}\uac1c, \ud3f4\ub354 {1}\uac1c',
+  displayProperties: '\ub514\uc2a4\ud50c\ub808\uc774 \ub4f1\ub85d \uc815\ubcf4',
+  background: '\ubc30\uacbd',
+  wallpaper: '\ubc30\uacbd \ud654\uba74',
+  bgNone: '(\uc5c6\uc74c)',
+  bgCenter: '\uac00\uc6b4\ub370',
+  bgTile: '\ubc14\ub451\ud310\uc2dd',
+  bgStretch: '\ub298\uc784',
+  bgPosition: '\ud45c\uc2dc:',
+  bgColor: '\uc0c9:',
+  browse: '\ucc3e\uc544\ubcf4\uae30...',
+  apply: '\uc801\uc6a9',
+  bgPreview: '\ubbf8\ub9ac \ubcf4\uae30',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
