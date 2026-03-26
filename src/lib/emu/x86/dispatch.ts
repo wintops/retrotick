@@ -760,9 +760,15 @@ export function cpuStep(cpu: CPU): void {
     case 0x91: case 0x92: case 0x93:
     case 0x94: case 0x95: case 0x96: case 0x97: {
       const r = opcode - 0x90;
-      const tmp = cpu.reg[EAX];
-      cpu.reg[EAX] = cpu.reg[r];
-      cpu.reg[r] = tmp;
+      if (opSize === 16) {
+        const tmp = cpu.getReg16(EAX);
+        cpu.setReg16(EAX, cpu.getReg16(r));
+        cpu.setReg16(r, tmp);
+      } else {
+        const tmp = cpu.reg[EAX];
+        cpu.reg[EAX] = cpu.reg[r];
+        cpu.reg[r] = tmp;
+      }
       break;
     }
 
