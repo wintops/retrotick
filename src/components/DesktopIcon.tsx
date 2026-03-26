@@ -11,6 +11,8 @@ interface Props {
   isExe?: boolean;
   selected: boolean;
   editing?: boolean;
+  /** Use dark text (black, no shadow) for light backgrounds like folder windows */
+  darkText?: boolean;
   onSelect: () => void;
   onOpen: () => void;
   onContextMenu: (e: MouseEvent) => void;
@@ -21,7 +23,7 @@ interface Props {
 
 export { INTERNAL_MIME, FOLDER_ICON_16, EXE_ICON_16 };
 
-export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selected, editing, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
+export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selected, editing, darkText, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
   const [lastClick, setLastClick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const [editValue, setEditValue] = useState(name);
@@ -128,9 +130,9 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
         <span
           class="text-[11px] leading-tight text-center break-all"
           style={{
-            color: '#FFF',
-            textShadow: '1px 1px 0 #000',
-            ...(selected ? { background: '#0A246A', textShadow: 'none', outline: '1px dotted #FFF', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
+            color: darkText ? '#000' : '#FFF',
+            textShadow: darkText ? 'none' : '1px 1px 0 #000',
+            ...(selected ? { background: '#0A246A', color: '#FFF', textShadow: 'none', outline: '1px dotted #FFF', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
           }}
         >
           {name}

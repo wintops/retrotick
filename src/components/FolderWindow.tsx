@@ -187,6 +187,7 @@ export function FolderWindow({
                 iconUrl={item.iconUrl}
                 isFolder={item.isFolder}
                 isExe={item.isExe}
+                darkText
                 selected={fm.selected === item.name}
                 editing={fm.editingName === item.name}
                 onSelect={() => fm.setSelected(item.name)}
