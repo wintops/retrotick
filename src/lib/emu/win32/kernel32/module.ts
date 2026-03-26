@@ -1,19 +1,13 @@
 import type { Emulator } from '../../emulator';
-import { loadPE } from '../../pe-loader';
+import { loadPE, parsePEHeader } from '../../pe-loader';
 import type { LoadedPE } from '../../pe-loader';
 import { parsePE, extractExports } from '../../../pe';
-import type { ExportFunction } from '../../../pe';
+
 import { buildThunkTable } from '../../emu-thunks-pe';
 import { rebuildThunkPages } from '../../emu-load';
 import { emuCallDllMain } from '../../emu-exec';
 
-interface LoadedModule {
-  base: number;
-  pe: LoadedPE;
-  exports: ExportFunction[];
-}
-
-const loadedExports = new Map<string, LoadedModule>();
+// Module-level type no longer needed — exports are stored on emu.loadedDllExports
 
 /**
  * After loading a DLL, check if it imports from other DLLs available in additionalFiles.
@@ -37,7 +31,22 @@ function resolveSubDllImports(emu: Emulator, parentPe: LoadedPE): void {
     if (!subAb) continue;
 
     try {
-      const subPe = loadPE(subAb, emu.memory);
+      // Detect address conflicts
+      const { imageBase: preferred, sizeOfImage: dllSize } = parsePEHeader(subAb);
+      const occupiedRanges: { base: number; size: number }[] = [];
+      occupiedRanges.push({ base: emu.pe.imageBase, size: emu.pe.sizeOfImage });
+      for (const [, mod] of emu.loadedModules) {
+        occupiedRanges.push({ base: mod.base, size: mod.sizeOfImage ?? 0x100000 });
+      }
+      let actualBase = preferred;
+      for (const r of occupiedRanges) {
+        if (actualBase < r.base + r.size && actualBase + dllSize > r.base) {
+          actualBase = ((r.base + r.size + 0xFFFF) & ~0xFFFF) >>> 0;
+        }
+      }
+      const baseOverride = actualBase !== preferred ? actualBase : undefined;
+
+      const subPe = loadPE(subAb, emu.memory, baseOverride);
       const subPeInfo = parsePE(subAb);
       const subExportResult = extractExports(subPeInfo, subAb);
       const subExportFuncs = subExportResult?.functions ?? [];
@@ -52,11 +61,12 @@ function resolveSubDllImports(emu: Emulator, parentPe: LoadedPE): void {
       const exportByName = new Map<string, number>();
       const exportByOrd = new Map<number, number>();
       for (const fn of subExportFuncs) {
+        if (fn.forwardedTo) continue;
         if (fn.name) exportByName.set(fn.name, subPe.imageBase + fn.rva);
         exportByOrd.set(fn.ordinal, subPe.imageBase + fn.rva);
       }
 
-      loadedExports.set(subLower, { base: subPe.imageBase, pe: subPe, exports: subExportFuncs });
+      emu.loadedDllExports.set(subLower, { base: subPe.imageBase, exports: subExportFuncs });
       emu.loadedModules.set(subLower, { base: subPe.imageBase, resourceRva: subPe.resourceRva, imageBase: subPe.imageBase, sizeOfImage: subPe.sizeOfImage });
 
       // Patch parent DLL's IAT: resolve thunks for this sub-DLL
@@ -127,8 +137,23 @@ function loadDll(emu: Emulator, rawName: string): number {
   }
 
   try {
+    // Detect address conflicts before loading
+    const { imageBase: preferred, sizeOfImage: dllSize } = parsePEHeader(ab);
+    const occupiedRanges: { base: number; size: number }[] = [];
+    occupiedRanges.push({ base: emu.pe.imageBase, size: emu.pe.sizeOfImage });
+    for (const [, mod] of emu.loadedModules) {
+      occupiedRanges.push({ base: mod.base, size: mod.sizeOfImage ?? 0x100000 });
+    }
+    let actualBase = preferred;
+    for (const r of occupiedRanges) {
+      if (actualBase < r.base + r.size && actualBase + dllSize > r.base) {
+        actualBase = ((r.base + r.size + 0xFFFF) & ~0xFFFF) >>> 0;
+      }
+    }
+    const baseOverride = actualBase !== preferred ? actualBase : undefined;
+
     // Load DLL PE into emulator memory
-    const pe = loadPE(ab, emu.memory);
+    const pe = loadPE(ab, emu.memory, baseOverride);
 
     // Build thunks for the DLL's own imports (it imports from kernel32, user32, etc.)
     const savedPe = emu.pe;
@@ -142,7 +167,7 @@ function loadDll(emu: Emulator, rawName: string): number {
     const exportResult = extractExports(peInfo, ab);
     const exportFuncs = exportResult?.functions ?? [];
 
-    loadedExports.set(basename, { base: pe.imageBase, pe, exports: exportFuncs });
+    emu.loadedDllExports.set(basename, { base: pe.imageBase, exports: exportFuncs });
     emu.loadedModules.set(basename, { base: pe.imageBase, resourceRva: pe.resourceRva, imageBase: pe.imageBase, sizeOfImage: pe.sizeOfImage });
 
     console.log(`[LoadLibrary] Loaded "${rawName}" at 0x${pe.imageBase.toString(16)}, ${exportFuncs.length} exports`);
@@ -164,10 +189,11 @@ function loadDll(emu: Emulator, rawName: string): number {
   }
 }
 
-function findExport(_emu: Emulator, hModule: number, funcName: string, ordinal: number): number {
-  for (const [, m] of loadedExports) {
+function findExport(emu: Emulator, hModule: number, funcName: string, ordinal: number): number {
+  for (const [, m] of emu.loadedDllExports) {
     if (m.base !== hModule) continue;
     for (const fn of m.exports) {
+      if (fn.forwardedTo) continue;
       if (ordinal >= 0 && fn.ordinal === ordinal) return m.base + fn.rva;
       if (fn.name === funcName) return m.base + fn.rva;
     }

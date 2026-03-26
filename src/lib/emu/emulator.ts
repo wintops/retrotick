@@ -471,6 +471,11 @@ export class Emulator {
   ]);
   // Loaded DLL modules: dllName → module info
   loadedModules = new Map<string, { base: number; resourceRva: number; imageBase: number; sizeOfImage?: number }>();
+  // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
+  // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
+  loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();
+  // DLLs referenced in imports but not available (no additionalFiles, no JS stubs)
+  missingDlls: string[] = [];
   // Dynamic thunk allocator (for GetProcAddress on loaded DLLs)
   dynamicThunkPtr = 0;
 
