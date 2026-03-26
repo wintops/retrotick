@@ -356,6 +356,7 @@ export class VGAState {
         } else {
           if (this.atcIndex < this.atcRegs.length) {
             this.atcRegs[this.atcIndex] = value;
+            this.dirty = true;
           }
         }
         this.atcFlipFlop = !this.atcFlipFlop;
@@ -413,7 +414,6 @@ export class VGAState {
           this.dacWriteIndex = (this.dacWriteIndex + 1) & 0xFF;
           this.dirty = true;
         }
-        break;
         break;
       case 0x3D4: // CRTC index
         this.crtcIndex = value & 0x1F;
