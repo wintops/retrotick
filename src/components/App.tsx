@@ -28,6 +28,8 @@ import type { Emulator } from '../lib/emu/emulator';
 import { displayName } from '../lib/file-store';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
 import { t } from '../lib/regional-settings';
+import { DisplayPropertiesDialog } from './DisplayPropertiesDialog';
+import type { BackgroundSettings } from './DisplayPropertiesDialog';
 
 interface ResourceViewerApp {
   id: number;
@@ -91,6 +93,14 @@ export function App() {
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem('welcome-dismissed'));
   const [showRegionalSettings, setShowRegionalSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
+  const [showDisplayProperties, setShowDisplayProperties] = useState(false);
+  const [bgSettings, setBgSettings] = useState<BackgroundSettings>(() => {
+    const saved = localStorage.getItem('bg-settings');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return { color: '#3A6EA5', imageDataUrl: null, imageName: null, mode: 'center' as const };
+  });
   const welcomeId = useRef(-1);
   const regionalSettingsId = useRef(-2);
   const nextAppId = useRef(1);
@@ -275,6 +285,11 @@ export function App() {
     });
   }, []);
 
+  const handleBgApply = useCallback((settings: BackgroundSettings) => {
+    setBgSettings(settings);
+    localStorage.setItem('bg-settings', JSON.stringify(settings));
+  }, []);
+
   const allApps = [
     ...runningApps.filter(app => !loadingAppIds.has(app.id)).map(app => ({
       id: app.id,
@@ -320,8 +335,18 @@ export function App() {
   return (
     <div class="w-full h-screen" style={{ display: 'flex', flexDirection: 'column', cursor: loadingAppIds.size > 0 ? 'progress' : undefined }}>
       <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', inset: 0, overflow: 'auto', background: '#F0F0F0' }} onPointerDown={() => setFocusedAppId(null)}>
-          <Desktop onRunExe={handleRunExe} onViewResources={handleViewResources} onOpenFolder={handleOpenFolder} />
+        <div style={{
+          position: 'absolute', inset: 0, overflow: 'auto',
+          backgroundColor: bgSettings.color,
+          ...(bgSettings.imageDataUrl ? {
+            backgroundImage: `url(${bgSettings.imageDataUrl})`,
+            backgroundRepeat: bgSettings.mode === 'tile' ? 'repeat' : 'no-repeat',
+            backgroundPosition: 'center',
+            backgroundSize: bgSettings.mode === 'stretch' ? '100% 100%' : bgSettings.mode === 'tile' ? 'auto' : 'contain',
+          } : {}),
+        }} onPointerDown={() => setFocusedAppId(null)}>
+          <Desktop onRunExe={handleRunExe} onViewResources={handleViewResources} onOpenFolder={handleOpenFolder}
+            onShowDisplayProperties={() => setShowDisplayProperties(true)} />
         </div>
         {runningApps.map((app) => (
           <EmulatorView
@@ -395,6 +420,13 @@ export function App() {
             zIndex={getZIndex(regionalSettingsId.current)}
             focused={focusedAppId === regionalSettingsId.current}
             minimized={minimizedApps.has(regionalSettingsId.current)}
+          />
+        )}
+        {showDisplayProperties && (
+          <DisplayPropertiesDialog
+            current={bgSettings}
+            onApply={handleBgApply}
+            onClose={() => setShowDisplayProperties(false)}
           />
         )}
       </div>

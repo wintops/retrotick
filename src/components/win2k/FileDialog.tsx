@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import { useLayoutEffect } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME } from './Window';
 import { Button } from './Button';
+import { ComboBox } from './ComboBox';
 import { MessageBox, MB_YESNO, MB_ICONWARNING, IDYES } from './MessageBox';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
 import { parsePE, extractIcons } from '../../lib/pe';
@@ -153,8 +154,6 @@ export function FileDialog({
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [fileName, setFileName] = useState(initialFileName || '');
   const [filterIdx, setFilterIdx] = useState(0);
-  const [driveOpen, setDriveOpen] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(false);
   const [initialPos, setInitialPos] = useState<{ x: number; y: number } | undefined>();
   const [visible, setVisible] = useState(false);
   const [overwriteConfirm, setOverwriteConfirm] = useState<string | null>(null);
@@ -413,58 +412,23 @@ export function FileDialog({
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
             <span style={{ whiteSpace: 'nowrap', font: FONT }}>{mode === 'open' ? s.lookIn : s.saveIn}</span>
             {/* Drive/path combo */}
-            <div style={{ flex: 1, position: 'relative' }}>
-              <div onClick={() => setDriveOpen(!driveOpen)} style={{
-                display: 'flex', height: '22px', cursor: 'var(--win2k-cursor)',
-              }}>
-                <div style={{
-                  flex: 1, background: '#FFF', boxSizing: 'border-box',
-                  border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
-                  boxShadow: 'inset 1px 1px 0 #404040',
-                  padding: '2px 4px', font: FONT, overflow: 'hidden', whiteSpace: 'nowrap',
-                  display: 'flex', alignItems: 'center', gap: '4px',
-                }}>
-                  <DriveIcon />{' '}{currentDir.slice(0, -1) || currentDriveLetter + ':'}
-                </div>
-                <div style={{
-                  width: '16px', background: '#D4D0C8', flexShrink: 0,
-                  border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF',
-                  boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  font: '8px/1 sans-serif', color: '#000',
-                }}>{'\u25BC'}</div>
-              </div>
-              {/* Drive dropdown */}
-              {driveOpen && (
-                <div style={{
-                  position: 'absolute', top: '22px', left: 0, right: 0, zIndex: 10,
-                  background: '#FFF', border: '1px solid #808080',
-                  boxShadow: '2px 2px 4px rgba(0,0,0,0.3)',
-                }}>
-                  {DRIVES.map(d => (
-                    <div key={d} onClick={() => { navigateTo(d + ':\\'); setDriveOpen(false); }}
-                      style={{
-                        padding: '2px 4px', cursor: 'var(--win2k-cursor)', font: FONT,
-                        display: 'flex', alignItems: 'center', gap: '4px',
-                        background: d === currentDriveLetter ? '#0A246A' : '#FFF',
-                        color: d === currentDriveLetter ? '#FFF' : '#000',
-                      }}
-                      onPointerEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#0A246A';
-                        (e.currentTarget as HTMLElement).style.color = '#FFF';
-                      }}
-                      onPointerLeave={(e) => {
-                        if (d !== currentDriveLetter) {
-                          (e.currentTarget as HTMLElement).style.background = '#FFF';
-                          (e.currentTarget as HTMLElement).style.color = '#000';
-                        }
-                      }}
-                    >
-                      <DriveIcon /> {driveLabel(d)}
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div style={{ flex: 1, height: '22px' }}>
+              <ComboBox
+                items={DRIVES.map(d => driveLabel(d))}
+                selectedIndex={DRIVES.indexOf(currentDriveLetter)}
+                onSelect={(i) => navigateTo(DRIVES[i] + ':\\')}
+                font={FONT}
+                renderSelected={() => (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <DriveIcon />{' '}{currentDir.slice(0, -1) || currentDriveLetter + ':'}
+                  </span>
+                )}
+                renderItem={(i, text) => (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <DriveIcon /> {text}
+                  </span>
+                )}
+              />
             </div>
             {/* Toolbar buttons */}
             <ToolbarButton onClick={goUp} disabled={!canGoUp}><UpIcon /></ToolbarButton>
@@ -477,9 +441,7 @@ export function FileDialog({
             border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
             boxShadow: 'inset 1px 1px 0 #404040, inset -1px -1px 0 #D4D0C8',
             overflowY: 'auto', overflowX: 'hidden',
-          }}
-            onClick={() => { setDriveOpen(false); setFilterOpen(false); }}
-          >
+          }}>
             {entries.length === 0 && (
               <div style={{ padding: '8px', color: '#808080', font: FONT }}>
                 {s.empty}
@@ -521,7 +483,6 @@ export function FileDialog({
               value={fileName}
               onInput={(e) => setFileName((e.target as HTMLInputElement).value)}
               onKeyDown={onFileNameKeyDown}
-              onClick={() => { setDriveOpen(false); setFilterOpen(false); }}
               style={{
                 flex: 1, height: '22px', boxSizing: 'border-box',
                 background: '#FFF',
@@ -540,56 +501,13 @@ export function FileDialog({
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
             <span style={{ whiteSpace: 'nowrap', font: FONT, width: '76px' }}>{s.filesOfType}</span>
             {/* Filter combo */}
-            <div style={{ flex: 1, position: 'relative' }}>
-              <div onClick={() => { setFilterOpen(!filterOpen); setDriveOpen(false); }}
-                style={{ display: 'flex', height: '22px', cursor: 'var(--win2k-cursor)' }}>
-                <div style={{
-                  flex: 1, background: '#FFF', boxSizing: 'border-box',
-                  border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
-                  boxShadow: 'inset 1px 1px 0 #404040',
-                  padding: '2px 4px', font: FONT, overflow: 'hidden', whiteSpace: 'nowrap',
-                  display: 'flex', alignItems: 'center',
-                }}>
-                  {filters[filterIdx]?.label || 'All Files (*.*)'}
-                </div>
-                <div style={{
-                  width: '16px', background: '#D4D0C8', flexShrink: 0,
-                  border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF',
-                  boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  font: '8px/1 sans-serif', color: '#000',
-                }}>{'\u25BC'}</div>
-              </div>
-              {filterOpen && (
-                <div style={{
-                  position: 'absolute', bottom: '22px', left: 0, right: 0, zIndex: 10,
-                  background: '#FFF', border: '1px solid #808080',
-                  boxShadow: '2px 2px 4px rgba(0,0,0,0.3)',
-                }}>
-                  {filters.map((f, i) => (
-                    <div key={i}
-                      onClick={() => { setFilterIdx(i); setFilterOpen(false); }}
-                      style={{
-                        padding: '2px 4px', cursor: 'var(--win2k-cursor)', font: FONT,
-                        background: i === filterIdx ? '#0A246A' : '#FFF',
-                        color: i === filterIdx ? '#FFF' : '#000',
-                      }}
-                      onPointerEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#0A246A';
-                        (e.currentTarget as HTMLElement).style.color = '#FFF';
-                      }}
-                      onPointerLeave={(e) => {
-                        if (i !== filterIdx) {
-                          (e.currentTarget as HTMLElement).style.background = '#FFF';
-                          (e.currentTarget as HTMLElement).style.color = '#000';
-                        }
-                      }}
-                    >
-                      {f.label}
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div style={{ flex: 1, minWidth: 0, height: '22px' }}>
+              <ComboBox
+                items={filters.map(f => f.label)}
+                selectedIndex={filterIdx}
+                onSelect={(i) => setFilterIdx(i)}
+                font={FONT}
+              />
             </div>
             <div style={{ width: '75px', height: '23px', cursor: 'var(--win2k-cursor)' }}
               onClick={() => onResult(null)}>
