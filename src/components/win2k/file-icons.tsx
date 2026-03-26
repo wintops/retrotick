@@ -83,7 +83,7 @@ const FOLDER_ICON_16 = (
 // --- Text file extensions ---
 
 const TEXT_EXTENSIONS = new Set([
-  'txt', 'log', 'ini', 'cfg', 'inf', 'csv', 'xml', 'htm', 'html',
+  'txt', 'log', 'ini', 'cfg', 'inf', 'csv', 'xml', 'htm', 'html', 'nfo', 'diz', '1st',
 ]);
 
 function getExt(name: string): string {
