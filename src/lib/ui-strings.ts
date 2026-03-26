@@ -86,6 +86,9 @@ export interface UiStrings {
   propApplication: string;
   propFileFolder: string;
   propFilesAndFolders: string;
+  // Missing DLL warning
+  missingDlls: string;
+  missingDllsHint: string;
 }
 
 const en: UiStrings = {
@@ -167,6 +170,8 @@ const en: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'File Folder',
   propFilesAndFolders: '{0} files, {1} folders',
+  missingDlls: 'Missing DLL modules: {0}',
+  missingDllsHint: 'The program may not work correctly.\nTry importing the required DLL files to the desktop (a separate folder is fine).',
 };
 
 const fr: UiStrings = {
@@ -248,6 +253,8 @@ const fr: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'Dossier de fichiers',
   propFilesAndFolders: '{0} fichiers, {1} dossiers',
+  missingDlls: 'Modules DLL manquants\u00a0: {0}',
+  missingDllsHint: 'Le programme risque de ne pas fonctionner correctement.\nEssayez d\u2019importer les fichiers DLL requis sur le bureau (un dossier \u00e0 part convient).',
 };
 
 const de: UiStrings = {
@@ -329,6 +336,8 @@ const de: UiStrings = {
   propApplication: 'Anwendung',
   propFileFolder: 'Dateiordner',
   propFilesAndFolders: '{0} Dateien, {1} Ordner',
+  missingDlls: 'Fehlende DLL-Module: {0}',
+  missingDllsHint: 'Das Programm funktioniert m\u00f6glicherweise nicht korrekt.\nVersuchen Sie, die erforderlichen DLL-Dateien auf den Desktop zu importieren (ein separater Ordner ist in Ordnung).',
 };
 
 const es: UiStrings = {
@@ -410,6 +419,8 @@ const es: UiStrings = {
   propApplication: 'Aplicaci\u00f3n',
   propFileFolder: 'Carpeta de archivos',
   propFilesAndFolders: '{0} archivos, {1} carpetas',
+  missingDlls: 'M\u00f3dulos DLL faltantes: {0}',
+  missingDllsHint: 'Es posible que el programa no funcione correctamente.\nIntente importar los archivos DLL necesarios al escritorio (una carpeta separada est\u00e1 bien).',
 };
 
 const ja: UiStrings = {
@@ -491,6 +502,8 @@ const ja: UiStrings = {
   propApplication: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3',
   propFileFolder: '\u30d5\u30a1\u30a4\u30eb \u30d5\u30a9\u30eb\u30c0',
   propFilesAndFolders: '{0} \u30d5\u30a1\u30a4\u30eb\u3001{1} \u30d5\u30a9\u30eb\u30c0',
+  missingDlls: 'DLL\u30e2\u30b8\u30e5\u30fc\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093: {0}',
+  missingDllsHint: '\u30d7\u30ed\u30b0\u30e9\u30e0\u304c\u6b63\u3057\u304f\u52d5\u4f5c\u3057\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002\n\u5fc5\u8981\u306aDLL\u30d5\u30a1\u30a4\u30eb\u3092\u30c7\u30b9\u30af\u30c8\u30c3\u30d7\u306b\u30a4\u30f3\u30dd\u30fc\u30c8\u3057\u3066\u304f\u3060\u3055\u3044\uff08\u5225\u306e\u30d5\u30a9\u30eb\u30c0\u3067\u3082\u69cb\u3044\u307e\u305b\u3093\uff09\u3002',
 };
 
 const zhCN: UiStrings = {
@@ -572,6 +585,8 @@ const zhCN: UiStrings = {
   propApplication: '\u5e94\u7528\u7a0b\u5e8f',
   propFileFolder: '\u6587\u4ef6\u5939',
   propFilesAndFolders: '{0} \u4e2a\u6587\u4ef6\uff0c{1} \u4e2a\u6587\u4ef6\u5939',
+  missingDlls: '\u7f3a\u5c11DLL\u6a21\u5757: {0}',
+  missingDllsHint: '\u7a0b\u5e8f\u53ef\u80fd\u65e0\u6cd5\u6b63\u5e38\u5de5\u4f5c\u3002\n\u8bf7\u5c1d\u8bd5\u5c06\u6240\u9700\u7684DLL\u6587\u4ef6\u5bfc\u5165\u5230\u684c\u9762\uff08\u653e\u5728\u5355\u72ec\u7684\u6587\u4ef6\u5939\u4e2d\u4e5f\u53ef\u4ee5\uff09\u3002',
 };
 
 const ptBR: UiStrings = {
@@ -653,6 +668,8 @@ const ptBR: UiStrings = {
   propApplication: 'Aplicativo',
   propFileFolder: 'Pasta de arquivos',
   propFilesAndFolders: '{0} arquivos, {1} pastas',
+  missingDlls: 'M\u00f3dulos DLL ausentes: {0}',
+  missingDllsHint: 'O programa pode n\u00e3o funcionar corretamente.\nTente importar os arquivos DLL necess\u00e1rios para a \u00e1rea de trabalho (uma pasta separada serve).',
 };
 
 const it: UiStrings = {
@@ -734,6 +751,8 @@ const it: UiStrings = {
   propApplication: 'Applicazione',
   propFileFolder: 'Cartella di file',
   propFilesAndFolders: '{0} file, {1} cartelle',
+  missingDlls: 'Moduli DLL mancanti: {0}',
+  missingDllsHint: 'Il programma potrebbe non funzionare correttamente.\nProvare a importare i file DLL necessari sul desktop (anche in una cartella separata va bene).',
 };
 
 const pl: UiStrings = {
@@ -815,6 +834,8 @@ const pl: UiStrings = {
   propApplication: 'Aplikacja',
   propFileFolder: 'Folder plik\u00f3w',
   propFilesAndFolders: '{0} plik\u00f3w, {1} folder\u00f3w',
+  missingDlls: 'Brakuj\u0105ce modu\u0142y DLL: {0}',
+  missingDllsHint: 'Program mo\u017ce nie dzia\u0142a\u0107 poprawnie.\nSpr\u00f3buj zaimportowa\u0107 wymagane pliki DLL na pulpit (oddzielny folder te\u017c wystarczy).',
 };
 
 const ko: UiStrings = {
@@ -896,6 +917,8 @@ const ko: UiStrings = {
   propApplication: '\uc751\uc6a9 \ud504\ub85c\uadf8\ub7a8',
   propFileFolder: '\ud30c\uc77c \ud3f4\ub354',
   propFilesAndFolders: '\ud30c\uc77c {0}\uac1c, \ud3f4\ub354 {1}\uac1c',
+  missingDlls: '\ub204\ub77d\ub41c DLL \ubaa8\ub4c8: {0}',
+  missingDllsHint: '\ud504\ub85c\uadf8\ub7a8\uc774 \uc62c\ubc14\ub974\uac8c \uc791\ub3d9\ud558\uc9c0 \uc54a\uc744 \uc218 \uc788\uc2b5\ub2c8\ub2e4.\n\ud544\uc694\ud55c DLL \ud30c\uc77c\uc744 \ubc14\ud0d5 \ud654\uba74\uc5d0 \uac00\uc838\uc624\uc2ed\uc2dc\uc624 (\ubcc4\ub3c4\uc758 \ud3f4\ub354\uc5d0 \ub123\uc5b4\ub3c4 \ub429\ub2c8\ub2e4).',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

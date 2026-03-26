@@ -750,7 +750,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       };
 
       // Load registry from IndexedDB then start
-      initAndRun().then(() => emu.run());
+      initAndRun().then(() => {
+        emu.run();
+        if (emu.missingDlls.length > 0) {
+          const s = t();
+          const dlls = emu.missingDlls.join(', ');
+          setMessageBoxes(prev => [...prev, {
+            id: -99,
+            caption: exeBaseName,
+            text: `${s.missingDlls.replace('{0}', dlls)}\n\n${s.missingDllsHint}`,
+            type: 0x30, /* MB_ICONWARNING */
+          }]);
+        }
+      });
     } catch (err: unknown) {
       console.error('Emulator error:', err);
     }
