@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 
 /**
  * Interactive ComboBox (CBS_DROPDOWNLIST style).
@@ -7,6 +8,8 @@ import { useState, useEffect, useRef } from 'preact/hooks';
  * Two usage modes:
  * - Interactive: pass items/selectedIndex/onSelect for full dropdown behavior
  * - Display-only: pass just text/fontCSS for static rendering (DialogDisplay, etc.)
+ *
+ * For custom rendering (e.g. items with icons), pass renderItem/renderSelected.
  */
 
 interface ComboBoxProps {
@@ -17,13 +20,17 @@ interface ComboBoxProps {
   onOpen?: () => void;
   font?: string;
   disabled?: boolean;
+  /** Custom renderer for dropdown list items. Receives (index, text). */
+  renderItem?: (index: number, text: string) => ComponentChildren;
+  /** Custom renderer for the selected value display. Receives (index, text). */
+  renderSelected?: (index: number, text: string) => ComponentChildren;
   // Display-only mode (backward compat with DialogDisplay/DelphiFormDisplay)
   text?: string;
   fontCSS?: string;
   fontColor?: string | null;
 }
 
-export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, disabled, text, fontCSS, fontColor }: ComboBoxProps) {
+export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, disabled, text, fontCSS, fontColor, renderItem, renderSelected }: ComboBoxProps) {
   // Display-only mode: no items, just show text
   if (!items || items.length === 0) {
     const displayFont = font || fontCSS || '11px/1 "Tahoma", "MS Sans Serif", sans-serif';
@@ -119,14 +126,14 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
       >
         {/* Text area — no border, sits inside the sunken container */}
         <div style={{
-          flex: 1,
+          flex: 1, minWidth: 0,
           padding: '0 2px',
           font: fontStyle,
           ...(fontColor ? { color: fontColor } : {}),
           overflow: 'hidden', whiteSpace: 'nowrap',
           display: 'flex', alignItems: 'center',
         }}>
-          {selectedText}
+          {renderSelected && selectedIndex >= 0 ? renderSelected(selectedIndex, selectedText) : selectedText}
         </div>
         {/* Dropdown button — raised 3D, inside the sunken container */}
         <div style={{
@@ -187,7 +194,7 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
                   cursor: 'default', userSelect: 'none',
                 }}
               >
-                {itemText}
+                {renderItem ? renderItem(i, itemText) : itemText}
               </div>
             );
           })}
