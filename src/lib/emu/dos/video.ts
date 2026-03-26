@@ -17,6 +17,11 @@ export function syncVideoMemory(emu: Emulator): void {
     const attr = mem.readU8(VIDEO_MEM_BASE + i * 2 + 1);
     emu.consoleBuffer[i] = { char: ch, attr };
   }
+  // Sync cursor position from CRTC registers (programs like QBasic write
+  // directly to CRTC 0x0E/0x0F via ports 0x3D4/0x3D5 instead of INT 10h)
+  const cursorPos = (emu.vga.crtcRegs[0x0E] << 8) | emu.vga.crtcRegs[0x0F];
+  emu.consoleCursorX = cursorPos % cols;
+  emu.consoleCursorY = Math.min(Math.floor(cursorPos / cols), rows - 1);
   emu.onConsoleOutput?.();
 }
 
@@ -529,6 +534,10 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       if (page === activePage) {
         emu.consoleCursorY = Math.min(row, rows - 1);
         emu.consoleCursorX = Math.min(col, cols - 1);
+        // Keep CRTC cursor registers in sync (programs may read them back)
+        const cursorPos = emu.consoleCursorY * cols + emu.consoleCursorX;
+        emu.vga.crtcRegs[0x0E] = (cursorPos >> 8) & 0xFF;
+        emu.vga.crtcRegs[0x0F] = cursorPos & 0xFF;
       }
       break;
     }

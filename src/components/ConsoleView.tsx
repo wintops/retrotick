@@ -109,7 +109,7 @@ const CODE_TO_SCANCODE: Record<string, number> = {
   Backslash: 0x2B,
   KeyZ: 0x2C, KeyX: 0x2D, KeyC: 0x2E, KeyV: 0x2F, KeyB: 0x30,
   KeyN: 0x31, KeyM: 0x32, Comma: 0x33, Period: 0x34, Slash: 0x35,
-  NumpadMultiply: 0x37, Space: 0x39, CapsLock: 0x3A,
+  NumpadDivide: 0x35, NumpadMultiply: 0x37, Space: 0x39, CapsLock: 0x3A,
   F1: 0x3B, F2: 0x3C, F3: 0x3D, F4: 0x3E, F5: 0x3F,
   F6: 0x40, F7: 0x41, F8: 0x42, F9: 0x43, F10: 0x44,
   NumLock: 0x45, ScrollLock: 0x46,
@@ -137,6 +137,7 @@ const EXTENDED_NAV_CODES = new Set([
   'ArrowLeft', 'ArrowRight',
   'End', 'ArrowDown', 'PageDown',
   'Insert', 'Delete',
+  'NumpadDivide', 'NumpadEnter',
 ]);
 
 function getModifierScan(code: string): number | undefined {
@@ -346,6 +347,16 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       if (modScan !== undefined) {
         emu.injectHwKey(modScan);
       } else {
+        // Sync browser lock-key state to BDA shift flags (0x0417).
+        // Programs like QBasic check these flags to decide if numpad produces
+        // digits (NumLock ON) or navigation keys (NumLock OFF).
+        const bdaFlags = emu.memory.readU8(0x0417);
+        let newFlags = bdaFlags;
+        if (e.getModifierState('NumLock')) newFlags |= 0x20; else newFlags &= ~0x20;
+        if (e.getModifierState('CapsLock')) newFlags |= 0x40; else newFlags &= ~0x40;
+        if (e.getModifierState('ScrollLock')) newFlags |= 0x10; else newFlags &= ~0x10;
+        if (newFlags !== bdaFlags) emu.memory.writeU8(0x0417, newFlags);
+
         const scan = CODE_TO_SCANCODE[e.code];
         if (scan === undefined) return;
         const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
