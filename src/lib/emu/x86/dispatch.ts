@@ -1713,7 +1713,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0 && !cpu.getFlag(ZF)) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
@@ -1725,7 +1728,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0 && cpu.getFlag(ZF)) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
@@ -1737,7 +1743,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0) cpu.eip = (cpu.eip + disp) | 0;
@@ -1749,7 +1758,14 @@ export function cpuStep(cpu: CPU): void {
     case 0xE3: {
       const disp = cpu.fetchI8();
       const cxZero = cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) === 0 : cpu.reg[ECX] === 0;
-      if (cxZero) cpu.eip = (cpu.eip + disp) | 0;
+      if (cxZero) {
+        if (!cpu.use32) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        } else {
+          cpu.eip = (cpu.eip + disp) | 0;
+        }
+      }
       break;
     }
 
