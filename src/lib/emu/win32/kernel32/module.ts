@@ -124,16 +124,25 @@ function loadDll(emu: Emulator, rawName: string): number {
   const existing = emu.loadedModules.get(basename);
   if (existing) return existing.base;
 
-  // Find in additionalFiles (case-insensitive)
+  // Find in additionalFiles (case-insensitive, strip path prefixes from keys)
   let ab: ArrayBuffer | undefined;
   for (const [fname, data] of emu.additionalFiles) {
-    if (fname.toLowerCase() === basename) { ab = data; break; }
+    const key = fname.replace(/.*[/\\]/, '').toLowerCase();
+    if (key === basename) { ab = data; break; }
   }
   if (!ab) {
     console.log(`[LoadLibrary] "${rawName}" not found in additionalFiles`);
-    // Return 0 for truly unknown DLLs (no APIs registered)
-    // Return imageBase for known system DLLs so GetProcAddress can find thunked APIs
-    return hasRegisteredApis(emu, basename) ? emu.pe.imageBase : 0;
+    if (!hasRegisteredApis(emu, basename)) {
+      // Truly missing DLL — notify user
+      if (!emu.missingDlls.includes(basename)) {
+        emu.missingDlls.push(basename);
+        console.warn(`[LoadLibrary] Missing DLL: ${basename}`);
+        emu.onMissingDll?.(basename);
+      }
+      return 0;
+    }
+    // Known system DLL with JS stubs — return imageBase so GetProcAddress works
+    return emu.pe.imageBase;
   }
 
   try {

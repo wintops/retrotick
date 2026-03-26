@@ -622,6 +622,10 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         setWindowReady(prev => { if (!prev) onReady?.(); return true; });
       };
       emu.onCrash = (eip: string, description: string) => { setCrashInfo({ eip, description }); onReady?.(); };
+      emu.onMissingDll = (dllName: string) => {
+        const s = t();
+        setTimeout(() => alert(`${s.missingDlls.replace('{0}', dllName)}\n\n${s.missingDllsHint}`), 0);
+      };
       emu.onExit = () => {
         emu.destroyAudio();
         if (emu.isConsole) {

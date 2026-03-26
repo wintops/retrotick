@@ -456,7 +456,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     const importedDlls = new Set<string>();
     for (const info of emu.pe.apiMap.values()) importedDlls.add(info.dll.toLowerCase());
     const additionalLower = new Set<string>();
-    for (const fname of emu.additionalFiles.keys()) additionalLower.add(fname.toLowerCase());
+    for (const fname of emu.additionalFiles.keys()) additionalLower.add(fname.replace(/.*[/\\]/, '').toLowerCase());
     for (const dllLower of importedDlls) {
       if (additionalLower.has(dllLower)) continue;
       // Check if JS stubs exist for this DLL
@@ -500,11 +500,11 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     while (dllQueue.length > 0) {
       const dllName = dllQueue.shift()!;
 
-      // Find matching file in additionalFiles
+      // Find matching file in additionalFiles (strip path prefixes from keys)
       let ab: ArrayBuffer | undefined;
       const dllLower = dllName.toLowerCase();
       for (const [fname, data] of emu.additionalFiles) {
-        if (fname.toLowerCase() === dllLower) { ab = data; break; }
+        if (fname.replace(/.*[/\\]/, '').toLowerCase() === dllLower) { ab = data; break; }
       }
       if (!ab) continue;
       if (emu.loadedModules.has(dllLower)) continue;
@@ -817,7 +817,7 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
     // File keys may have path prefixes (e.g. "examples/CODEBRAK/VBRUN300.DLL")
     let dllBuf: ArrayBuffer | undefined;
     const modLower = modName.toLowerCase();
-    for (const ext of ['.dll', '.vbx', '.drv']) {
+    for (const ext of ['.dll', '.ocx', '.vbx', '.drv']) {
       const target = modLower + ext;
       for (const [key, data] of emu.additionalFiles) {
         // Match by filename (ignoring path prefix), case-insensitive
