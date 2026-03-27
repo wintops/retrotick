@@ -1,4 +1,4 @@
-import type { Emulator } from '../../emulator';
+﻿import type { Emulator } from '../../emulator';
 import { registerModule } from './module';
 import { registerProcess } from './process';
 import { registerHeap } from './heap';
@@ -13,6 +13,7 @@ import { registerResource } from './resource';
 import { registerProfile } from './profile';
 import { registerAtom } from './atom';
 import { registerConsole } from './console';
+import { registerWinTops } from './wintops';
 
 export function registerKernel32(emu: Emulator): void {
   registerModule(emu);
@@ -29,4 +30,5 @@ export function registerKernel32(emu: Emulator): void {
   registerProfile(emu);
   registerAtom(emu);
   registerConsole(emu);
+   registerWinTops(emu);
 }
