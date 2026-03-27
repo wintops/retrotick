@@ -34,6 +34,7 @@ import { registerNtdll } from './win32/ntdll';
 import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
 import { registerNetapi32 } from './win32/netapi32';
+import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
@@ -460,6 +461,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   registerImm32(emu);
   registerNtdll(emu);
   registerNetapi32(emu);
+  registerUxtheme(emu);
   registerVdmdbg(emu);
 
   // Build thunk dispatch table with argument count detection
