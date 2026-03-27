@@ -1310,6 +1310,9 @@ function emuLoadARM(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo): vo
   buildThunkTable(emu);
   rebuildThunkPages(emu);
 
+  // Pre-extract string resources
+  preloadStrings(emu);
+
   // Initialize ARM registers
   armCpu.reg[ARM_SP] = emu.pe.stackTop;
   armCpu.reg[ARM_PC] = emu.pe.entryPoint;
