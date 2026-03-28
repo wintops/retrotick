@@ -176,7 +176,27 @@ export function registerMisc(emu: Emulator): void {
   user32.register('SystemParametersInfoA', 4, systemParametersInfo);
   user32.register('SystemParametersInfoW', 4, systemParametersInfo);
   user32.register('FlashWindow', 2, () => 0);
-  user32.register('GetWindowPlacement', 2, () => 1);
+  // WINDOWPLACEMENT: length(4) flags(4) showCmd(4) ptMinPosition(8) ptMaxPosition(8) rcNormalPosition(16) = 44 bytes
+  user32.register('GetWindowPlacement', 2, () => {
+    const hwnd = emu.readArg(0);
+    const lpWndPl = emu.readArg(1);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
+    if (!wnd || !lpWndPl) return 0;
+    const x = wnd.x || 0, y = wnd.y || 0;
+    const w = wnd.width || 0, h = wnd.height || 0;
+    emu.memory.writeU32(lpWndPl + 0, 44);      // length
+    emu.memory.writeU32(lpWndPl + 4, 0);        // flags
+    emu.memory.writeU32(lpWndPl + 8, 1);        // showCmd = SW_SHOWNORMAL
+    emu.memory.writeU32(lpWndPl + 12, 0);       // ptMinPosition.x
+    emu.memory.writeU32(lpWndPl + 16, 0);       // ptMinPosition.y
+    emu.memory.writeU32(lpWndPl + 20, 0);       // ptMaxPosition.x
+    emu.memory.writeU32(lpWndPl + 24, 0);       // ptMaxPosition.y
+    emu.memory.writeU32(lpWndPl + 28, x);       // rcNormalPosition.left
+    emu.memory.writeU32(lpWndPl + 32, y);       // rcNormalPosition.top
+    emu.memory.writeU32(lpWndPl + 36, x + w);   // rcNormalPosition.right
+    emu.memory.writeU32(lpWndPl + 40, y + h);   // rcNormalPosition.bottom
+    return 1;
+  });
   user32.register('SetWindowPlacement', 2, () => 1);
   user32.register('WinHelpA', 4, () => 1);
   user32.register('WinHelpW', 4, () => 1);

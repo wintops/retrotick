@@ -14,7 +14,7 @@ import { ConsoleView } from './ConsoleView';
 import { renderControlOverlay, effectiveClass } from './ControlOverlay';
 import { EmulatorDialog } from './EmulatorDialog';
 import { EXE_ICON_16 } from './DesktopIcon';
-import { FindDialog } from './FindDialog';
+import { FindDialog, FindReplaceDialog } from './FindDialog';
 import { FileDialog } from './win2k/FileDialog';
 import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
@@ -410,6 +410,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
   const [findTerm, setFindTerm] = useState('');
+  const [replaceTerm, setReplaceTerm] = useState('');
   const [modalFlashTrigger, setModalFlashTrigger] = useState(0);
   const flashModal = useCallback(() => setModalFlashTrigger(c => c + 1), []);
 
@@ -795,7 +796,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
   // --- Find dialog: Find Next handler ---
   const handleFindNext = useCallback(() => {
-    if (!commonDialog || commonDialog.type !== 'find' || !findTerm) return;
+    if (!commonDialog || (commonDialog.type !== 'find' && commonDialog.type !== 'find-replace') || !findTerm) return;
     const emu = emuRef.current;
     if (!emu) return;
     const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
@@ -829,6 +830,50 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       }
     }
   }, [commonDialog, findTerm]);
+
+  // --- Find/Replace: Replace handler ---
+  const handleReplace = useCallback(() => {
+    if (!commonDialog || commonDialog.type !== 'find-replace' || !findTerm) return;
+    const emu = emuRef.current;
+    if (!emu) return;
+    const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
+    if (!wnd) return;
+    const text = wnd.domInput?.value || wnd.title || '';
+    const selStart = wnd.editSelStart ?? 0;
+    const selEnd = wnd.editSelEnd ?? 0;
+    // If current selection matches the find term, replace it
+    const selected = text.substring(selStart, selEnd);
+    if (selected.toLowerCase() === findTerm.toLowerCase()) {
+      const newText = text.substring(0, selStart) + replaceTerm + text.substring(selEnd);
+      wnd.title = newText;
+      if (wnd.domInput) wnd.domInput.value = newText;
+      wnd.editSelStart = selStart;
+      wnd.editSelEnd = selStart + replaceTerm.length;
+      if (wnd.domInput) wnd.domInput.setSelectionRange(selStart, selStart + replaceTerm.length);
+      emu.notifyControlOverlays();
+    }
+    // Then find next
+    handleFindNext();
+  }, [commonDialog, findTerm, replaceTerm, handleFindNext]);
+
+  // --- Find/Replace: Replace All handler ---
+  const handleReplaceAll = useCallback(() => {
+    if (!commonDialog || commonDialog.type !== 'find-replace' || !findTerm) return;
+    const emu = emuRef.current;
+    if (!emu) return;
+    const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
+    if (!wnd) return;
+    const text = wnd.domInput?.value || wnd.title || '';
+    // Case-insensitive replace all
+    const regex = new RegExp(findTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const newText = text.replace(regex, replaceTerm);
+    const count = (text.match(regex) || []).length;
+    if (count > 0) {
+      wnd.title = newText;
+      if (wnd.domInput) wnd.domInput.value = newText;
+      emu.notifyControlOverlays();
+    }
+  }, [commonDialog, findTerm, replaceTerm]);
 
   // --- Resize drag handling ---
   const onResizeStart = useCallback((edge: string, e: PointerEvent) => {
@@ -1254,6 +1299,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             focused={focused}
           />
         )}
+        {commonDialog?.type === 'find-replace' && (
+          <FindReplaceDialog
+            findTerm={findTerm}
+            replaceTerm={replaceTerm}
+            onFindChange={setFindTerm}
+            onReplaceChange={setReplaceTerm}
+            onFindNext={handleFindNext}
+            onReplace={handleReplace}
+            onReplaceAll={handleReplaceAll}
+            onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); setReplaceTerm(''); }}
+            focused={focused}
+          />
+        )}
         {(commonDialog?.type === 'file-open' || commonDialog?.type === 'file-save') && emuRef.current && (
           <FileDialog
             mode={commonDialog.type === 'file-open' ? 'open' : 'save'}
@@ -1382,6 +1440,20 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onTermChange={setFindTerm}
           onFindNext={handleFindNext}
           onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); }}
+          focused={focused}
+          parentRef={desktopRef}
+        />
+      )}
+      {commonDialog?.type === 'find-replace' && (
+        <FindReplaceDialog
+          findTerm={findTerm}
+          replaceTerm={replaceTerm}
+          onFindChange={setFindTerm}
+          onReplaceChange={setReplaceTerm}
+          onFindNext={handleFindNext}
+          onReplace={handleReplace}
+          onReplaceAll={handleReplaceAll}
+          onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); setReplaceTerm(''); }}
           focused={focused}
           parentRef={desktopRef}
         />

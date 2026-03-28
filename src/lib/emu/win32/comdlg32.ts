@@ -220,7 +220,40 @@ export function registerComdlg32(emu: Emulator): void {
     return 0;
   });
 
-  comdlg32.register('ReplaceTextW', 1, () => 0);
+  comdlg32.register('ReplaceTextW', 1, () => {
+    const lpFr = emu.readArg(0);
+    if (!lpFr) return 0;
+
+    const hwndOwner = emu.memory.readU32(lpFr + FR_hwndOwner);
+    const editHwnd = findEditChild(hwndOwner);
+
+    emu.findReplacePtr = lpFr;
+
+    const findDlgHwnd = emu.handles.alloc('window', {
+      classInfo: { className: '#32770' },
+      title: 'Replace', visible: true, style: 0,
+      x: 0, y: 0, width: 0, height: 0,
+    } as WindowInfo);
+
+    emu.onShowCommonDialog?.({
+      type: 'find-replace',
+      editHwnd,
+      onClose: () => {
+        if (emu.findReplacePtr) {
+          const flags = emu.memory.readU32(emu.findReplacePtr + FR_Flags);
+          emu.memory.writeU32(emu.findReplacePtr + FR_Flags, (flags & ~FR_FINDNEXT) | FR_DIALOGTERM);
+          if (emu.registerWindowMessage) {
+            const msgId = emu.registerWindowMessage(FINDMSGSTRING);
+            emu.postMessage(hwndOwner, msgId, 0, emu.findReplacePtr);
+          }
+          emu.findReplacePtr = 0;
+        }
+        emu.handles.free(findDlgHwnd);
+      },
+    });
+
+    return findDlgHwnd;
+  });
   comdlg32.register('PrintDlgExW', 1, () => 1); // E_FAIL
   comdlg32.register('GetFileTitleW', 3, () => {
     const lpszFile = emu.readArg(0);

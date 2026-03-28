@@ -51,7 +51,8 @@ export type CommonDialogRequest =
   | { type: 'about'; caption: string; extraInfo: string; otherText: string; onDismiss: () => void }
   | { type: 'file-open'; filter?: string; initialDir?: string; onResult: (result: { path: string; data?: ArrayBuffer } | null) => void }
   | { type: 'file-save'; filter?: string; initialDir?: string; defaultName?: string; onResult: (result: { path: string } | null) => void }
-  | { type: 'find'; editHwnd: number; onClose: () => void };
+  | { type: 'find'; editHwnd: number; onClose: () => void }
+  | { type: 'find-replace'; editHwnd: number; onClose: () => void };
 
 export interface DialogInfo {
   title: string;

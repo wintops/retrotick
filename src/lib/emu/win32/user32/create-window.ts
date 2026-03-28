@@ -200,7 +200,10 @@ export function registerCreateWindow(emu: Emulator): void {
       if ((height | 0) === (CW_USEDEFAULT | 0)) height = 240;
       if (y === (CW_USEDEFAULT | 0)) y = 0;
     }
-
+    // Clamp absurd sizes (e.g. from corrupted registry data)
+    const maxDim = Math.max(emu.screenWidth, emu.screenHeight, 1024) * 2;
+    if (width > maxDim) width = 320;
+    if (height > maxDim) height = 240;
 
     const wnd: WindowInfo = {
       hwnd: 0, classInfo: cls,
