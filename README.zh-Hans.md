@@ -4,13 +4,13 @@
 
 [English](./README.md) | <a lang="fr" href="./README.fr.md">Français</a> | <a lang="ja" href="./README.ja.md">日本語</a>
 
-**在浏览器中直接运行经典 Windows 和 DOS 程序。** 不模拟操作系统，只模拟 x86 CPU 并重新实现 Windows/DOS API。拖放即玩。
+**在浏览器中直接运行经典 Windows 和 DOS 程序。** 不模拟操作系统，只模拟 x86 CPU 并重新实现 Windows/DOS API。把 `.exe` 拖进页面试试看。
 
 ### [立即体验 → retrotick.com](https://retrotick.com/)
 
 <img src="https://static.retrotick.com/screenshot.webp" width="800" height="600" alt="截图" />
 
-RetroTick 是一个完全使用 TypeScript 从零构建的 x86 CPU 模拟器与 Windows/DOS API 兼容层。它不模拟整个操作系统，而是模拟 x86 处理器并直接重新实现操作系统 API。它解析 PE (Win32)、NE (Win16) 和 MZ (DOS) 二进制文件，逐条执行 x86 机器码，并提供 Win32、Win16 和 DOS API 的一个子集，足以启动经典 Windows 时代的若干 `.exe` 文件，并在浏览器中渲染图形界面。
+RetroTick 是一个完全使用 TypeScript 从零构建的 x86/ARM CPU 模拟器与 Windows/DOS API 兼容层。它不模拟整个操作系统，而是模拟处理器并直接重新实现操作系统 API。它解析 PE (Win32/WinCE)、NE (Win16) 和 MZ (DOS) 二进制文件，逐条执行 x86 和 ARM 机器码，并提供部分 Win32、Win16 和 DOS API，可以运行经典 Windows 时代的一些 `.exe` 文件，在浏览器中渲染出它们的图形界面。
 
 ## 可运行的程序
 
@@ -24,13 +24,15 @@ RetroTick 是一个完全使用 TypeScript 从零构建的 x86 CPU 模拟器与 
 
 ## 技术内幕
 
-- **x86 CPU 模拟器** — x87 FPU、惰性标志求值、32 位保护模式（平坦模型）和 16 位实模式（segment:offset 寻址、IVT、PSP）
-- **PE/NE/MZ 二进制加载器** — 解析文件头、映射节区、解析导入表、提取资源
-- **Win32 API 兼容层** — kernel32、user32、gdi32、advapi32、comctl32、comdlg32、shell32、msvcrt、opengl32、glu32、ddraw、dsound、ole32、oleaut32、winmm、winspool、ws2_32、version、psapi、shlwapi、iphlpapi、msacm32 等
+- **x86 CPU 模拟器** — x87 FPU、惰性标志求值、32 位保护模式（平坦模型）和 16 位实模式（segment:offset 寻址、IVT、PSP、A20 门）
+- **ARM CPU 模拟器** — 基础 ARM 指令执行，用于 Windows CE (WinCE) PE 二进制文件
+- **PE/NE/MZ 二进制加载器** — 解析文件头、映射节区、解析导入表、提取资源；PE DLL 加载（支持基址重定位和冲突检测）
+- **Win32 API 兼容层** — kernel32、user32、gdi32、advapi32、comctl32、comdlg32、shell32、msvcrt、ntdll、opengl32、glu32、ddraw、dsound、ole32、oleaut32、winmm、imm32、uxtheme、winspool、ws2_32、version、psapi、shlwapi、iphlpapi、msacm32、secur32、setupapi、netapi32、mpr、msimg32 等
 - **Win16 API 兼容层** — KERNEL、USER、GDI、SHELL、COMMDLG、COMMCTRL、MMSYSTEM、KEYBOARD、DDEML、LZEXPAND、SOUND、VER、SCONFIG、WIN87EM
-- **DOS 中断模拟** — INT 21h 文件/进程服务、INT 10h 视频 BIOS、INT 08h/1Ch 定时器、INT 09h/16h 键盘、INT 1Ah 实时时钟、INT 15h 系统服务、INT 33h 鼠标、INT 2Fh 多路复用、EMS (INT 67h) 和 XMS 扩展内存
+- **WinCE API 兼容层** — COREDLL（Windows CE ARM 二进制的 kernel32/user32/gdi32 合并层）
+- **DOS 中断模拟** — INT 21h 文件/进程服务、INT 10h 视频 BIOS、INT 08h/1Ch 定时器、INT 09h/16h 键盘、INT 1Ah 实时时钟、INT 15h 系统服务、INT 33h 鼠标、INT 2Fh 多路复用、EMS (INT 67h) 和 XMS 扩展内存；DPMI/PMODE/W 保护模式 DOS 扩展器支持
 - **VGA 模拟** — 14 种视频模式（文本、CGA、EGA、VGA、Mode 13h、Mode X），完整的 CRTC/Sequencer/GC/ATC 寄存器模拟，256 色调色板，平面内存
-- **Sound Blaster / OPL2 音频** — Sound Blaster 2.0 DSP 8 位 DMA 回放、OPL2 (YM3812) 9 通道 FM 合成、PC 扬声器方波、Intel 8237A DMA 控制器、AudioWorklet 实时输出
+- **Sound Blaster / OPL2 / GUS 音频** — Sound Blaster 2.0 DSP 8 位 DMA 回放、OPL2 (YM3812) 9 通道 FM 合成、Gravis Ultrasound (GUS) 模拟、PC 扬声器方波、Intel 8237A DMA 控制器、AudioWorklet 实时输出
 - **OpenGL 1.x → WebGL2 转译** — 完整的立即模式管线，映射到 WebGL2，驱动 3D 屏幕保护程序
 - **DirectDraw / DirectSound** — 基于 COM 的表面和音频缓冲区管理，用于 DOS 时代的 Windows 游戏
 - **窗口管理器** — 多窗口、Z 序、焦点、MDI（多文档界面）、任务栏、消息分发、通用对话框

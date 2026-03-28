@@ -1,6 +1,7 @@
-import { useRef, useEffect, useCallback, useState } from 'preact/hooks';
+import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preact/hooks';
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
+import { loadDosSettings } from '../lib/dos-settings';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -24,6 +25,75 @@ function getVgaConsoleColors(emu: Emulator): string[] {
   return colors;
 }
 
+const TEXT_FONT = '"Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace';
+
+/** Render text mode console buffer to a canvas (artifact-free alternative to DOM). */
+function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, ROWS: number) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const COLORS = emu.isDOS ? getVgaConsoleColors(emu) : DEFAULT_CONSOLE_COLORS;
+  const lineH = emu.charHeight === 8 ? 8 : 16;
+  const font = `${lineH}px ${TEXT_FONT}`;
+  ctx.font = font;
+  const charW = ctx.measureText('0').width;
+
+  // Size canvas to natural font metrics — CSS scales to 640×480
+  const cw = Math.ceil(COLS * charW);
+  const ch = ROWS * lineH;
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
+    ctx.font = font; // Resizing clears context state
+    ctx.textBaseline = 'top';
+  }
+
+  // Clear
+  ctx.fillStyle = COLORS[0];
+  ctx.fillRect(0, 0, cw, ch);
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const idx = row * COLS + col;
+      const cell = emu.consoleBuffer[idx];
+      if (cell && cell.char === 0) continue;
+
+      const fg = cell ? (cell.attr & 0x0F) : 7;
+      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const x = col * charW;
+      const y = row * lineH;
+      const wide = cell && cell.char > 0x20 && isFullwidth(cell.char);
+
+      // Background — +1px overlap to prevent fractional pixel gaps
+      ctx.fillStyle = COLORS[bg];
+      ctx.fillRect(x, y, (wide ? charW * 2 : charW) + 1, lineH);
+
+      // Character
+      const c = (cell && cell.char > 0x20)
+        ? (emu.isDOS && cell.char <= 0xFF ? cp437ToChar(cell.char) : String.fromCharCode(cell.char))
+        : '';
+      if (c) {
+        ctx.fillStyle = COLORS[fg];
+        ctx.fillText(c, x, y);
+      }
+    }
+  }
+
+  // Cursor
+  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
+  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
+  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  const blink = Math.floor(Date.now() / 500) % 2 === 0;
+  if (blink && !cursorOff && cursorStart <= cursorEnd) {
+    const cx = emu.consoleCursorX * charW;
+    const cy = emu.consoleCursorY * lineH;
+    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+    const curFg = curCell ? (curCell.attr & 0x0F) : 7;
+    ctx.fillStyle = COLORS[curFg === 0 ? 7 : curFg];
+    ctx.fillRect(cx, cy + cursorStart, charW, cursorEnd - cursorStart + 1);
+  }
+}
+
 // Browser e.code → AT keyboard hardware scancode (make code)
 const CODE_TO_SCANCODE: Record<string, number> = {
   Escape: 0x01,
@@ -39,7 +109,7 @@ const CODE_TO_SCANCODE: Record<string, number> = {
   Backslash: 0x2B,
   KeyZ: 0x2C, KeyX: 0x2D, KeyC: 0x2E, KeyV: 0x2F, KeyB: 0x30,
   KeyN: 0x31, KeyM: 0x32, Comma: 0x33, Period: 0x34, Slash: 0x35,
-  NumpadMultiply: 0x37, Space: 0x39, CapsLock: 0x3A,
+  NumpadDivide: 0x35, NumpadMultiply: 0x37, Space: 0x39, CapsLock: 0x3A,
   F1: 0x3B, F2: 0x3C, F3: 0x3D, F4: 0x3E, F5: 0x3F,
   F6: 0x40, F7: 0x41, F8: 0x42, F9: 0x43, F10: 0x44,
   NumLock: 0x45, ScrollLock: 0x46,
@@ -67,6 +137,7 @@ const EXTENDED_NAV_CODES = new Set([
   'ArrowLeft', 'ArrowRight',
   'End', 'ArrowDown', 'PageDown',
   'Insert', 'Delete',
+  'NumpadDivide', 'NumpadEnter',
 ]);
 
 function getModifierScan(code: string): number | undefined {
@@ -132,6 +203,8 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textCanvasRef = useRef<HTMLCanvasElement>(null);
+  const useCanvas = loadDosSettings().textRenderer === 'canvas';
   const [, setTick] = useState(0);
 
   const COLS = emu.screenCols;
@@ -182,26 +255,23 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const cursorActive = cursorBlink && !cursorDisabled && cursorStartScanline <= cursorEndScanline;
 
   // Build DOM content from console buffer
+  const lineHeight = emu.charHeight === 8 ? 8 : 16;
   const rows: preact.JSX.Element[] = [];
   for (let row = 0; row < ROWS; row++) {
     const spans: preact.JSX.Element[] = [];
-    // Group consecutive cells with same attributes for efficiency
     let runFg = -1;
     let runBg = -1;
     let runChars = '';
 
     const flushRun = () => {
       if (runChars.length === 0) return;
-      const style: Record<string, string> = { color: COLORS[runFg] };
-      if (runBg !== 0) style.backgroundColor = COLORS[runBg];
-      spans.push(<span style={style}>{runChars}</span>);
+      spans.push(<span style={{ color: COLORS[runFg], backgroundColor: COLORS[runBg] }}>{runChars}</span>);
       runChars = '';
     };
 
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      // char=0 is a continuation cell for fullwidth chars — skip it
       if (cell && cell.char === 0) continue;
       const fg = cell ? (cell.attr & 0x0F) : 7;
       const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
@@ -214,7 +284,6 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
 
       if (isCursor && cursorActive) {
         flushRun();
-        // Render cursor using CSS gradient to cover start→end scanlines
         const cursorColor = COLORS[fg === 0 ? 7 : fg];
         const topPct = (cursorStartScanline / charH * 100).toFixed(1);
         const bottomPct = (Math.min(cursorEndScanline + 1, charH) / charH * 100).toFixed(1);
@@ -231,14 +300,12 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       } else {
         flushRun();
         if (wide) {
-          // Fullwidth char: render as its own span with double width
-          const style: Record<string, string> = {
+          spans.push(<span style={{
             color: COLORS[fg],
+            backgroundColor: COLORS[bg],
             display: 'inline-block',
             width: '2ch',
-          };
-          if (bg !== 0) style.backgroundColor = COLORS[bg];
-          spans.push(<span style={style}>{ch}</span>);
+          }}>{ch}</span>);
           runFg = -1;
           runBg = -1;
         } else {
@@ -249,7 +316,17 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       }
     }
     flushRun();
-    rows.push(<div>{spans}{'\n'}</div>);
+    // Absolutely-positioned row with 1px overlap to eliminate sub-pixel gaps from scaleY
+    const firstCell = emu.consoleBuffer[row * COLS];
+    const rowBg = firstCell ? ((firstCell.attr >> 4) & 0x0F) : 0;
+    rows.push(<div style={{
+      position: 'absolute',
+      top: `${row * lineHeight}px`,
+      left: 0,
+      width: '100%',
+      height: `${lineHeight + 1}px`,
+      background: COLORS[rowBg],
+    }}>{spans}</div>);
   }
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -271,6 +348,16 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       if (modScan !== undefined) {
         emu.injectHwKey(modScan);
       } else {
+        // Sync browser lock-key state to BDA shift flags (0x0417).
+        // Programs like QBasic check these flags to decide if numpad produces
+        // digits (NumLock ON) or navigation keys (NumLock OFF).
+        const bdaFlags = emu.memory.readU8(0x0417);
+        let newFlags = bdaFlags;
+        if (e.getModifierState('NumLock')) newFlags |= 0x20; else newFlags &= ~0x20;
+        if (e.getModifierState('CapsLock')) newFlags |= 0x40; else newFlags &= ~0x40;
+        if (e.getModifierState('ScrollLock')) newFlags |= 0x10; else newFlags &= ~0x10;
+        if (newFlags !== bdaFlags) emu.memory.writeU8(0x0417, newFlags);
+
         const scan = CODE_TO_SCANCODE[e.code];
         if (scan === undefined) return;
         const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
@@ -583,7 +670,6 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
 
   // Measure actual ch width and compute scaleX to fit 80 columns into 640px
   const [scaleX, setScaleX] = useState(1);
-  const lineHeight = emu.charHeight === 8 ? 8 : 16;
   useEffect(() => {
     if (emu.isGraphicsMode) return;
     const el = preRef.current;
@@ -598,6 +684,13 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     document.body.removeChild(span);
     if (chWidth > 0) setScaleX(640 / (COLS * chWidth));
   }, [COLS, emu.isGraphicsMode]);
+
+  // Canvas text mode: draw after each render
+  useLayoutEffect(() => {
+    if (emu.isGraphicsMode || !useCanvas) return;
+    const canvas = textCanvasRef.current;
+    if (canvas) drawTextMode(canvas, emu, COLS, ROWS);
+  });
 
   const isGfx = emu.isGraphicsMode;
   const fb = emu.vga.framebuffer;
@@ -617,12 +710,23 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             imageRendering: 'pixelated',
           }}
         />
+      ) : useCanvas ? (
+        <canvas
+          ref={textCanvasRef}
+          width={640}
+          height={480}
+          style={{
+            width: '640px',
+            height: '480px',
+          }}
+        />
       ) : (
         <pre
           ref={preRef}
           style={{
+            position: 'relative',
             margin: 0,
-            padding: '1px',
+            padding: 0,
             background: '#000',
             color: '#C0C0C0',
             font: `14px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
@@ -634,7 +738,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             lineHeight: `${lineHeight}px`,
             letterSpacing: '0px',
             transformOrigin: 'top left',
-            transform: `scaleX(${scaleX}) scaleY(${480 / (ROWS * lineHeight)})`,
+            transform: `scaleX(${scaleX}) scaleY(${480 / (ROWS * lineHeight)}) translateZ(0)`,
           }}
         >
           {rows}

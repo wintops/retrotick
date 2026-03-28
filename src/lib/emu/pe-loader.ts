@@ -11,7 +11,86 @@ export interface LoadedPE {
   resourceSize: number;
 }
 
-export function loadPE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedPE {
+export function parsePEHeader(arrayBuffer: ArrayBuffer): { imageBase: number; sizeOfImage: number } {
+  const dv = new DataView(arrayBuffer);
+  const e_lfanew = dv.getUint32(0x3C, true);
+  const optOffset = e_lfanew + 4 + 20; // PE sig + COFF header
+  return {
+    imageBase: dv.getUint32(optOffset + 28, true),
+    sizeOfImage: dv.getUint32(optOffset + 56, true),
+  };
+}
+
+interface PESection {
+  virtualAddress: number;
+  sizeOfRawData: number;
+  pointerToRawData: number;
+}
+
+const IMAGE_REL_BASED_ABSOLUTE = 0;
+const IMAGE_REL_BASED_HIGHLOW = 3;
+
+function rvaToFileOffsetForReloc(rva: number, sections: PESection[], sizeOfHeaders: number): number {
+  for (const s of sections) {
+    if (rva >= s.virtualAddress && rva < s.virtualAddress + s.sizeOfRawData) {
+      return rva - s.virtualAddress + s.pointerToRawData;
+    }
+  }
+  if (rva < sizeOfHeaders) return rva;
+  return -1;
+}
+
+function applyRelocations(
+  memory: Memory,
+  relocDir: { virtualAddress: number; size: number },
+  actualBase: number,
+  delta: number,
+  sections: PESection[],
+  sizeOfHeaders: number,
+  arrayBuffer: ArrayBuffer,
+): void {
+  // Read relocation blocks from the original file to get the table structure,
+  // then apply fixups to the already-mapped memory.
+  const fileOffset = rvaToFileOffsetForReloc(relocDir.virtualAddress, sections, sizeOfHeaders);
+  if (fileOffset < 0) return;
+
+  const dv = new DataView(arrayBuffer);
+  let pos = fileOffset;
+  const end = fileOffset + relocDir.size;
+  let fixupCount = 0;
+
+  while (pos + 8 <= end && pos + 8 <= arrayBuffer.byteLength) {
+    const pageRva = dv.getUint32(pos, true);
+    const blockSize = dv.getUint32(pos + 4, true);
+    if (blockSize < 8) break; // malformed
+
+    const numEntries = (blockSize - 8) / 2;
+    for (let i = 0; i < numEntries; i++) {
+      const entryOffset = pos + 8 + i * 2;
+      if (entryOffset + 2 > arrayBuffer.byteLength) break;
+
+      const entry = dv.getUint16(entryOffset, true);
+      const type = entry >> 12;
+      const offset = entry & 0xFFF;
+
+      if (type === IMAGE_REL_BASED_ABSOLUTE) continue; // padding
+      if (type === IMAGE_REL_BASED_HIGHLOW) {
+        const addr = actualBase + pageRva + offset;
+        const oldVal = memory.readU32(addr);
+        memory.writeU32(addr, (oldVal + delta) >>> 0);
+        fixupCount++;
+      }
+      // Other types (HIGH, LOW, DIR64) are rare in PE32 — skip
+    }
+    pos += blockSize;
+  }
+
+  if (fixupCount > 0) {
+    console.log(`[PE] Applied ${fixupCount} base relocations (delta=0x${delta.toString(16)})`);
+  }
+}
+
+export function loadPE(arrayBuffer: ArrayBuffer, memory: Memory, baseOverride?: number): LoadedPE {
   const dv = new DataView(arrayBuffer);
 
   // DOS header
@@ -34,7 +113,8 @@ export function loadPE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedPE {
   if (magic !== 0x010B) throw new Error('Only PE32 (32-bit) executables are supported');
 
   const entryPointRva = dv.getUint32(optOffset + 16, true);
-  const imageBase = dv.getUint32(optOffset + 28, true);
+  const preferredBase = dv.getUint32(optOffset + 28, true);
+  const imageBase = baseOverride !== undefined ? baseOverride : preferredBase;
   const sectionAlignment = dv.getUint32(optOffset + 32, true);
   const sizeOfImage = dv.getUint32(optOffset + 56, true);
   const sizeOfHeaders = dv.getUint32(optOffset + 60, true);
@@ -96,9 +176,9 @@ export function loadPE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedPE {
   }
 
   // Base relocations (dataDirectories[5])
-  // Relocation is not needed if loading at preferred imageBase
-  if (dataDirectories.length > 5 && dataDirectories[5].virtualAddress !== 0) {
-    // Relocation is not needed if loading at preferred base — skip for now
+  const delta = imageBase - preferredBase;
+  if (delta !== 0 && dataDirectories.length > 5 && dataDirectories[5].virtualAddress !== 0) {
+    applyRelocations(memory, dataDirectories[5], imageBase, delta, sections, sizeOfHeaders, arrayBuffer);
   }
 
   // Process imports and set up thunk table

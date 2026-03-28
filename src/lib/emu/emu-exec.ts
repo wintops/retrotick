@@ -667,10 +667,23 @@ export function emuTick(emu: Emulator): void {
         emu._int09ReturnCS = -1;
       }
     }
-    // Detect IRET from hardware interrupt handler by monitoring SP.
-    // IRET pops IP+CS+FLAGS (6 bytes), restoring SP to the pre-dispatch level.
+    // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
+    // or IF flag restoration (PM IDT dispatch).
     if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
       emu._hwIntSavedSP = -1;
+      // Restore PM state if we switched to RM for the interrupt handler
+      if (emu._hwIntPMState) {
+        emu._cr0 = emu._hwIntPMState.cr0;
+        emu.cpu.realMode = false;
+        emu.cpu.use32 = emu._hwIntPMState.use32;
+        emu.cpu._addrSize16 = !emu._hwIntPMState.use32;
+        emu.cpu.cs = emu._hwIntPMState.cs;
+        emu.cpu.ss = emu._hwIntPMState.ss;
+        emu.cpu.ds = emu._hwIntPMState.ds;
+        emu.cpu.es = emu._hwIntPMState.es;
+        emu.cpu.segBases = emu._hwIntPMState.segBases;
+        emu._hwIntPMState = undefined;
+      }
     }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
     if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
@@ -753,8 +766,18 @@ export function emuTick(emu: Emulator): void {
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0) {
+    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
+      // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
+      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
+      // loops with CLI and rely on timer interrupts firing regardless. This is
+      // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
+      // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
+      if (intNum >= 0x08 && intNum <= 0x0F) {
+        emu._picMasterISR |= (1 << (intNum - 0x08));
+      } else if (intNum >= 0x70 && intNum <= 0x77) {
+        emu._picSlaveISR |= (1 << (intNum - 0x70));
+      }
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
       // by writing directly to IVT (e.g. PoP chains timer→animation→sound)
@@ -772,24 +795,54 @@ export function emuTick(emu: Emulator): void {
         const seg = (vec >>> 16) & 0xFFFF;
         const off = vec & 0xFFFF;
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
-        const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
-        // Save SP BEFORE pushes — IRET is the only thing that restores SP to
-        // this level (handler's internal push/pop stays below it).
-        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
-        // On real hardware, interrupts only fire when IF=1, so pushed FLAGS
-        // always have IF=1. We deliver regardless of IF, so force IF=1 in
-        // the saved FLAGS so IRET restores an interrupt-enabled context.
-        emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
-        emu.cpu.push16(emu.cpu.cs);
-        emu.cpu.push16(returnIP);
-        // Hardware interrupt entry clears IF+TF until IRET restores FLAGS.
-        emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
-        if (intNum === 0x09) {
-          emu._int09ReturnCS = emu.cpu.cs;
-          emu._int09ReturnIP = returnIP;
+
+        // In protected mode (PMODEW), IVT handlers are real-mode code.
+        // Temporarily switch to real mode so segment arithmetic is correct
+        // and the handler can use DS/ES as real-mode segments.
+        if (!emu.cpu.realMode) {
+          const pmSSBase = emu.cpu.segBase(emu.cpu.ss);
+          emu._hwIntPMState = {
+            cr0: emu._cr0,
+            cs: emu.cpu.cs,
+            ss: emu.cpu.ss,
+            ds: emu.cpu.ds,
+            es: emu.cpu.es,
+            use32: emu.cpu.use32,
+            segBases: new Map(emu.cpu.segBases),
+          };
+          emu._cr0 = 0;
+          emu.cpu.realMode = true;
+          emu.cpu.use32 = false;       // RM handlers are 16-bit code
+          emu.cpu._addrSize16 = true;
+          emu.cpu.segBases.clear();
+          // Convert SS to real-mode paragraph (linear address stays the same)
+          const rmSS = (pmSSBase >>> 4) & 0xFFFF;
+          emu.cpu.ss = rmSS;
+          // Encode PM return address as real-mode seg:off
+          const pmEIP = emu.cpu.eip;
+          const returnSeg = (pmEIP >>> 4) & 0xFFFF;
+          const returnOff = pmEIP & 0xF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+          emu.cpu.push16(returnSeg);
+          emu.cpu.push16(returnOff);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          emu.cpu.cs = seg;
+          emu.cpu.eip = (seg * 16 + off) >>> 0;
+        } else {
+          const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+          emu.cpu.push16(emu.cpu.cs);
+          emu.cpu.push16(returnIP);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          if (intNum === 0x09) {
+            emu._int09ReturnCS = emu.cpu.cs;
+            emu._int09ReturnIP = returnIP;
+          }
+          emu.cpu.cs = seg;
+          emu.cpu.eip = emu.cpu.segBase(seg) + off;
         }
-        emu.cpu.cs = seg;
-        emu.cpu.eip = emu.cpu.segBase(seg) + off;
       } else {
         // No custom handler — call built-in BIOS handler directly
         emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
@@ -988,6 +1041,10 @@ export function emuTick(emu: Emulator): void {
     }
 
     const prevEip = eip;
+    // EIP history for crash diagnostics (ring buffer)
+    if (!emu._eipHistory) { emu._eipHistory = new Uint32Array(64); emu._eipHistIdx = 0; }
+    emu._eipHistory[emu._eipHistIdx & 63] = eip;
+    emu._eipHistIdx++;
     try {
       emu.cpu.step();
     } catch (e) {
@@ -1074,15 +1131,28 @@ export function emuTick(emu: Emulator): void {
             bp16 = prevBP16;
           }
         }
+        // EIP history (last 64 instructions before crash)
+        const hist: string[] = [];
+        if (emu._eipHistory) {
+          const idx = emu._eipHistIdx || 0;
+          const arr = emu._eipHistory;
+          for (let h = Math.max(0, idx - 32); h < idx; h++) {
+            const addr = arr[h & 63];
+            const bytes: string[] = [];
+            for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8((addr + b) >>> 0).toString(16).padStart(2, '0'));
+            hist.push(`    0x${addr.toString(16).padStart(5,'0')}: ${bytes.join(' ')}`);
+          }
+        }
         console.error(
           `[WILD EIP] jumped to 0x${newEip.toString(16)} from 0x${prevEip.toString(16)}\n` +
-          `  CS=0x${emu.cpu.cs.toString(16)} SS=0x${emu.cpu.ss.toString(16)}\n` +
+          `  CS=0x${emu.cpu.cs.toString(16)} SS=0x${emu.cpu.ss.toString(16)} DS=0x${emu.cpu.ds.toString(16)} ES=0x${emu.cpu.es.toString(16)}\n` +
           `  bytes before (at prev EIP): [${before.join(' ')}]\n` +
           `  bytes at (at new EIP):      [${at.join(' ')}]\n` +
           `  EAX=0x${(emu.cpu.reg[0] >>> 0).toString(16)} ECX=0x${(emu.cpu.reg[1] >>> 0).toString(16)} EDX=0x${(emu.cpu.reg[2] >>> 0).toString(16)} EBX=0x${(emu.cpu.reg[3] >>> 0).toString(16)}\n` +
           `  ESP=0x${(emu.cpu.reg[4] >>> 0).toString(16)} EBP=0x${(emu.cpu.reg[5] >>> 0).toString(16)} ESI=0x${(emu.cpu.reg[6] >>> 0).toString(16)} EDI=0x${(emu.cpu.reg[7] >>> 0).toString(16)}\n` +
           `  stack top 16 words:\n` +
           `    ${Array.from({length: 16}, (_, i) => '0x' + emu.memory.readU16(((emu.cpu.reg[4] >>> 0) + i * 2) >>> 0).toString(16).padStart(4, '0')).join(' ')}\n` +
+          `  EIP history (last 32):\n${hist.join('\n')}\n` +
           `  EBP backtrace (32-bit):\n${bt.join('\n')}\n` +
           `  BP backtrace (16-bit):\n${bt16.join('\n')}\n` +
           `  THUNK TRACE (last ${emu._diagThunkSize}):\n${emu.diagThunkDump()}`
@@ -1121,9 +1191,9 @@ export function emuTick(emu: Emulator): void {
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
       const now = performance.now();
-      // Sync on VBlank (normal path), or every ~33ms as fallback for games
-      // that don't poll 0x3DA (ensures display still updates).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 16) {
+      // Sync on VBlank (normal path), or every ~15ms as fallback for games
+      // that don't poll 0x3DA (ensures display still updates at ~60Hz).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 15) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);
@@ -1148,6 +1218,8 @@ export function emuTick(emu: Emulator): void {
         setTimeout(emu.tick, delay);
       }
     } else if (emu.isDOS) {
+      // DOS games need maximum throughput — MessageChannel avoids setTimeout's
+      // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
       scheduleImmediate(emu.tick);
     } else {
       requestAnimationFrame(emu.tick);

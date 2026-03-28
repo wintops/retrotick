@@ -105,6 +105,10 @@ export class GUS {
   // Reset
   private resetReg = 0;
 
+  // AdLib register select (for OPL2-compatible timer interface on ports GUS+8/GUS+9)
+  private _adlibReg = 0;
+
+
   // Mix control
   private mixCtrl = 0;
 
@@ -157,14 +161,27 @@ export class GUS {
       case 0x00: // Mix control register
         this.mixCtrl = value;
         break;
-      case 0x08: // Timer command (AdLib-compatible)
-        if (value & 0x80) {
-          // Reset timer IRQ flags
-          this.irqStatus &= ~0x0C;
-          this.checkIrq();
-        }
+      case 0x08: // OPL2 address port — select register for next data write
+        this._adlibReg = value & 0xFF;
         break;
-      case 0x09: // Timer data (AdLib-compatible)
+      case 0x09: // OPL2 data port — write to previously selected AdLib register
+        switch (this._adlibReg) {
+          case 0x02: this.timer1Value = value & 0xFF; break;
+          case 0x03: this.timer2Value = value & 0xFF; break;
+          case 0x04: // Timer control
+            if (value & 0x80) {
+              // Bit 7: reset timer IRQ flags
+              this.irqStatus &= ~0x0C;
+              this.checkIrq();
+            } else {
+              // Bit 0: start/stop Timer 1, Bit 1: start/stop Timer 2
+              if (value & 0x01) { this.timerCtrl |= 0x04; this.timer1Count = 0; }
+              else               { this.timerCtrl &= ~0x04; }
+              if (value & 0x02) { this.timerCtrl |= 0x08; this.timer2Count = 0; }
+              else               { this.timerCtrl &= ~0x08; }
+            }
+            break;
+        }
         break;
       case 0x0B: // IRQ/DMA control — ignore for now
         break;

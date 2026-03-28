@@ -1,6 +1,6 @@
 import type { Emulator } from './emulator';
 import type { PEInfo } from '../pe/types';
-import { loadPE } from './pe-loader';
+import { loadPE, parsePEHeader } from './pe-loader';
 import { loadNE } from './ne-loader';
 import { FlatMemory } from './x86/flat-memory';
 import type { LoadedNE } from './ne-loader';
@@ -35,18 +35,97 @@ import { registerNtdll } from './win32/ntdll';
 import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
 import { registerNetapi32 } from './win32/netapi32';
+import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
 import { parsePE, extractExports, extractMenus } from '../pe';
-import type { ExportFunction } from '../pe';
+
 import { buildNEThunkTable } from './emu-thunks-ne';
 import { handleSehDispatchReturn } from './emu-window';
 import { loadMZ, loadCOM } from './mz-loader';
 import { ArmCPU, SP as ARM_SP, LR as ARM_LR, PC as ARM_PC } from './arm/cpu';
 import { registerCoredll, registerWs2 } from './wince/coredll';
+
+const ALIGN_64K = 0x10000;
+
+function findFreeBase(
+  occupiedRanges: { base: number; size: number }[],
+  preferredBase: number,
+  sizeOfImage: number,
+): number {
+  function overlaps(base: number, size: number): boolean {
+    const end = base + size;
+    for (const r of occupiedRanges) {
+      const rEnd = r.base + r.size;
+      if (base < rEnd && end > r.base) return true;
+    }
+    return false;
+  }
+
+  if (!overlaps(preferredBase, sizeOfImage)) return preferredBase;
+
+  // Search upward from preferred base in 64KB steps
+  let candidate = ((preferredBase + ALIGN_64K) & ~(ALIGN_64K - 1)) >>> 0;
+  for (let i = 0; i < 4096; i++) {
+    if (!overlaps(candidate, sizeOfImage)) return candidate;
+    candidate = (candidate + ALIGN_64K) >>> 0;
+  }
+  throw new Error(`Cannot find free base for DLL (preferred=0x${preferredBase.toString(16)}, size=0x${sizeOfImage.toString(16)})`);
+}
+
+interface DllEntry {
+  entryPoint: number;
+  imageBase: number;
+  dllName: string;
+  deps: string[];
+}
+
+function topoSortDlls(entries: DllEntry[], loadedSet: Set<string>): DllEntry[] {
+  // Kahn's algorithm: edges only for deps that are in loadedSet (skip JS-stub-only deps)
+  const byName = new Map<string, DllEntry>();
+  for (const e of entries) byName.set(e.dllName, e);
+
+  const inDeg = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const e of entries) {
+    if (!inDeg.has(e.dllName)) inDeg.set(e.dllName, 0);
+    if (!adj.has(e.dllName)) adj.set(e.dllName, []);
+    for (const dep of e.deps) {
+      if (!loadedSet.has(dep)) continue;
+      // dep must be initialized before e → edge dep → e
+      if (!adj.has(dep)) adj.set(dep, []);
+      adj.get(dep)!.push(e.dllName);
+      inDeg.set(e.dllName, (inDeg.get(e.dllName) ?? 0) + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [name, deg] of inDeg) {
+    if (deg === 0) queue.push(name);
+  }
+
+  const result: DllEntry[] = [];
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    const entry = byName.get(name);
+    if (entry) result.push(entry);
+    for (const next of adj.get(name) ?? []) {
+      const newDeg = (inDeg.get(next) ?? 1) - 1;
+      inDeg.set(next, newDeg);
+      if (newDeg === 0) queue.push(next);
+    }
+  }
+
+  // If cycle detected, append remaining (shouldn't happen but be safe)
+  for (const e of entries) {
+    if (!result.includes(e)) result.push(e);
+  }
+
+  return result;
+}
 
 export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
   console.log('[EMU] load() called, arrayBuffer size:', arrayBuffer.byteLength);
@@ -66,7 +145,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     }
   }
 
-  // Set current directory for the exe's drive to its parent folder
+  // Set current drive and directory from the exe's path (mirrors real DOS loader behavior)
   const lastBackslash = emu.exePath.lastIndexOf('\\');
   if (lastBackslash >= 2 && emu.exePath[1] === ':') {
     const drive = emu.exePath[0].toUpperCase();
@@ -74,6 +153,8 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     // Preserve trailing backslash for root directory (e.g. D:\CMD.EXE → D:\, not D:)
     if (dir.length === 2 && dir[1] === ':') dir += '\\';
     emu.currentDirs.set(drive, dir);
+    // DOS sets the current drive to the drive the program was launched from
+    emu.currentDrive = drive;
   }
 
   // Detect ANSI code page from resources.
@@ -386,15 +467,39 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   registerImm32(emu);
   registerNtdll(emu);
   registerNetapi32(emu);
+  registerUxtheme(emu);
   registerVdmdbg(emu);
 
   // Build thunk dispatch table with argument count detection
   buildThunkTable(emu);
 
+  // Detect missing DLLs: imported DLLs with no JS stubs and not in additionalFiles
+  {
+    const importedDlls = new Set<string>();
+    for (const info of emu.pe.apiMap.values()) importedDlls.add(info.dll.toLowerCase());
+    const additionalLower = new Set<string>();
+    for (const fname of emu.additionalFiles.keys()) additionalLower.add(fname.replace(/.*[/\\]/, '').toLowerCase());
+    for (const dllLower of importedDlls) {
+      if (additionalLower.has(dllLower)) continue;
+      // Check if JS stubs exist for this DLL
+      const prefix = dllLower.toUpperCase() + ':';
+      let hasStubs = false;
+      for (const key of emu.apiDefs.keys()) {
+        if (key.startsWith(prefix)) { hasStubs = true; break; }
+      }
+      if (!hasStubs) {
+        emu.missingDlls.push(dllLower);
+      }
+    }
+    if (emu.missingDlls.length > 0) {
+      console.warn(`[PE] Missing DLLs (no JS stubs, not in additionalFiles): ${emu.missingDlls.join(', ')}`);
+    }
+  }
+
   // Pre-load DLLs from additionalFiles that are referenced in the import table.
   // This patches IAT thunks to point to real DLL code instead of JS stubs.
   // Handles transitive dependencies (DLL A imports DLL B which imports DLL C).
-  const dllEntryPoints: { entryPoint: number; imageBase: number }[] = [];
+  const dllEntryPoints: { entryPoint: number; imageBase: number; dllName: string; deps: string[] }[] = [];
   if (emu.additionalFiles.size > 0) {
     // Collect DLL names referenced in imports — use a queue for transitive deps
     const dllQueue: string[] = [];
@@ -409,20 +514,33 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     // Track loaded DLL PE info for IAT patching across all loaded modules
     const loadedDllPes: { dllName: string; pe: typeof emu.pe; exportByName: Map<string, number>; exportByOrd: Map<number, number> }[] = [];
 
+    // Track occupied memory ranges for address conflict detection
+    const occupiedRanges: { base: number; size: number }[] = [
+      { base: emu.pe.imageBase, size: emu.pe.sizeOfImage },
+    ];
+
     while (dllQueue.length > 0) {
       const dllName = dllQueue.shift()!;
 
-      // Find matching file in additionalFiles
+      // Find matching file in additionalFiles (strip path prefixes from keys)
       let ab: ArrayBuffer | undefined;
       const dllLower = dllName.toLowerCase();
       for (const [fname, data] of emu.additionalFiles) {
-        if (fname.toLowerCase() === dllLower) { ab = data; break; }
+        if (fname.replace(/.*[/\\]/, '').toLowerCase() === dllLower) { ab = data; break; }
       }
       if (!ab) continue;
       if (emu.loadedModules.has(dllLower)) continue;
 
       try {
-        const dllPe = loadPE(ab, emu.memory);
+        // Parse PE header to check for address conflicts
+        const { imageBase: preferred, sizeOfImage: dllSize } = parsePEHeader(ab);
+        const actualBase = findFreeBase(occupiedRanges, preferred, dllSize);
+        const baseOverride = actualBase !== preferred ? actualBase : undefined;
+        if (baseOverride !== undefined) {
+          console.log(`[DLL] ${dllName}: rebasing from 0x${preferred.toString(16)} to 0x${actualBase.toString(16)} (conflict)`);
+        }
+
+        const dllPe = loadPE(ab, emu.memory, baseOverride);
         const dllPeInfo = parsePE(ab);
         const exportResult = extractExports(dllPeInfo, ab);
         const exportFuncs = exportResult?.functions ?? [];
@@ -440,19 +558,30 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
         }
 
         // Build export lookup: name/ordinal → real code address
+        // Skip forwarded exports (fn.forwardedTo) — they point to another DLL
         const exportByName = new Map<string, number>();
         const exportByOrd = new Map<number, number>();
         for (const fn of exportFuncs) {
+          if (fn.forwardedTo) continue;
           if (fn.name) exportByName.set(fn.name, dllPe.imageBase + fn.rva);
           exportByOrd.set(fn.ordinal, dllPe.imageBase + fn.rva);
         }
         loadedDllPes.push({ dllName, pe: dllPe, exportByName, exportByOrd });
 
-        // Store as loaded module
+        // Track occupied range for subsequent DLLs
+        occupiedRanges.push({ base: dllPe.imageBase, size: dllPe.sizeOfImage });
+
+        // Store as loaded module and register exports
         emu.loadedModules.set(dllLower, { base: dllPe.imageBase, resourceRva: dllPe.resourceRva, imageBase: dllPe.imageBase, sizeOfImage: dllPe.sizeOfImage });
-        // Remember entry point for DllMain call
+        emu.loadedDllExports.set(dllLower, { base: dllPe.imageBase, exports: exportFuncs });
+        // Remember entry point for DllMain call, with dependency info
         if (dllPe.entryPoint !== dllPe.imageBase) {
-          dllEntryPoints.push({ entryPoint: dllPe.entryPoint, imageBase: dllPe.imageBase });
+          const deps: string[] = [];
+          for (const info of dllPe.apiMap.values()) {
+            const depLower = info.dll.toLowerCase();
+            if (!deps.includes(depLower)) deps.push(depLower);
+          }
+          dllEntryPoints.push({ entryPoint: dllPe.entryPoint, imageBase: dllPe.imageBase, dllName: dllLower, deps });
         }
         console.log(`[DLL] Pre-loaded ${dllName} at 0x${dllPe.imageBase.toString(16)}, ${exportFuncs.length} exports`);
       } catch (e: unknown) {
@@ -575,18 +704,23 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   }
 
   // Call DllMain for pre-loaded DLLs (DLL_PROCESS_ATTACH)
+  // Topological sort: leaves first (DLLs with no loadable deps initialized first)
   // DllMain(hinstDLL, fdwReason=DLL_PROCESS_ATTACH, lpReserved=0) is stdcall(3)
   // We use callWndProc which pushes 4 args: hwnd=hinstDLL, message=1, wParam=0, lParam=0
   // DllMain only reads the first 3, and since it's stdcall(3) it pops 12 bytes on return.
   // callWndProc pushed 16 bytes of args, so we need to fix up ESP after.
-  for (const { entryPoint, imageBase } of dllEntryPoints) {
-    console.log(`[DLL] Calling DllMain at 0x${entryPoint.toString(16)} for module 0x${imageBase.toString(16)}`);
-    const savedESP = emu.cpu.reg[4];
-    const savedEIP = emu.cpu.eip;
-    const result = emu.callWndProc(entryPoint, imageBase, 1, 0, 0);
-    emu.cpu.reg[4] = savedESP;
-    emu.cpu.eip = savedEIP;
-    console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
+  {
+    const loadedSet = new Set(dllEntryPoints.map(d => d.dllName));
+    const sorted = topoSortDlls(dllEntryPoints, loadedSet);
+    for (const { entryPoint, imageBase, dllName } of sorted) {
+      console.log(`[DLL] Calling DllMain at 0x${entryPoint.toString(16)} for ${dllName} (0x${imageBase.toString(16)})`);
+      const savedESP = emu.cpu.reg[4];
+      const savedEIP = emu.cpu.eip;
+      const result = emu.callWndProc(entryPoint, imageBase, 1, 0, 0);
+      emu.cpu.reg[4] = savedESP;
+      emu.cpu.eip = savedEIP;
+      console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
+    }
   }
 
   // Mark executable code sections as read-only (prevents code corruption from wild writes).
@@ -705,7 +839,7 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
     // File keys may have path prefixes (e.g. "examples/CODEBRAK/VBRUN300.DLL")
     let dllBuf: ArrayBuffer | undefined;
     const modLower = modName.toLowerCase();
-    for (const ext of ['.dll', '.vbx', '.drv']) {
+    for (const ext of ['.dll', '.ocx', '.vbx', '.drv']) {
       const target = modLower + ext;
       for (const [key, data] of emu.additionalFiles) {
         // Match by filename (ignoring path prefix), case-insensitive
@@ -1181,6 +1315,9 @@ function emuLoadARM(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo): vo
   // Build thunk dispatch table
   buildThunkTable(emu);
   rebuildThunkPages(emu);
+
+  // Pre-extract string resources
+  preloadStrings(emu);
 
   // Initialize ARM registers
   armCpu.reg[ARM_SP] = emu.pe.stackTop;

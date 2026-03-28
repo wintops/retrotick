@@ -4,13 +4,13 @@
 
 [English](./README.md) | <a lang="zh-Hans" href="./README.zh-Hans.md">简体中文</a> | <a lang="ja" href="./README.ja.md">日本語</a>
 
-**Exécutez des programmes Windows et DOS classiques directement dans votre navigateur.** Pas d'émulation d'OS. Juste un émulateur de CPU x86 avec les API Windows/DOS réimplémentées. Glissez, déposez, jouez.
+**Exécutez des programmes Windows et DOS classiques directement dans votre navigateur.** Pas d'émulation d'OS. Juste un émulateur de CPU x86 avec les API Windows/DOS réimplémentées. Glissez un `.exe` dans la page et voyez ce qui se passe.
 
 ### [Essayez maintenant → retrotick.com](https://retrotick.com/)
 
 <img src="https://static.retrotick.com/screenshot.webp" width="800" height="600" alt="Capture d'écran" />
 
-RetroTick est un émulateur de CPU x86 et une couche de compatibilité Windows/DOS entièrement construits from scratch en TypeScript. Plutôt que d'émuler un système d'exploitation complet, il émule le processeur x86 et réimplémente directement les API de l'OS. Il analyse les binaires PE (Win32), NE (Win16) et MZ (DOS), exécute le code machine x86 instruction par instruction, et fournit un sous-ensemble des API Win32, Win16 et DOS, suffisant pour lancer plusieurs fichiers `.exe` de l'ère Windows classique et afficher leurs interfaces graphiques dans le navigateur.
+RetroTick est un émulateur de CPU x86/ARM et une couche de compatibilité Windows/DOS entièrement construits from scratch en TypeScript. Plutôt que d'émuler un système d'exploitation complet, il émule le processeur et réimplémente directement les API de l'OS. Il analyse les binaires PE (Win32/WinCE), NE (Win16) et MZ (DOS), exécute le code machine x86 et ARM instruction par instruction, et fournit une partie des API Win32, Win16 et DOS, permettant à certains fichiers `.exe` de l'ère Windows classique de s'exécuter et d'afficher leurs interfaces graphiques dans le navigateur.
 
 ## Programmes supportés
 
@@ -24,13 +24,15 @@ La plupart des programmes présentent des défauts de rendu ou des fonctionnalit
 
 ## Sous le capot
 
-- **Émulateur CPU x86** — FPU x87, évaluation paresseuse des flags, mode protégé 32 bits (modèle plat) et mode réel 16 bits avec adressage segment:offset, IVT et PSP
-- **Chargeur de binaires PE/NE/MZ** — Analyse des en-têtes, mapping des sections, résolution des imports, extraction des ressources
-- **Couche de compatibilité Win32** — kernel32, user32, gdi32, advapi32, comctl32, comdlg32, shell32, msvcrt, opengl32, glu32, ddraw, dsound, ole32, oleaut32, winmm, winspool, ws2_32, version, psapi, shlwapi, iphlpapi, msacm32, et plus
+- **Émulateur CPU x86** — FPU x87, évaluation paresseuse des flags, mode protégé 32 bits (modèle plat) et mode réel 16 bits avec adressage segment:offset, IVT, PSP, porte A20
+- **Émulateur CPU ARM** — Exécution basique d'instructions ARM pour les binaires PE Windows CE (WinCE)
+- **Chargeur de binaires PE/NE/MZ** — Analyse des en-têtes, mapping des sections, résolution des imports, extraction des ressources ; chargement de DLL PE avec relocation de base et détection de conflits
+- **Couche de compatibilité Win32** — kernel32, user32, gdi32, advapi32, comctl32, comdlg32, shell32, msvcrt, ntdll, opengl32, glu32, ddraw, dsound, ole32, oleaut32, winmm, imm32, uxtheme, winspool, ws2_32, version, psapi, shlwapi, iphlpapi, msacm32, secur32, setupapi, netapi32, mpr, msimg32, et plus
 - **Couche de compatibilité Win16** — KERNEL, USER, GDI, SHELL, COMMDLG, COMMCTRL, MMSYSTEM, KEYBOARD, DDEML, LZEXPAND, SOUND, VER, SCONFIG, WIN87EM
-- **Émulation des interruptions DOS** — INT 21h fichiers/processus, INT 10h BIOS vidéo, INT 08h/1Ch timer, INT 09h/16h clavier, INT 1Ah horloge temps réel, INT 15h services système, INT 33h souris, INT 2Fh multiplex, EMS (INT 67h) et XMS mémoire étendue
+- **Couche de compatibilité WinCE** — COREDLL (kernel32/user32/gdi32 combinés pour les binaires ARM Windows CE)
+- **Émulation des interruptions DOS** — INT 21h fichiers/processus, INT 10h BIOS vidéo, INT 08h/1Ch timer, INT 09h/16h clavier, INT 1Ah horloge temps réel, INT 15h services système, INT 33h souris, INT 2Fh multiplex, EMS (INT 67h) et XMS mémoire étendue ; support DPMI/PMODE/W pour les extensions DOS en mode protégé
 - **Émulation VGA** — 14 modes vidéo (texte, CGA, EGA, VGA, Mode 13h, Mode X), émulation complète des registres CRTC/Sequencer/GC/ATC, palette 256 couleurs, mémoire planaire
-- **Audio Sound Blaster / OPL2** — DSP Sound Blaster 2.0 avec lecture DMA 8 bits, synthèse FM OPL2 (YM3812) 9 canaux, onde carrée PC Speaker, contrôleur DMA Intel 8237A, sortie temps réel AudioWorklet
+- **Audio Sound Blaster / OPL2 / GUS** — DSP Sound Blaster 2.0 avec lecture DMA 8 bits, synthèse FM OPL2 (YM3812) 9 canaux, émulation Gravis Ultrasound (GUS), onde carrée PC Speaker, contrôleur DMA Intel 8237A, sortie temps réel AudioWorklet
 - **Traduction OpenGL 1.x → WebGL2** — Pipeline complet en mode immédiat mappé vers WebGL2, pour les écrans de veille 3D
 - **DirectDraw / DirectSound** — Gestion COM de surfaces et de tampons audio pour les jeux Windows de l'ère DOS
 - **Gestionnaire de fenêtres** — Fenêtres multiples, ordre Z, focus, MDI (Multiple Document Interface), barre des tâches, dispatch des messages, dialogues communs

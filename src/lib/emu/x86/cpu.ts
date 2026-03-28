@@ -80,6 +80,7 @@ export class CPU {
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
+  _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)
 
   constructor(mem: Memory) {
     this.mem = mem;
@@ -88,13 +89,18 @@ export class CPU {
   fs = 0; // FS segment selector
   gs = 0; // GS segment selector
 
-  /** Load CS and update use32/_addrSize16 from GDT descriptor in protected mode */
+  /** Load CS and update use32/_addrSize16 from GDT descriptor in protected mode,
+   *  or force 16-bit mode in real mode */
   loadCS(selector: number): void {
     this.cs = selector;
     if (!this.realMode) {
       const is32 = this.loadGdtDescriptorIs32(selector);
       this.use32 = is32;
       this._addrSize16 = !is32;
+    } else {
+      // Real mode is always 16-bit
+      this.use32 = false;
+      this._addrSize16 = true;
     }
   }
 
@@ -103,18 +109,18 @@ export class CPU {
     if (this.realMode) return (sel * 16) >>> 0;
     const cached = this.segBases.get(sel);
     if (cached !== undefined) return cached;
+    // Look up in GDT if available (PMODEW protected mode)
+    const base = this.loadGdtDescriptorBase(sel);
+    if (base !== undefined) {
+      this.segBases.set(sel, base);
+      return base;
+    }
     // LDT-style selector: strip RPL/TI bits (low 3 bits = __AHSHIFT)
     // to find the canonical selector assigned by the NE loader
     const canonical = sel >>> 3;
     if (canonical > 0) {
       const cbase = this.segBases.get(canonical);
       if (cbase !== undefined) return cbase;
-    }
-    // Look up in GDT if available (for protected mode / DOS extender)
-    const base = this.loadGdtDescriptorBase(sel);
-    if (base !== undefined) {
-      this.segBases.set(sel, base);
-      return base;
     }
     return 0;
   }
@@ -396,6 +402,7 @@ export class CPU {
 
   // Execute one instruction — delegated to cpu-step.ts
   step(): void {
+    this._inhibitIRQ = false; // Clear MOV SS interrupt inhibit from previous instruction
     // Fast path: TF is almost never set — skip the entire TF machinery
     if (!this._tfActive) {
       cpuStep(this);

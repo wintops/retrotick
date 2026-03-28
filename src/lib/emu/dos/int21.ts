@@ -1,8 +1,9 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
-import { dosResolvePath } from './path';
+import { dosResolvePath, isDosValidDrive, DOS_LASTDRIVE } from './path';
 import { dumpInstrTrace } from '../x86/dispatch';
 import { teletypeOutput } from './video';
+import { xmsFreeAllForPsp } from './xms';
 import {
   dosSetDTA, dosGetDTA,
   dosCreateFile, dosOpenFile, dosCloseFile, dosReadFile, dosWriteFile,
@@ -21,21 +22,36 @@ const CF = 0x001;
 const ZF = 0x040;
 
 
+/** Free all conventional memory MCBs owned by the given PSP. */
+function dosFreeAllMcbsForPsp(cpu: CPU, emu: Emulator, psp: number): void {
+  let mcbSeg = emu._dosMcbFirstSeg || 0x0060;
+  for (let iter = 0; iter < 1000; iter++) {
+    const mcbLin = mcbSeg * 16;
+    const type = cpu.mem.readU8(mcbLin);
+    if (type !== 0x4D && type !== 0x5A) break;
+    if (cpu.mem.readU16(mcbLin + 1) === psp) {
+      cpu.mem.writeU16(mcbLin + 1, 0x0000); // mark free
+    }
+    if (type === 0x5A) break;
+    mcbSeg += cpu.mem.readU16(mcbLin + 3) + 1;
+  }
+}
+
 /** Return from child to parent after EXEC. Returns true if handled (child was running). */
 function dosExecReturn(cpu: CPU, emu: Emulator, exitCode: number): boolean {
   if (emu._dosExecStack.length === 0) return false;
 
-  // Free child's MCB
-  const childPsp = emu._dosPSP;
-  const childMcbLin = (childPsp - 1) * 16;
-  const mcbType = cpu.mem.readU8(childMcbLin);
-  if (mcbType === 0x4D || mcbType === 0x5A) {
-    cpu.mem.writeU16(childMcbLin + 1, 0x0000); // mark free
-  }
+  // Free child's XMS handles (PMODEW cleanup2 doesn't free in pure XMS mode)
+  xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
+
+  // Free all MCBs owned by the child PSP (not just the main block)
+  dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
 
   const parent = emu._dosExecStack.pop()!;
   emu._dosPSP = parent.psp;
   emu._dosDTA = parent.dta;
+  emu.currentDrive = parent.currentDrive;
+  emu.currentDirs = parent.currentDirs;
   emu._dosExitCode = exitCode;
   cpu.reg.set(parent.regs);
   cpu.cs = parent.cs;
@@ -174,9 +190,12 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x0E: { // Select default drive (DL=drive number 0=A,1=B,2=C...)
       const dl = cpu.reg[EDX] & 0xFF;
-      const driveLetter = String.fromCharCode(0x41 + Math.min(dl, 25));
-      emu.currentDrive = driveLetter;
-      cpu.setReg8(EAX, 26); // AL = number of logical drives
+      // Only change drive if valid — programs detect invalid drives by reading
+      // back with AH=19h and seeing the drive didn't change
+      if (isDosValidDrive(dl)) {
+        emu.currentDrive = String.fromCharCode(0x41 + dl);
+      }
+      cpu.setReg8(EAX, DOS_LASTDRIVE); // AL = number of logical drives (LASTDRIVE=E → 5)
       break;
     }
 
@@ -191,6 +210,12 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x1C: { // Get drive info (DL=drive, 0=default)
+      const dl1c = cpu.reg[EDX] & 0xFF;
+      const driveIdx1c = dl1c === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (dl1c - 1);
+      if (!isDosValidDrive(driveIdx1c)) {
+        cpu.setReg8(EAX, 0xFF); // AL=0xFF → invalid drive
+        break;
+      }
       // Return: AL=sectors/cluster, CX=bytes/sector, DX=total clusters, DS:BX→media ID byte
       cpu.setReg8(EAX, 8);       // 8 sectors per cluster
       cpu.setReg16(ECX, 512);    // 512 bytes per sector
@@ -206,6 +231,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // (e.g. CALL FAR through IVT) get the correct vector
       emu.memory.writeU16(intNo * 4, cpu.getReg16(EDX));     // offset
       emu.memory.writeU16(intNo * 4 + 2, cpu.ds);            // segment
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -235,6 +261,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg16(EAX, (DOS_MINOR << 8) | DOS_MAJOR); // AL=major, AH=minor
       cpu.setReg16(EBX, 0x0000); // BH=version flag, BL=OEM serial
       cpu.setReg16(ECX, 0x0000);
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -255,10 +282,17 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       cpu.setReg16(EBX, vec & 0xFFFF);
       cpu.es = (vec >>> 16) & 0xFFFF;
+      cpu.setFlag(CF, false);
       break;
     }
 
     case 0x36: { // Get free disk space (DL=drive, 0=default)
+      const dl36 = cpu.reg[EDX] & 0xFF;
+      const driveIdx36 = dl36 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (dl36 - 1);
+      if (!isDosValidDrive(driveIdx36)) {
+        cpu.setReg16(EAX, 0xFFFF); // AX=0xFFFF → invalid drive
+        break;
+      }
       // AX=sectors/cluster, BX=available clusters, CX=bytes/sector, DX=total clusters
       cpu.setReg16(EAX, 8);       // 8 sectors per cluster
       cpu.setReg16(EBX, 32768);   // ~128MB free
@@ -276,6 +310,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         const ch = cpu.mem.readU8(dsBase + dx + i);
         if (ch === 0) break;
         path += String.fromCharCode(ch);
+      }
+      // Real DOS rejects wildcards in CHDIR — return "path not found"
+      if (path.includes('*') || path.includes('?')) {
+        console.log(`[DOS] CHDIR "${path}" -> REJECTED (wildcards)`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 3); // path not found
+        break;
       }
       const resolved = dosResolvePath(emu, path);
       const drive = resolved[0];
@@ -318,6 +359,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // DOS convention: return path without drive letter and without leading backslash
       // e.g. "C:\WINDOWS\SYSTEM32" → "WINDOWS\SYSTEM32", "C:\" → ""
       let dirStr = curDir.length > 3 ? curDir.substring(3) : '';
+      console.log(`[DOS] GetCurDir drive=${driveLetter} curDir="${curDir}" -> "${dirStr}"`);
       for (let i = 0; i < dirStr.length && i < 63; i++) {
         cpu.mem.writeU8(dsBase + si + i, dirStr.charCodeAt(i));
       }
@@ -355,22 +397,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x48: { // Allocate memory (BX=paragraphs)
       const paras = cpu.getReg16(EBX);
-      if (paras !== 0xFFFF && emu.cpuSteps > 3000000) {
-        // Log MCB chain during late allocations (STARTMUS loading)
-        const fMcb = emu._dosMcbFirstSeg || 0x0060;
-        let seg = fMcb;
-        const chain: string[] = [];
-        for (let it = 0; it < 50; it++) {
-          const lin = seg * 16;
-          const t = String.fromCharCode(cpu.mem.readU8(lin));
-          const o = cpu.mem.readU16(lin + 1);
-          const s = cpu.mem.readU16(lin + 3);
-          chain.push(`${seg.toString(16)}:${t}/${o.toString(16)}/${s.toString(16)}`);
-          if (t === 'Z') break;
-          seg += s + 1;
-        }
-        console.warn(`[MCB] Alloc ${paras.toString(16)} paras. Chain: ${chain.join(' → ')}`);
-      }
       // Walk MCB chain: first merge adjacent free blocks
       const firstMcb = emu._dosMcbFirstSeg || 0x0060;
       for (let ms = firstMcb, it2 = 0; it2 < 1000; it2++) {
@@ -492,6 +518,9 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x4C: { // Terminate with return code
       const retCode = al;
+      if (retCode !== 0) console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)}`);
+      xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
+      dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
       if (dosExecReturn(cpu, emu, retCode)) break;
       // Check PSP terminate address (offset 0x0A) — used by custom loaders
       // that set up a child PSP with a return address (like Second Reality's runexe)
@@ -501,10 +530,50 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         const termCS = cpu.mem.readU16(pspLin + 0x0C);
         const parentPSP = cpu.mem.readU16(pspLin + 0x16);
         console.warn(`[INT 21h] AH=4C: PSP=0x${(emu._dosPSP||0x100).toString(16)} termAddr=${termCS.toString(16)}:${termIP.toString(16)} parent=0x${parentPSP.toString(16)}`);
+        // If terminate address points to real code (not BIOS stub) and parent PSP differs
         if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
-          console.log(`[INT 21h] AH=4C: child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
+          const childPsp = emu._dosPSP || 0x100;
+          const savedDrive = emu._dosPspDriveState.get(childPsp);
+          if (savedDrive) {
+            emu.currentDrive = savedDrive.drive;
+            emu.currentDirs = savedDrive.dirs;
+            emu._dosPspDriveState.delete(childPsp);
+          }
+          // Clean stale IVT entries: PMODEW hooks INT vectors before entering PM.
+          // Only reset entries pointing into the child's freed memory range —
+          // preserve handlers installed intentionally for the parent (e.g. STMIK on INT 08h).
+          const childMcbLin = (childPsp - 1) * 16;
+          const childMcbSize = cpu.mem.readU16(childMcbLin + 3);
+          const childEndSeg = childPsp + childMcbSize;
+          for (let vi = 0; vi < 256; vi++) {
+            const vecSeg = cpu.mem.readU16(vi * 4 + 2);
+            if (vecSeg >= childPsp && vecSeg < childEndSeg) {
+              const bios = emu._dosBiosDefaultVectors.get(vi) ?? ((0xF000 << 16) | (vi * 5));
+              cpu.mem.writeU16(vi * 4, bios & 0xFFFF);
+              cpu.mem.writeU16(vi * 4 + 2, (bios >>> 16) & 0xFFFF);
+            }
+          }
+          emu._dosPspSavedIVT.delete(childPsp);
           emu._dosExitCode = retCode;
+          // Restore parent PSP
           emu._dosPSP = parentPSP;
+          // PSP termination vector is always a real-mode seg:off.
+          // If a DOS extender (PMODEW) entered protected mode, reset to real mode now.
+          if (!cpu.realMode && cpu.emu) {
+            cpu.emu._cr0 = 0;
+            cpu.realMode = true;
+            cpu.segBases.clear();
+          }
+          // Reset PM descriptor tables and PIC state left by the exiting sub-EXE
+          if (cpu.emu) {
+            cpu.emu._idtBase = 0;
+            cpu.emu._idtLimit = 0;
+            cpu.emu._gdtBase = 0;
+            cpu.emu._gdtLimit = 0;
+            cpu.emu._hwIntPMActive = false;
+            cpu.emu._picMasterBase = 0x08;
+            cpu.emu._picSlaveBase = 0x70;
+          }
           cpu.cs = termCS;
           cpu.eip = cpu.segBase(termCS) + termIP;
           break;
@@ -1039,6 +1108,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         cs: cpu.cs, ds: cpu.ds, es: cpu.es, ss: cpu.ss,
         eip: cpu.eip, flags: cpu.getFlags(),
         psp: emu._dosPSP, dta: emu._dosDTA,
+        currentDrive: emu.currentDrive, currentDirs: new Map(emu.currentDirs),
       });
 
       // Allocate MCB for child
@@ -1170,6 +1240,10 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       if (pspSi > newPspSeg) {
         cpu.mem.writeU16(newPspLin + 0x02, pspSi);
       }
+      // Save current drive/dir state so AH=4Ch can restore it after child exits
+      emu._dosPspDriveState.set(newPspSeg, { drive: emu.currentDrive, dirs: new Map(emu.currentDirs) });
+      // Mark PSP for IVT cleanup on exit (stale vectors in freed memory get reset to BIOS default)
+      emu._dosPspSavedIVT.set(newPspSeg, { ivt: new Uint8Array(0), intVectors: new Map() });
       console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)}) SI=${pspSi.toString(16)}`);
       break;
     }

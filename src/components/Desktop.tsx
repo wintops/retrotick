@@ -63,7 +63,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     const result = isExeFile(f.data, name);
     if (result.ok && result.peInfo) {
       const additional = new Map<string, ArrayBuffer>();
-      for (const s of stored) if (s.name !== name) additional.set(s.name, s.data);
+      for (const s of stored) if (s.name !== name && !s.name.includes('/')) additional.set(s.name, s.data);
       onRunExe(f.data, result.peInfo, additional, name, commandLine);
     } else {
       const opened = await openWithDefaultApp(name, stored, onRunExe);
@@ -129,10 +129,6 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
             {t().dropHint}<br />
             {t().rightClickHint}
           </div>
-          <a href="https://github.com/lqs/retrotick" target="_blank"
-            style={{ display: 'inline-flex', alignItems: 'center', height: '22px', padding: '0 8px', marginTop: '4px', background: '#D4D0C8', border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF', boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080', color: '#000', textDecoration: 'none', font: 'bold 11px/1 "Tahoma", "MS Sans Serif", sans-serif', whiteSpace: 'nowrap' }}>
-            Star on GitHub
-          </a>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
-import { XMS_STUB_SEG, XMS_STUB_OFF } from './xms';
+import { XMS_STUB_SEG, XMS_STUB_OFF, xmsFreeAllForPsp } from './xms';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, EDI = 7;
 const CF = 0x001;
@@ -90,7 +90,43 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
   console.warn(`[INT 20h] PSP=0x${(emu._dosPSP||0x100).toString(16)} termAddr=${termCS.toString(16)}:${termIP.toString(16)} parent=0x${parentPSP.toString(16)} ESP=0x${(cpu.reg[4]>>>0).toString(16)}`);
   if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
     console.log(`[INT 20h] child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
+    const childPsp = emu._dosPSP || 0x100;
+    xmsFreeAllForPsp(emu, childPsp);
+    const savedDrive = emu._dosPspDriveState.get(childPsp);
+    if (savedDrive) {
+      emu.currentDrive = savedDrive.drive;
+      emu.currentDirs = savedDrive.dirs;
+      emu._dosPspDriveState.delete(childPsp);
+    }
+    // Clean stale IVT entries pointing into the child's freed memory
+    const childMcbLin2 = (childPsp - 1) * 16;
+    const childMcbSize2 = cpu.mem.readU16(childMcbLin2 + 3);
+    const childEndSeg2 = childPsp + childMcbSize2;
+    for (let vi = 0; vi < 256; vi++) {
+      const vecSeg = cpu.mem.readU16(vi * 4 + 2);
+      if (vecSeg >= childPsp && vecSeg < childEndSeg2) {
+        const bios = emu._dosBiosDefaultVectors.get(vi) ?? ((0xF000 << 16) | (vi * 5));
+        cpu.mem.writeU16(vi * 4, bios & 0xFFFF);
+        cpu.mem.writeU16(vi * 4 + 2, (bios >>> 16) & 0xFFFF);
+      }
+    }
+    emu._dosPspSavedIVT.delete(childPsp);
     emu._dosPSP = parentPSP;
+    // PSP termination vector is always a real-mode seg:off — reset to real mode
+    if (!cpu.realMode && cpu.emu) {
+      cpu.emu._cr0 = 0;
+      cpu.realMode = true;
+      cpu.segBases.clear();
+    }
+    if (cpu.emu) {
+      cpu.emu._idtBase = 0;
+      cpu.emu._idtLimit = 0;
+      cpu.emu._gdtBase = 0;
+      cpu.emu._gdtLimit = 0;
+      cpu.emu._hwIntPMActive = false;
+      cpu.emu._picMasterBase = 0x08;
+      cpu.emu._picSlaveBase = 0x70;
+    }
     cpu.cs = termCS;
     cpu.eip = cpu.segBase(termCS) + termIP;
     return true;
@@ -103,6 +139,9 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
 
 /** Restore parent state after child INT 20h terminate. */
 function dosExecReturnFromInt20(cpu: CPU, emu: Emulator): void {
+  // Free child's XMS handles
+  xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
+
   // Free child's MCB
   const childPsp = emu._dosPSP;
   const childMcbLin = (childPsp - 1) * 16;
@@ -114,6 +153,8 @@ function dosExecReturnFromInt20(cpu: CPU, emu: Emulator): void {
   const parent = emu._dosExecStack.pop()!;
   emu._dosPSP = parent.psp;
   emu._dosDTA = parent.dta;
+  emu.currentDrive = parent.currentDrive;
+  emu.currentDirs = parent.currentDirs;
   emu._dosExitCode = 0; // INT 20h has no return code
   cpu.reg.set(parent.regs);
   cpu.cs = parent.cs;
@@ -170,8 +211,14 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
     return true;
   }
 
+  if (ax === 0x1687) {
+    // DPMI host detection — AX=0 means present, AX nonzero means not present
+    cpu.setReg16(EAX, 0x0001); // DPMI not present
+    return true;
+  }
+
   if (ax === 0x0500) {
-    cpu.setReg8(EAX, 0xFF); // DPMI not present
+    cpu.setReg8(EAX, 0xFF); // DPMI not present (alternate check)
     return true;
   }
 

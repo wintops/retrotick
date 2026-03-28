@@ -329,7 +329,7 @@ export class Memory {
       console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
       console.trace();
     }
-    if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
+    if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
@@ -337,11 +337,7 @@ export class Memory {
 
   writeU16(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
-    if (this._hasVga && (addr >>> 16) === 0xA) {
-      this.writeU8(addr, val & 0xFF);
-      this.writeU8(addr + 1, (val >> 8) & 0xFF);
-      return;
-    }
+    if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 1 < this._flatMax) { this._flatDV.setUint16(addr, val, true); return; }
     const off = addr & SEG_MASK;
@@ -355,13 +351,7 @@ export class Memory {
 
   writeU32(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
-    if (this._hasVga && (addr >>> 16) === 0xA) {
-      this.writeU8(addr, val & 0xFF);
-      this.writeU8(addr + 1, (val >> 8) & 0xFF);
-      this.writeU8(addr + 2, (val >> 16) & 0xFF);
-      this.writeU8(addr + 3, (val >> 24) & 0xFF);
-      return;
-    }
+    if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 3 < this._flatMax) { this._flatDV.setUint32(addr, val, true); return; }
     const off = addr & SEG_MASK;

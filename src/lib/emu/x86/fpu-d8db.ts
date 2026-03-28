@@ -109,10 +109,28 @@ export function execFPU_D9(cpu: CPU, mod: number, regField: number, rm: number, 
       case 0: fpuPush(cpu, readF32(mem, addr)); break;
       case 2: writeF32(mem, addr, fpuST(cpu, 0)); break;
       case 3: writeF32(mem, addr, fpuPop(cpu)); break;
-      case 4: break;
-      case 5: cpu.fpuCW = mem.readU16(addr); break;
-      case 6: break;
-      case 7: mem.writeU16(addr, cpu.fpuCW); break;
+      case 4: { // FLDENV — Load FPU Environment (14 bytes in 16-bit mode)
+        cpu.fpuCW = mem.readU16(addr);
+        cpu.fpuSW = mem.readU16(addr + 2);
+        cpu.fpuTW = mem.readU16(addr + 4);
+        // IP/opcode/operand fields (offsets 6-13) not critical — skip
+        cpu.fpuTop = (cpu.fpuSW >> 11) & 7;
+        break;
+      }
+      case 5: cpu.fpuCW = mem.readU16(addr); break; // FLDCW
+      case 6: { // FNSTENV — Store FPU Environment (14 bytes in 16-bit mode)
+        mem.writeU16(addr, cpu.fpuCW);
+        mem.writeU16(addr + 2, cpu.fpuSW | (cpu.fpuTop << 11));
+        mem.writeU16(addr + 4, cpu.fpuTW);
+        mem.writeU16(addr + 6, 0);  // FPU IP offset
+        mem.writeU16(addr + 8, 0);  // FPU IP selector
+        mem.writeU16(addr + 10, 0); // FPU operand offset
+        mem.writeU16(addr + 12, 0); // FPU operand selector
+        // FNSTENV masks all exceptions after storing
+        cpu.fpuCW |= 0x003F;
+        break;
+      }
+      case 7: mem.writeU16(addr, cpu.fpuCW); break; // FNSTCW
       default:
         console.warn(`FPU D9 /${regField} mem unimplemented at EIP=0x${((cpu.eip) >>> 0).toString(16)}`);
         break;

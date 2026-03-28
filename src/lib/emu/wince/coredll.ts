@@ -27,7 +27,7 @@ export function registerCoredll(emu: Emulator): void {
     'CreateCompatibleDC', 'CreateCompatibleBitmap', 'SelectObject', 'DeleteObject',
     'GetObjectW', 'GetStockObject', 'SetBkMode', 'SetTextColor', 'CreateSolidBrush',
     'GetPixel', 'Rectangle', 'BitBlt', 'CreateFontIndirectW',
-    'CreateDIBSection', 'CreateRectRgn', 'CombineRgn', 'GetDeviceCaps',
+    'CreateDIBSection', 'CreateRectRgn', 'CombineRgn', 'GetDeviceCaps', 'DeleteDC',
   ]) alias(fn, 'GDI32.DLL');
   // USER32
   for (const fn of [
@@ -38,7 +38,7 @@ export function registerCoredll(emu: Emulator): void {
     'SetForegroundWindow', 'GetForegroundWindow', 'GetWindowLongW', 'SetWindowLongW',
     'SetWindowTextW', 'GetKeyState', 'SetCursorPos', 'LoadCursorW', 'LoadImageW',
     'UnregisterClassW', 'SetTimer', 'KillTimer',
-    'DrawTextW', 'MessageBoxW', 'GetSystemMetrics',
+    'DrawTextW', 'MessageBoxW', 'GetSystemMetrics', 'LoadStringW',
   ]) alias(fn, 'USER32.DLL');
 
   // DrawFocusRect — not in x86 GDI32 registration, provide stub
@@ -74,6 +74,13 @@ export function registerCoredll(emu: Emulator): void {
   reg('free', 1, () => {
     // Just leak — heap is linear
     return 0;
+  });
+
+  let randSeed = 1;
+  reg('srand', 1, (emu) => { randSeed = emu.readArg(0) >>> 0; return 0; });
+  reg('rand', 0, () => {
+    randSeed = (Math.imul(randSeed, 214013) + 2531011) >>> 0;
+    return (randSeed >>> 16) & 0x7FFF;
   });
 
   reg('memset', 3, (emu) => {
@@ -266,11 +273,24 @@ export function registerCoredll(emu: Emulator): void {
       hMenu,
       extraBytes: new Uint8Array(clsInfo?.cbWndExtra ?? 0),
       userData: 0,
-      children: new Map(),
+      childList: [],
     });
 
-    // Promote first top-level window to main window (sets up canvas + notifies React)
+    // Add to parent's child list and set controlId
     const WS_CHILD = 0x40000000;
+    if (hParent && (style & WS_CHILD)) {
+      const wnd = emu.handles.get(hwnd);
+      const parentWnd = emu.handles.get(hParent);
+      if (wnd) wnd.controlId = hMenu;
+      if (parentWnd) {
+        if (!parentWnd.childList) parentWnd.childList = [];
+        parentWnd.childList.push(hwnd);
+        if (!parentWnd.children) parentWnd.children = new Map();
+        parentWnd.children.set(hMenu, hwnd);
+      }
+    }
+
+    // Promote first top-level window to main window (sets up canvas + notifies React)
     if (!emu.mainWindow && !(style & WS_CHILD) && w > 0 && h > 0) {
       const wnd = emu.handles.get(hwnd);
       if (wnd) {
@@ -279,12 +299,27 @@ export function registerCoredll(emu: Emulator): void {
       }
     }
 
-    // Send WM_CREATE
+    // Send WM_CREATE with a proper CREATESTRUCT
     if (wndProc) {
       const WM_CREATE = 0x0001;
-      emu.callWndProc(wndProc, hwnd, WM_CREATE, 0, 0);
+      // CREATESTRUCTW: lpCreateParams, hInstance, hMenu, hwndParent, cy, cx, y, x, style, lpszName, lpszClass, dwExStyle
+      const cs = emu.allocHeap(48);
+      emu.memory.writeU32(cs, lpParam);
+      emu.memory.writeU32(cs + 4, hInstance);
+      emu.memory.writeU32(cs + 8, hMenu);
+      emu.memory.writeU32(cs + 12, hParent);
+      emu.memory.writeU32(cs + 16, (h >>> 0) === CW_USEDEFAULT ? 320 : h);
+      emu.memory.writeU32(cs + 20, (w >>> 0) === CW_USEDEFAULT ? 240 : w);
+      emu.memory.writeU32(cs + 24, (y >>> 0) === CW_USEDEFAULT ? 0 : y);
+      emu.memory.writeU32(cs + 28, (x >>> 0) === CW_USEDEFAULT ? 0 : x);
+      emu.memory.writeU32(cs + 32, style);
+      emu.memory.writeU32(cs + 36, titleAddr);
+      emu.memory.writeU32(cs + 40, classNameAddr);
+      emu.memory.writeU32(cs + 44, exStyle);
+      emu.callWndProc(wndProc, hwnd, WM_CREATE, 0, cs);
     }
 
+    emu.notifyControlOverlays();
     return hwnd;
   });
 

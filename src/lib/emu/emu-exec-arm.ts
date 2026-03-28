@@ -63,6 +63,7 @@ export function emuTickARM(emu: Emulator): void {
         }
         // PC=0: WinMain returned — treat as ExitProcess
         if (eip === 0) {
+          emu.exitedNormally = true;
           emu.halted = true;
           emu.haltReason = 'WinMain returned (ExitProcess)';
           break;
@@ -85,6 +86,14 @@ export function emuTickARM(emu: Emulator): void {
   // Schedule next tick if still running
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     requestAnimationFrame(emu.tick);
+  } else if (emu.halted) {
+    if (emu.exitedNormally) {
+      emu.onExit?.();
+    } else if (!emu._crashFired) {
+      emu._crashFired = true;
+      const pc = '0x' + (cpu.reg[PC] >>> 0).toString(16).padStart(8, '0');
+      emu.onCrash?.(pc, emu.haltReason || 'unknown error');
+    }
   }
 }
 

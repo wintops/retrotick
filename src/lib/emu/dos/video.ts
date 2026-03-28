@@ -8,6 +8,13 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 // Video memory base (B800:0000 in real mode)
 const VIDEO_MEM_BASE = 0xB8000;
 
+/** Sync CRTC cursor registers (0x0E/0x0F) from emu cursor state */
+function updateCrtcCursor(emu: Emulator): void {
+  const cursorPos = emu.consoleCursorY * emu.screenCols + emu.consoleCursorX;
+  emu.vga.crtcRegs[0x0E] = (cursorPos >> 8) & 0xFF;
+  emu.vga.crtcRegs[0x0F] = cursorPos & 0xFF;
+}
+
 /** Sync video memory (B800:0000) to emu.consoleBuffer */
 export function syncVideoMemory(emu: Emulator): void {
   const cols = emu.screenCols;
@@ -18,6 +25,11 @@ export function syncVideoMemory(emu: Emulator): void {
     const attr = mem.readU8(VIDEO_MEM_BASE + i * 2 + 1);
     emu.consoleBuffer[i] = { char: ch, attr };
   }
+  // Sync cursor position from CRTC registers (programs like QBasic write
+  // directly to CRTC 0x0E/0x0F via ports 0x3D4/0x3D5 instead of INT 10h)
+  const cursorPos = (emu.vga.crtcRegs[0x0E] << 8) | emu.vga.crtcRegs[0x0F];
+  emu.consoleCursorX = cursorPos % cols;
+  emu.consoleCursorY = Math.min(Math.floor(cursorPos / cols), rows - 1);
   emu.onConsoleOutput?.();
 }
 
@@ -99,6 +111,7 @@ export function teletypeOutput(cpu: CPU, emu: Emulator, ch: number): void {
 
   if (ch === 0x0D) {
     emu.consoleCursorX = 0;
+    updateCrtcCursor(emu);
     return;
   }
   if (ch === 0x0A) {
@@ -107,10 +120,12 @@ export function teletypeOutput(cpu: CPU, emu: Emulator, ch: number): void {
       scrollUp(cpu, emu, 1, 0x07, 0, 0, rows - 1, cols - 1);
       emu.consoleCursorY = rows - 1;
     }
+    updateCrtcCursor(emu);
     return;
   }
   if (ch === 0x08) {
     if (emu.consoleCursorX > 0) emu.consoleCursorX--;
+    updateCrtcCursor(emu);
     return;
   }
   if (ch === 0x07) return; // bell
@@ -144,6 +159,8 @@ export function teletypeOutput(cpu: CPU, emu: Emulator, ch: number): void {
     }
   }
 
+  // Keep CRTC cursor registers in sync so syncVideoMemory doesn't reset position
+  updateCrtcCursor(emu);
   syncVideoMemory(emu);
 }
 
@@ -224,6 +241,7 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
     }
     emu.consoleCursorX = 0;
     emu.consoleCursorY = 0;
+    updateCrtcCursor(emu);
   } else {
     // Graphics mode — init framebuffer for all modes
     emu.vga.initFramebuffer(vgaMode.width, vgaMode.height);
@@ -530,6 +548,10 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       if (page === activePage) {
         emu.consoleCursorY = Math.min(row, rows - 1);
         emu.consoleCursorX = Math.min(col, cols - 1);
+        // Keep CRTC cursor registers in sync (programs may read them back)
+        const cursorPos = emu.consoleCursorY * cols + emu.consoleCursorX;
+        emu.vga.crtcRegs[0x0E] = (cursorPos >> 8) & 0xFF;
+        emu.vga.crtcRegs[0x0F] = cursorPos & 0xFF;
       }
       break;
     }

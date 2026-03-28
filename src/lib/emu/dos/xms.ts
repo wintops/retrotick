@@ -82,6 +82,10 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
       const base = xmsAlloc(emu, sizeBytes);
       const handle = emu._xmsNextHandle++;
       emu._xmsHandles.set(handle, { base, size: sizeKB, lockCount: 0 });
+      // Track handle by current PSP for auto-free on program exit
+      const psp = emu._dosPSP ?? 0;
+      if (!emu._xmsPspHandles.has(psp)) emu._xmsPspHandles.set(psp, new Set());
+      emu._xmsPspHandles.get(psp)!.add(handle);
       cpu.setReg16(EAX, 1); // success
       cpu.setReg16(EDX, handle);
       return true;
@@ -97,6 +101,8 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
       }
       xmsFree(emu, emb.base, emb.size * 1024);
       emu._xmsHandles.delete(handle);
+      // Remove from PSP tracking
+      for (const set of emu._xmsPspHandles.values()) set.delete(handle);
       cpu.setReg16(EAX, 1);
       return true;
     }
@@ -295,6 +301,20 @@ function xmsFree(emu: Emulator, base: number, sizeBytes: number): void {
   }
   remaining.push({ base: mergedBase, size: mergedEnd - mergedBase });
   emu._xmsFreeBlocks = remaining;
+}
+
+/** Free all XMS handles allocated while the given PSP was active (called on program exit). */
+export function xmsFreeAllForPsp(emu: Emulator, psp: number): void {
+  const handles = emu._xmsPspHandles.get(psp);
+  if (!handles || handles.size === 0) return;
+  for (const handle of handles) {
+    const emb = emu._xmsHandles.get(handle);
+    if (emb) {
+      xmsFree(emu, emb.base, emb.size * 1024);
+      emu._xmsHandles.delete(handle);
+    }
+  }
+  emu._xmsPspHandles.delete(psp);
 }
 
 /** Resolve an XMS address. Handle 0 = conventional memory (seg:off in offset). */

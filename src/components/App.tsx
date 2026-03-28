@@ -19,6 +19,7 @@ import { ResourceViewerWindow } from './ResourceViewerWindow';
 import { FolderWindow } from './FolderWindow';
 import { WelcomeWindow } from './WelcomeWindow';
 import { RegionalSettingsWindow } from './RegionalSettingsWindow';
+import { DosSettingsWindow } from './DosSettingsWindow';
 import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
 import { FOLDER_ICON_16, EXE_ICON_16 } from './DesktopIcon';
@@ -92,6 +93,7 @@ export function App() {
   const [minimizedApps, setMinimizedApps] = useState<Set<number>>(new Set());
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem('welcome-dismissed'));
   const [showRegionalSettings, setShowRegionalSettings] = useState(false);
+  const [showDosSettings, setShowDosSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
   const [showDisplayProperties, setShowDisplayProperties] = useState(false);
   const [bgSettings, setBgSettings] = useState<BackgroundSettings>(() => {
@@ -103,6 +105,7 @@ export function App() {
   });
   const welcomeId = useRef(-1);
   const regionalSettingsId = useRef(-2);
+  const dosSettingsId = useRef(-3);
   const nextAppId = useRef(1);
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
@@ -325,6 +328,12 @@ export function App() {
       iconUrl: null as string | null | undefined,
       minimized: minimizedApps.has(regionalSettingsId.current),
     }] : []),
+    ...(showDosSettings ? [{
+      id: dosSettingsId.current,
+      title: t().dosSettings,
+      iconUrl: null as string | null | undefined,
+      minimized: minimizedApps.has(dosSettingsId.current),
+    }] : []),
   ];
 
   useEffect(() => {
@@ -422,6 +431,16 @@ export function App() {
             minimized={minimizedApps.has(regionalSettingsId.current)}
           />
         )}
+        {showDosSettings && (
+          <DosSettingsWindow
+            onClose={() => { setShowDosSettings(false); setMinimizedApps(prev => { const s = new Set(prev); s.delete(dosSettingsId.current); return s; }); setFocusedAppId(prev => prev === dosSettingsId.current ? null : prev); }}
+            onFocus={() => focusApp(dosSettingsId.current)}
+            onMinimize={() => handleTaskbarMinimize(dosSettingsId.current)}
+            zIndex={getZIndex(dosSettingsId.current)}
+            focused={focusedAppId === dosSettingsId.current}
+            minimized={minimizedApps.has(dosSettingsId.current)}
+          />
+        )}
         {showDisplayProperties && (
           <DisplayPropertiesDialog
             current={bgSettings}
@@ -438,6 +457,7 @@ export function App() {
         onCloseApp={handleRequestClose}
         onShowWelcome={() => { setShowWelcome(true); focusApp(welcomeId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(welcomeId.current); return s; }); }}
         onShowRegionalSettings={() => { setShowRegionalSettings(true); focusApp(regionalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(regionalSettingsId.current); return s; }); }}
+        onShowDosSettings={() => { setShowDosSettings(true); focusApp(dosSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(dosSettingsId.current); return s; }); }}
         onMinimizeAll={() => {
           const ids = new Set([
             ...runningApps.map(a => a.id),
@@ -445,6 +465,7 @@ export function App() {
             ...openFolders.map(f => f.id),
             ...(showWelcome ? [welcomeId.current] : []),
             ...(showRegionalSettings ? [regionalSettingsId.current] : []),
+            ...(showDosSettings ? [dosSettingsId.current] : []),
           ]);
           setMinimizedApps(ids);
           setFocusedAppId(null);

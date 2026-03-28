@@ -1,7 +1,7 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import type { DirEntry, FileInfo, FileManager, OpenFile } from '../file-manager';
-import { dosResolvePath } from './path';
+import { dosResolvePath, isDosValidDrive } from './path';
 import { teletypeOutput } from './video';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
@@ -71,7 +71,6 @@ export function dosCreateFile(cpu: CPU, emu: Emulator): void {
   }
   cpu.setReg16(EAX, handle);
   cpu.setFlag(CF, false);
-  console.log(`[DOS] Create "${name}" -> h=${handle}`);
 }
 
 /** Try to get file data synchronously (additionalFiles / externalFiles / cached virtual). */
@@ -99,7 +98,6 @@ export function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulat
 function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string): void {
   const fs = emu.fs;
   const fileInfo = fs.findFile(resolved, emu.additionalFiles);
-  console.log(`[DOS] findFile("${resolved}") -> ${fileInfo ? `"${fileInfo.name}" src=${fileInfo.source} size=${fileInfo.size}` : 'null'}`);
   if (fileInfo) {
     // Try synchronous path first (additionalFiles / externalFiles are in memory)
     const syncData = getSyncFileData(fs, fileInfo, emu, resolved);
@@ -167,20 +165,12 @@ export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   }
   const resolved = dosResolvePath(emu, name);
   openFileByPath(cpu, emu, name, resolved);
-  // Don't log on async path (waitingForMessage) — AX hasn't been set yet;
-  // the INT 21h will re-execute after cache is populated and log then.
-  if (!emu.waitingForMessage) {
-    console.log(`[DOS] Open "${name}" -> CF=${cpu.getFlags()&1} AX=0x${cpu.getReg16(0).toString(16)}`);
-  }
 }
 
 /** 0x3E: Close file */
 export function dosCloseFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const f = emu._dosFiles.get(h);
-  const csBase = (cpu.cs << 4) >>> 0;
-  const ip = ((cpu.eip - 2) >>> 0) - csBase; // -2 for CD 21
-  console.log(`[DOS] Close h=${h} "${f?.name}" at ${cpu.cs.toString(16)}:${ip.toString(16)} (linear 0x${((cpu.eip-2)>>>0).toString(16)})`);
   emu._dosFiles.delete(h);
   const of = emu.handles.get<OpenFile>(h);
   if (of) emu.fs.persistOnClose(of);
@@ -208,12 +198,9 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
       f.pos += avail;
       cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
-      const preview = Array.from(f.data.slice(f.pos - avail, f.pos - avail + Math.min(avail, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
-      console.log(`[DOS] Read h=${h} "${f.name}" req=${count} got=${avail} pos=${f.pos}/${f.data.length} [${preview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
-      console.log(`[DOS] Read h=${h} INVALID HANDLE req=${count}`);
     }
   }
 }
@@ -253,12 +240,9 @@ export function dosWriteFile(cpu: CPU, emu: Emulator): void {
       }
       cpu.setReg16(EAX, count);
       cpu.setFlag(CF, false);
-      const wPreview = Array.from(f.data.slice(f.pos - count, f.pos - count + Math.min(count, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
-      console.log(`[DOS] Write h=${handle} "${f.name}" count=${count} pos=${f.pos}/${f.data.length} [${wPreview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
-      console.log(`[DOS] Write h=${handle} INVALID HANDLE count=${count}`);
     }
   }
 }
@@ -282,7 +266,6 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     else if (origin === 1) f.pos += offset;      // SEEK_CUR
     else if (origin === 2) f.pos = f.data.length + offset; // SEEK_END
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
-    console.log(`[DOS] Seek h=${h} "${f.name}" origin=${origin} offset=${offset} -> pos=${f.pos}/${f.data.length}`);
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
@@ -291,7 +274,6 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   } else {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 6);
-    console.warn(`[DOS] Seek h=${h} INVALID HANDLE origin=${origin} offset=${offset} at EIP=0x${((cpu.eip-2)>>>0).toString(16)}`);
   }
 }
 
@@ -336,12 +318,26 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
     cpu.setFlag(CF, false);
   } else if (subFunc === 0x08) {
     // Check if block device is removable: AX=0 removable, AX=1 fixed
-    cpu.setReg16(EAX, 1); // fixed (hard drive)
-    cpu.setFlag(CF, false);
+    const drv08 = cpu.reg[EBX] & 0xFF; // BL = drive number (0=default, 1=A, 2=B, 3=C...)
+    const drvIdx08 = drv08 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (drv08 - 1);
+    if (!isDosValidDrive(drvIdx08)) {
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+      cpu.setFlag(CF, true);
+    } else {
+      cpu.setReg16(EAX, 1); // fixed (hard drive)
+      cpu.setFlag(CF, false);
+    }
   } else if (subFunc === 0x09) {
     // Check if block device is remote: DX bit 12=1 remote, 0=local
-    cpu.setReg16(EDX, 0); // local
-    cpu.setFlag(CF, false);
+    const drv09 = cpu.reg[EBX] & 0xFF;
+    const drvIdx09 = drv09 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (drv09 - 1);
+    if (!isDosValidDrive(drvIdx09)) {
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+      cpu.setFlag(CF, true);
+    } else {
+      cpu.setReg16(EDX, 0); // local
+      cpu.setFlag(CF, false);
+    }
   } else if (subFunc === 0x0D) {
     // Generic IOCTL (block device): CH=category, CL=function
     const cl = cpu.reg[ECX] & 0xFF;
@@ -423,6 +419,16 @@ export function dosForceDupHandle(cpu: CPU, emu: Emulator): void {
 /** 0x4E: FindFirst (CX=attributes, DS:DX=filespec) */
 export function dosFindFirst(cpu: CPU, emu: Emulator): void {
   const spec = readDsDxString(cpu);
+  // Reject paths with wildcards in directory components (matches real DOS behavior).
+  // e.g. "D:\DIR\*.BAS\..\*.BAS" is invalid because "*.BAS" is not a directory.
+  const rawNorm = spec.replace(/\//g, '\\');
+  const rawLastSlash = rawNorm.lastIndexOf('\\');
+  const rawDirPart = rawLastSlash >= 0 ? rawNorm.substring(0, rawLastSlash) : '';
+  if (rawDirPart.includes('*') || rawDirPart.includes('?')) {
+    cpu.setFlag(CF, true);
+    cpu.setReg16(EAX, 3); // path not found
+    return;
+  }
   const resolvedSpec = dosResolvePath(emu, spec);
   const attrMask = cpu.getReg16(ECX);
   const allEntries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);

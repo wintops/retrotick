@@ -109,7 +109,7 @@ export function FolderWindow({
       const result = isExeFile(f.data, item.name);
       if (result.ok && result.peInfo) {
         const additional = new Map<string, ArrayBuffer>();
-        for (const s of allFiles) if (s.name !== item.name) additional.set(s.name, s.data);
+        for (const s of allFiles) if (s.name !== item.name && s.name.startsWith(prefix)) additional.set(s.name, s.data);
         const cleanPath = folderPath.replace(/\/+$/, '').replace(/\\+$/, '');
         const fullPath = cleanPath + '/' + displayName(item.name);
         onRunExe(f.data, result.peInfo, additional, fullPath);
@@ -187,6 +187,7 @@ export function FolderWindow({
                 iconUrl={item.iconUrl}
                 isFolder={item.isFolder}
                 isExe={item.isExe}
+                darkText
                 selected={fm.selected === item.name}
                 editing={fm.editingName === item.name}
                 onSelect={() => fm.setSelected(item.name)}

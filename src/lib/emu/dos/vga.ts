@@ -140,6 +140,7 @@ export class VGAState {
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
 
 
+
   // Cached retrace timing — reduces performance.now() calls in tight 0x3DA poll loops
   private _cachedNowUs = 0;        // performance.now() * 1000, refreshed every N polls
   private _3daPollCount = 0;       // polls since last refresh

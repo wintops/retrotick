@@ -232,13 +232,7 @@ export class DefaultFileManager implements FileManager {
     if (upper.startsWith('D:\\')) {
       const relPath = upper.substring(3);
       if (relPath) {
-        for (const vf of this.virtualFiles) {
-          if (this.vfIsFolder(vf.name)) continue;
-          if (this.vfToRelPath(vf.name) === relPath) {
-            return { name: vf.name, size: vf.size, source: 'virtual' };
-          }
-        }
-        // Try progressively shorter sub-paths: UCDOS\README → README
+        // additionalFiles (bundled with exe) take precedence over user's stored files
         let sub = relPath;
         while (sub) {
           for (const [name, data] of additionalFiles) {
@@ -248,6 +242,13 @@ export class DefaultFileManager implements FileManager {
           const idx = sub.indexOf('\\');
           if (idx < 0) break;
           sub = sub.substring(idx + 1);
+        }
+        // Fall back to user's IndexedDB-stored files
+        for (const vf of this.virtualFiles) {
+          if (this.vfIsFolder(vf.name)) continue;
+          if (this.vfToRelPath(vf.name) === relPath) {
+            return { name: vf.name, size: vf.size, source: 'virtual' };
+          }
         }
       }
     }

@@ -383,7 +383,13 @@ export class Emulator {
   _dosExecStack: {
     regs: Int32Array; cs: number; ds: number; es: number; ss: number;
     eip: number; flags: number; psp: number; dta: number;
+    currentDrive: string; currentDirs: Map<string, string>;
   }[] = [];
+  /** Saved drive/dir state for custom PSP child processes (AH=55h + AH=4Ch/INT 20h) */
+  _dosPspDriveState = new Map<number, { drive: string; dirs: Map<string, string> }>();
+  /** Saved IVT + _dosIntVectors for custom PSP children — PMODEW modifies IVT hooks that
+   *  must be restored when the child exits, since we bypass _pm_cleanup. */
+  _dosPspSavedIVT = new Map<number, { ivt: Uint8Array; intVectors: Map<number, number> }>();
   _dosExitCode = 0;
   /** Segment of fake UCDOS TSR stub (0 = not set up) */
   _dosUcdosStubSeg = 0;
@@ -397,6 +403,14 @@ export class Emulator {
   _picSlaveMask = 0x00;
   _picMasterICW = 0;      // ICW sequence counter (0 = ready for OCW)
   _picSlaveICW = 0;
+  _picMasterBase = 0x08;  // IRQ0-7 interrupt vector base (ICW2, default=0x08)
+  _picSlaveBase = 0x70;   // IRQ8-15 interrupt vector base (ICW2, default=0x70)
+  _picMasterISR = 0x00;   // In-Service Register (bits set for IRQs being handled)
+  _picSlaveISR = 0x00;
+  _picMasterIRR = 0x00;   // Interrupt Request Register
+  _picSlaveIRR = 0x00;
+  _picMasterReadISR = false; // true = read ISR on port 0x20, false = read IRR
+  _picSlaveReadISR = false;
 
   // PIT (Programmable Interval Timer) state
   _pitCounters = [0xFFFF, 0x0012, 0xFFFF]; // Counter 0/1/2 reload values
@@ -512,6 +526,9 @@ export class Emulator {
   ]);
   // Loaded DLL modules: dllName → module info
   loadedModules = new Map<string, { base: number; resourceRva: number; imageBase: number; sizeOfImage?: number }>();
+  // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
+  // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
+  loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();
   // Dynamic thunk allocator (for GetProcAddress on loaded DLLs)
   dynamicThunkPtr = 0;
 
@@ -553,6 +570,8 @@ export class Emulator {
   _xmsNextAddr = 0x110000;
   _xmsTotalKB = 16384;     // 16MB total XMS
   _xmsFreeBlocks: { base: number; size: number }[] = [];
+  /** Maps PSP segment → set of XMS handles allocated while that PSP was active */
+  _xmsPspHandles = new Map<number, Set<number>>();
 
   // Threading
   threads: Thread[] = [];
@@ -760,6 +779,8 @@ export class Emulator {
   onReboot?: () => void;
   /** DLL modules requested by the executable but not found during loading */
   missingDlls: string[] = [];
+  /** Callback when a DLL is discovered missing at runtime (LoadLibrary) */
+  onMissingDll?: (dllName: string) => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 
@@ -1396,12 +1417,12 @@ export class Emulator {
     const audioVal = this.dosAudio.portIn(port);
     if (audioVal >= 0) return audioVal;
     switch (port) {
-      case 0x20: // PIC master — ISR/IRR (simplified: return 0)
-        return 0;
+      case 0x20: // PIC master — ISR/IRR
+        return this._picMasterReadISR ? this._picMasterISR : this._picMasterIRR;
       case 0x21: // PIC master IMR
         return this._picMasterMask;
       case 0xA0: // PIC slave — ISR/IRR
-        return 0;
+        return this._picSlaveReadISR ? this._picSlaveISR : this._picSlaveIRR;
       case 0xA1: // PIC slave IMR
         return this._picSlaveMask;
       case 0x40: case 0x41: case 0x42: { // PIT counter read
@@ -1489,11 +1510,30 @@ export class Emulator {
     if (this.dosAudio.portOut(port, value)) return;
     switch (port) {
       case 0x20: // PIC master command
-        if (value === 0x20) break; // EOI — acknowledged
-        if (value & 0x10) this._picMasterICW = 1; // ICW1 starts init sequence
+        if (value === 0x20) { // Non-specific EOI: clear highest-priority ISR bit
+          if (this._picMasterISR) {
+            this._picMasterISR &= this._picMasterISR - 1; // clear lowest set bit
+          }
+          break;
+        }
+        if (value & 0x10) { // ICW1 starts init sequence
+          this._picMasterICW = 1;
+          this._picMasterISR = 0;
+          this._picMasterIRR = 0;
+          this._picMasterReadISR = false;
+          break;
+        }
+        if ((value & 0x18) === 0x08) { // OCW3: bit 3 set, bit 4 clear
+          if (value & 0x02) {
+            this._picMasterReadISR = !!(value & 0x01); // bit 0: 1=ISR, 0=IRR
+          }
+        }
         break;
       case 0x21: // PIC master data (IMR or ICW2-4)
         if (this._picMasterICW > 0) {
+          if (this._picMasterICW === 1) {
+            this._picMasterBase = value & 0xF8; // ICW2: interrupt vector base (aligned to 8)
+          }
           this._picMasterICW++; // Consume ICW2, ICW3, ICW4
           if (this._picMasterICW > 4) this._picMasterICW = 0;
         } else {
@@ -1501,11 +1541,30 @@ export class Emulator {
         }
         break;
       case 0xA0: // PIC slave command
-        if (value === 0x20) break; // EOI
-        if (value & 0x10) this._picSlaveICW = 1;
+        if (value === 0x20) {
+          if (this._picSlaveISR) {
+            this._picSlaveISR &= this._picSlaveISR - 1;
+          }
+          break;
+        }
+        if (value & 0x10) {
+          this._picSlaveICW = 1;
+          this._picSlaveISR = 0;
+          this._picSlaveIRR = 0;
+          this._picSlaveReadISR = false;
+          break;
+        }
+        if ((value & 0x18) === 0x08) {
+          if (value & 0x02) {
+            this._picSlaveReadISR = !!(value & 0x01);
+          }
+        }
         break;
       case 0xA1: // PIC slave data (IMR or ICW2-4)
         if (this._picSlaveICW > 0) {
+          if (this._picSlaveICW === 1) {
+            this._picSlaveBase = value & 0xF8; // ICW2: interrupt vector base (aligned to 8)
+          }
           this._picSlaveICW++;
           if (this._picSlaveICW > 4) this._picSlaveICW = 0;
         } else {
@@ -1515,12 +1574,15 @@ export class Emulator {
       case 0x40: case 0x41: case 0x42: { // PIT counter write
         const ch = port - 0x40;
         const accessMode = this._pitAccessModes[ch];
+        let pitWriteComplete = false;
         if (accessMode === 1) { // LSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
           this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else if (accessMode === 2) { // MSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
           this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else { // LSB then MSB
           if (!this._pitWriteHigh[ch]) {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
@@ -1529,12 +1591,13 @@ export class Emulator {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
             this._pitWriteHigh[ch] = false;
             this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
+            pitWriteComplete = true;
           }
         }
-        // When PIT channel 0 is reprogrammed, resync the timer delivery baseline.
+        // When PIT channel 0 is fully reprogrammed, resync the timer delivery baseline.
         // Without this, the copper system's scanline-based PIT reprogramming causes
         // INT 08h to fire at wrong times (palette glitches, timing drift).
-        if (ch === 0 && this.isDOS) {
+        if (pitWriteComplete && ch === 0 && this.isDOS) {
           this._dosLastTimerTick = performance.now();
         }
         // Update PC speaker when PIT channel 2 changes
@@ -1656,6 +1719,9 @@ export class Emulator {
   _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
+  _hwIntPMActive = false; // true while a PM IDT-dispatched handler is running
+  /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
+  _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; use32: boolean; segBases: Map<number, number> } | undefined;
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;

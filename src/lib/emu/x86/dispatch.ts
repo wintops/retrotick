@@ -251,6 +251,7 @@ export function cpuStep(cpu: CPU): void {
     case 0x17:
       cpu.ss = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
       cpu._inhibitTF = true; // POP SS suppresses TF trap
+      cpu._inhibitIRQ = true; // POP SS inhibits HW IRQ for next instruction
       break;
     case 0x1F:
       cpu.ds = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
@@ -736,7 +737,7 @@ export function cpuStep(cpu: CPU): void {
       switch (d.regField) {
         case 0: cpu.es = d.val & 0xFFFF; break;
         case 1: cpu.loadCS(d.val & 0xFFFF); break;
-        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; break; // MOV SS suppresses TF
+        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
         case 3: cpu.ds = d.val & 0xFFFF; break;
         case 4: cpu.fs = d.val & 0xFFFF; break;
         case 5: cpu.gs = d.val & 0xFFFF; break;
@@ -759,9 +760,15 @@ export function cpuStep(cpu: CPU): void {
     case 0x91: case 0x92: case 0x93:
     case 0x94: case 0x95: case 0x96: case 0x97: {
       const r = opcode - 0x90;
-      const tmp = cpu.reg[EAX];
-      cpu.reg[EAX] = cpu.reg[r];
-      cpu.reg[r] = tmp;
+      if (opSize === 16) {
+        const tmp = cpu.getReg16(EAX);
+        cpu.setReg16(EAX, cpu.getReg16(r));
+        cpu.setReg16(r, tmp);
+      } else {
+        const tmp = cpu.reg[EAX];
+        cpu.reg[EAX] = cpu.reg[r];
+        cpu.reg[r] = tmp;
+      }
       break;
     }
 
@@ -1706,7 +1713,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0 && !cpu.getFlag(ZF)) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
@@ -1718,7 +1728,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0 && cpu.getFlag(ZF)) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
@@ -1730,7 +1743,10 @@ export function cpuStep(cpu: CPU): void {
       if (cpu._addrSize16) {
         const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
         cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
-        if (cx !== 0) cpu.eip = (cpu.eip + disp) | 0;
+        if (cx !== 0) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        }
       } else {
         cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
         if (cpu.reg[ECX] !== 0) cpu.eip = (cpu.eip + disp) | 0;
@@ -1742,7 +1758,14 @@ export function cpuStep(cpu: CPU): void {
     case 0xE3: {
       const disp = cpu.fetchI8();
       const cxZero = cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) === 0 : cpu.reg[ECX] === 0;
-      if (cxZero) cpu.eip = (cpu.eip + disp) | 0;
+      if (cxZero) {
+        if (!cpu.use32) {
+          const csBase = cpu.segBase(cpu.cs);
+          cpu.eip = csBase + (((cpu.eip - csBase) + disp) & 0xFFFF);
+        } else {
+          cpu.eip = (cpu.eip + disp) | 0;
+        }
+      }
       break;
     }
 
