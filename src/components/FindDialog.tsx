@@ -46,7 +46,7 @@ export function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focuse
       <Window
         title={s.findTitle}
         style={WS_CAPTION | WS_SYSMENU}
-        clientW={370}
+        clientW={410}
         clientH={56}
         focused={focused}
         onClose={onClose}
