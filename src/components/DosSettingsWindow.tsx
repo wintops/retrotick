@@ -65,6 +65,19 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
               </label>
             </div>
 
+            {/* JIT compiler */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelJit}</div>
+              <label style={{ ...radioStyle, marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.jitEnabled}
+                  onChange={() => setSettings(s => ({ ...s, jitEnabled: !s.jitEnabled }))}
+                />
+                {t().jitExperimental}
+              </label>
+            </div>
+
             <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '0 0 8px' }} />
 
             {/* Buttons */}

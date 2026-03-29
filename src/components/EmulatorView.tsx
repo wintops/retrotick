@@ -23,6 +23,7 @@ import { ProfileStore } from '../lib/profile-store';
 import { loadProfiles, saveProfiles } from '../lib/profile-db';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
 import { loadSettings, getKeyboardLayout, t } from '../lib/regional-settings';
+import { loadDosSettings } from '../lib/dos-settings';
 
 interface EmulatorViewProps {
   arrayBuffer: ArrayBuffer;
@@ -528,6 +529,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
       });
 
+      // Enable WASM JIT if configured in DOS Settings
+      if (emu.isDOS) emu.wasmJitEnabled = loadDosSettings().jitEnabled;
+
       // Assign shared AudioContext — created in App during user gesture
       if (sharedAudioContext) {
         emu.audioContext = sharedAudioContext;
@@ -698,6 +702,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
         // Load child (this creates its own consoleBuffer via initConsoleBuffer)
         childEmu.load(childData, childPeInfo, canvas);
+        if (childEmu.isDOS) childEmu.wasmJitEnabled = loadDosSettings().jitEnabled;
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
         childEmu.consoleBuffer = emu.consoleBuffer;

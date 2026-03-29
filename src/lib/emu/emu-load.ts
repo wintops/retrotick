@@ -2,6 +2,7 @@ import type { Emulator } from './emulator';
 import type { PEInfo } from '../pe/types';
 import { loadPE, parsePEHeader } from './pe-loader';
 import { loadNE } from './ne-loader';
+import { FlatMemory } from './x86/flat-memory';
 import type { LoadedNE } from './ne-loader';
 import { setAnsiCodePage, setAnsiCodePageFromCP, setAnsiEncoding, guessEncodingFromBytes } from './memory';
 import { registerGdi32 } from './win32/gdi32/index';
@@ -218,6 +219,8 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
     setupDosEnvironment(emu, mz);
+    emu.flatMemory = new FlatMemory();
+    emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
     console.log(`[EMU] COM loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
     return;
   }
@@ -240,6 +243,9 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
     setupDosEnvironment(emu, mz);
+    // Enable flat memory for DOS — shares buffer with WASM JIT (zero-copy)
+    emu.flatMemory = new FlatMemory();
+    emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
     console.log(`[EMU] MZ loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
     return;
   }

@@ -3,6 +3,9 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { tryFastLoop, tryCachedLoop } from './fast-loops';
+import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
+import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
+import { materializeFlags } from './x86/flags';
 import { AccessViolationError } from './memory';
 
 // A special "return from WndProc" thunk address
@@ -552,6 +555,12 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 const BATCH_SIZE = 500000;
 const DOS_POST_KEY_STEPS = 0x80;
 
+// WASM JIT diagnostics — logs every ~1s
+let _diagWasmRuns = 0, _diagWasmInsns = 0, _diagInterpInsns = 0;
+let _diagWasmExits: Record<number, number> = {};
+let _diagTickCount = 0, _diagTickTotalMs = 0;
+let _diagLastLog = 0;
+
 export function emuTick(emu: Emulator): void {
   if (!emu.running || emu.halted) return;
   // Guard against reentrant tick() calls — can happen when multiple
@@ -918,7 +927,7 @@ export function emuTick(emu: Emulator): void {
       continue;
     }
 
-    // Tight loop fast-forward (triple-period consecutive match, same as callStdcall)
+    // Tight loop fast-forward + JIT (triggered by loop detection, zero overhead otherwise)
     {
       // Fast path: check loop cache every 64 steps
       if ((stepCount & 0x3F) === 0 && stepCount > 0) {
@@ -948,6 +957,84 @@ export function emuTick(emu: Emulator): void {
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
           throw e;
+        }
+        // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
+        if (emu.flatMemory && emu.wasmJitEnabled && !(emu.cpu.flagsCache & 0x100)) {
+          const regionBase = eip & ~0xFFFF;
+          const region = emu.wasmRegions.get(regionBase);
+          if (region) {
+            // Staleness check: verify compiled code matches current memory
+            // (PMODE/W overwrites real-mode code during init → stale modules)
+            const expectedDword = region.entryChecks.get(eip);
+            if (expectedDword !== undefined && emu.memory.readU32(eip) !== expectedDword) {
+              emu.wasmRegions.delete(regionBase);
+              emu._wasmBlacklist.add(regionBase);
+              tkHitA = tkHitB = tkHitC = 0;
+              continue;
+            }
+            const entryIdx = region.entryMap.get(eip);
+            if (entryIdx !== undefined) {
+              const flat = emu.flatMemory;
+              // Only sync registers/flags — memory is already shared (zero-copy)
+              flat.writeRegs(emu.cpu);
+              flat.writeFlags(emu.cpu);
+              flat.writeSegBases(emu.cpu);
+              flat.dv.setInt32(OFF_ENTRY, entryIdx, true);
+              try {
+                region.run();
+                flat.readRegs(emu.cpu);
+                flat.readFlags(emu.cpu);
+                emu.cpu.eip = flat.readEip();
+                const wasmInsns = flat.readCounter();
+                const exitReason = flat.readExitReason();
+                _diagWasmRuns++;
+                _diagWasmInsns += wasmInsns;
+                _diagWasmExits[exitReason] = (_diagWasmExits[exitReason] || 0) + 1;
+                stepCount += wasmInsns;
+                emu._pitInsnCount += wasmInsns;
+                if (wasmInsns > 64) {
+                  // WASM did real work — advance i and force time/PIT check
+                  i = (i + wasmInsns) | 0xFFF;
+                }
+                // exit_reason=2 (unsupported opcode) is normal — block bails to
+                // interpreter. No blacklisting needed.
+              } catch {
+                // WASM OOB or other runtime error — discard this region and fall back to interpreter
+                flat.readRegs(emu.cpu);
+                flat.readFlags(emu.cpu);
+                emu.cpu.eip = flat.readEip() || eip; // restore EIP
+                emu.wasmRegions.delete(regionBase);
+                emu._wasmBlacklist.add(regionBase);
+              }
+              tkHitA = tkHitB = tkHitC = 0;
+              continue;
+            }
+          }
+          // Record hotness and trigger async compilation
+          // Wait 180 ticks (~3s) before compiling — let PMODE/W finish rewriting memory
+          if (emu._tickCount > 180 && emu._wasmPending.size === 0 && !emu._wasmBlacklist.has(regionBase)) {
+            const count = (emu._wasmHotness.get(regionBase) || 0) + 1;
+            emu._wasmHotness.set(regionBase, count);
+            if (count >= 50) {
+              emu._wasmPending.add(regionBase);
+              const flat = emu.flatMemory;
+              const wasmImports: WasmImports = {
+                writeVGA: (addr, val) => { emu.memory.writeU8(addr, val); },
+                testCC: (cc) => {
+                  // Sync flags from flat buffer (written by WASM) to CPU before materializing
+                  flat.readFlags(emu.cpu);
+                  materializeFlags(emu.cpu);
+                  return emu.cpu.testCC(cc) ? 1 : 0;
+                },
+                portIn: (port) => emu.portIn(port),
+                portOut: (port, val) => emu.portOut(port, val),
+              };
+              compileWasmRegion(emu.memory, eip, emu.cpu.use32, flat, wasmImports).then(compiled => {
+                emu._wasmPending.delete(regionBase);
+                if (compiled) emu.wasmRegions.set(regionBase, compiled);
+              });
+            }
+          }
         }
         tkHitA = tkHitB = tkHitC = 0;
       }
@@ -980,6 +1067,7 @@ export function emuTick(emu: Emulator): void {
       }
       prevBdaKeyHead = curBdaKeyHead;
     }
+    // (Stack corruption trap removed — low SP is legitimate for interrupt handlers)
     if (emu.cpu.halted) {
       const hBytes: string[] = [];
       for (let j = 0; j < 8; j++) hBytes.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
@@ -1075,6 +1163,16 @@ export function emuTick(emu: Emulator): void {
         break;
       }
     }
+  }
+  _diagInterpInsns += stepCount;
+  _diagTickCount++;
+  _diagTickTotalMs += performance.now() - tickStart;
+  const now2 = performance.now();
+  if (now2 - _diagLastLog > 2000) {
+    console.log(`[WASM-DIAG] ${_diagTickCount} ticks in ${_diagTickTotalMs.toFixed(0)}ms | WASM: ${_diagWasmRuns} runs, ${_diagWasmInsns} insns | Interp: ${_diagInterpInsns} insns | exits: ${JSON.stringify(_diagWasmExits)} | avg tick: ${(_diagTickTotalMs/_diagTickCount).toFixed(1)}ms | use32=${emu.cpu.use32} realMode=${emu.cpu.realMode}`);
+    _diagWasmRuns = 0; _diagWasmInsns = 0; _diagInterpInsns = 0;
+    _diagWasmExits = {}; _diagTickCount = 0; _diagTickTotalMs = 0;
+    _diagLastLog = now2;
   }
   emu.cpuSteps += stepCount;
   emu._pitInsnCount += stepCount;

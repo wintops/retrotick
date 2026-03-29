@@ -188,6 +188,29 @@ export class Memory {
   private _cSeg1: Uint8Array = null!;
   private _cDV1: DataView = null!;
 
+  // Flat memory mode: when set, all reads/writes go directly to this buffer (no Map lookup)
+  // Used for DOS mode to share the same ArrayBuffer with WASM JIT.
+  private _flat: Uint8Array | null = null;
+  private _flatDV: DataView | null = null;
+  private _flatMax = 0; // max address accessible in flat mode
+
+  /** Enable flat memory mode backed by a WebAssembly.Memory's buffer */
+  enableFlatMode(buffer: ArrayBuffer, maxAddr: number): void {
+    this._flat = new Uint8Array(buffer);
+    this._flatDV = new DataView(buffer);
+    this._flatMax = maxAddr;
+    // Copy any existing sparse segments into the flat buffer
+    for (const [key, seg] of this.segments) {
+      const offset = key * SEG_SIZE;
+      if (offset + SEG_SIZE <= maxAddr) {
+        this._flat.set(seg, offset);
+      }
+    }
+  }
+
+  /** Check if flat mode is active */
+  get isFlat(): boolean { return this._flat !== null; }
+
   // A20 gate: when disabled (default for DOS), bit 20 of addresses is masked to 0,
   // wrapping addresses above 1MB back to 0. EXEPACK and other 8086-era programs rely on this.
   a20Mask = 0xFFFFFFFF; // 0xFFFFF = A20 off (20-bit wrap), 0xFFFFFFFF = A20 on
@@ -242,6 +265,7 @@ export class Memory {
   readU8(addr: number): number {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
+    if (this._flat && addr < this._flatMax) return this._flat[addr];
     return this.seg(addr)[addr & SEG_MASK];
   }
 
@@ -250,6 +274,7 @@ export class Memory {
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
     }
+    if (this._flatDV && addr + 1 < this._flatMax) return this._flatDV.getUint16(addr, true);
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
       return this.dv(addr).getUint16(off, true);
@@ -263,6 +288,7 @@ export class Memory {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
         (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
     }
+    if (this._flatDV && addr + 3 < this._flatMax) return this._flatDV.getUint32(addr, true);
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
       return this.dv(addr).getUint32(off, true);
@@ -285,6 +311,17 @@ export class Memory {
     return this.readU32(addr) | 0;
   }
 
+  /** Iterate over all allocated segment keys (for flat memory sync) */
+  getSegmentKeys(): IterableIterator<number> { return this.segments.keys(); }
+  /** Get raw segment data (for flat memory sync) */
+  getSegment(key: number): Uint8Array | undefined { return this.segments.get(key); }
+  /** Ensure a segment exists and return it */
+  ensureSegment(key: number): Uint8Array {
+    let s = this.segments.get(key);
+    if (!s) { s = new Uint8Array(SEG_SIZE); this.segments.set(key, s); this.dataViews.set(key, new DataView(s.buffer)); }
+    return s;
+  }
+
   _watchAddr = 0; // temporary memory write watch
   writeU8(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
@@ -294,6 +331,7 @@ export class Memory {
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
+    if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
 
@@ -301,6 +339,7 @@ export class Memory {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
+    if (this._flatDV && addr + 1 < this._flatMax) { this._flatDV.setUint16(addr, val, true); return; }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
       this.dv(addr).setUint16(off, val, true);
@@ -314,6 +353,7 @@ export class Memory {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
+    if (this._flatDV && addr + 3 < this._flatMax) { this._flatDV.setUint32(addr, val, true); return; }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
       this.dv(addr).setUint32(off, val, true);
@@ -330,6 +370,10 @@ export class Memory {
   writeI32(addr: number, val: number): void { this.writeU32(addr, val); }
 
   fill(addr: number, len: number, val: number): void {
+    if (this._flat && addr + len <= this._flatMax) {
+      this._flat.fill(val, addr, addr + len);
+      return;
+    }
     let remaining = len;
     let cur = addr;
     while (remaining > 0) {
@@ -343,6 +387,10 @@ export class Memory {
   }
 
   copyFrom(addr: number, data: Uint8Array): void {
+    if (this._flat && addr + data.length <= this._flatMax) {
+      this._flat.set(data, addr);
+      return;
+    }
     let remaining = data.length;
     let cur = addr;
     let srcOff = 0;
@@ -358,6 +406,9 @@ export class Memory {
   }
 
   slice(addr: number, len: number): Uint8Array {
+    if (this._flat && addr + len <= this._flatMax) {
+      return this._flat.slice(addr, addr + len);
+    }
     const result = new Uint8Array(len);
     let remaining = len;
     let cur = addr;

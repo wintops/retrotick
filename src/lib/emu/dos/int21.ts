@@ -446,6 +446,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           cpu.setReg16(EAX, blockSeg);
           cpu.setFlag(CF, false);
           allocated = true;
+          if (emu.cpuSteps > 3000000) console.warn(`[AH=48] Alloc ${paras.toString(16)} → seg ${blockSeg.toString(16)}`);
           break;
         }
         if (owner === 0 && size > largestFree) largestFree = size;
@@ -1243,7 +1244,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       emu._dosPspDriveState.set(newPspSeg, { drive: emu.currentDrive, dirs: new Map(emu.currentDirs) });
       // Mark PSP for IVT cleanup on exit (stale vectors in freed memory get reset to BIOS default)
       emu._dosPspSavedIVT.set(newPspSeg, { ivt: new Uint8Array(0), intVectors: new Map() });
-      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)})`);
+      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)}) SI=${pspSi.toString(16)}`);
       break;
     }
 

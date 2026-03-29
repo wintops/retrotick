@@ -4,12 +4,15 @@ export interface DosSettings {
   /** Text mode renderer: 'dom' allows text selection, 'canvas' eliminates
    *  sub-pixel rendering artifacts in Chrome but disables text selection. */
   textRenderer: 'dom' | 'canvas';
+  /** Enable experimental WASM JIT compiler for DOS programs. */
+  jitEnabled: boolean;
 }
 
 const STORAGE_KEY = 'retrotick-dos';
 
 const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
+  jitEnabled: false,
 };
 
 export function loadDosSettings(): DosSettings {
