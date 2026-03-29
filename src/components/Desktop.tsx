@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles, readDroppedItems } from '../lib/file-store';
@@ -22,6 +22,18 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
   const fetchItems = useCallback(() => getRootItems(), []);
   const fm = useFolderTools('', fetchItems);
   const [dragOver, setDragOver] = useState(false);
+  const desktopRef = useRef<HTMLDivElement>(null);
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (!fm.selected || fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
+    if (e.key === 'F2') {
+      e.preventDefault();
+      fm.setEditingName(fm.selected);
+    } else if (e.key === 'Delete') {
+      e.preventDefault();
+      fm.setConfirmDelete(fm.selected);
+    }
+  }
 
   // Auto-open from URL param on first load
   useEffect(() => {
@@ -86,9 +98,12 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
 
   return (
     <div
+      ref={desktopRef}
+      tabIndex={-1}
       class="w-full select-none"
-      style={{ minHeight: '100%' }}
+      style={{ minHeight: '100%', outline: 'none' }}
       onClick={() => { if (fm.confirmDelete) return; fm.setSelected(null); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+      onKeyDown={handleKeyDown}
       onContextMenu={(e: MouseEvent) => {
         if (fm.confirmDelete) { e.preventDefault(); return; }
         if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
@@ -116,7 +131,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
             isExe={f.isExe}
             selected={fm.selected === f.name}
             editing={fm.editingName === f.name}
-            onSelect={() => fm.setSelected(f.name)}
+            onSelect={() => { fm.setSelected(f.name); desktopRef.current?.focus(); }}
             onOpen={() => handleOpen(f.name, f.isFolder)}
             onRename={(newName) => fm.handleRename(f.name, newName)}
             onContextMenu={(e: MouseEvent) => { fm.setBgContextMenu(null); fm.setContextMenu({ x: e.clientX, y: e.clientY, item: f }); }}

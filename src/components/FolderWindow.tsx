@@ -40,6 +40,19 @@ export function FolderWindow({
   const fetchItems = useCallback(() => getItemsInFolder(prefix), [prefix]);
   const fm = useFolderTools(prefix, fetchItems);
 
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (!fm.selected || fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
+    if (e.key === 'F2') {
+      e.preventDefault();
+      fm.setEditingName(fm.selected);
+    } else if (e.key === 'Delete') {
+      e.preventDefault();
+      fm.setConfirmDelete(fm.selected);
+    }
+  }
+
   const [windowPos, setWindowPos] = useState({ x: 80 + Math.random() * 60, y: 40 + Math.random() * 40 });
   const [clientSize, setClientSize] = useState({ w: CLIENT_W, h: CLIENT_H });
   const [maximized, setMaximized] = useState(false);
@@ -166,8 +179,11 @@ export function FolderWindow({
         iconElement={FOLDER_ICON_16}
       >
         <div
-          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white' }}
+          ref={contentRef}
+          tabIndex={-1}
+          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white', outline: 'none' }}
           onClick={() => { fm.setSelected(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+          onKeyDown={handleKeyDown}
           onContextMenu={(e: MouseEvent) => {
             if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
               e.preventDefault();
@@ -190,7 +206,7 @@ export function FolderWindow({
                 darkText
                 selected={fm.selected === item.name}
                 editing={fm.editingName === item.name}
-                onSelect={() => fm.setSelected(item.name)}
+                onSelect={() => { fm.setSelected(item.name); contentRef.current?.focus(); }}
                 onOpen={() => handleOpen(item)}
                 onRename={(newName) => fm.handleRename(item.name, newName)}
                 onContextMenu={(e: MouseEvent) => {
