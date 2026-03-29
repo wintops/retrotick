@@ -427,6 +427,11 @@ export class Memory {
 
   /** Bulk copy within memory — segment-level optimization */
   copyBlock(dst: number, src: number, len: number): void {
+    if (this._flat && src + len <= this._flatMax && dst + len <= this._flatMax) {
+      // Flat mode fast path — use copyWithin for overlapping-safe bulk copy
+      this._flat.copyWithin(dst, src, src + len);
+      return;
+    }
     let remaining = len;
     let s = src;
     let d = dst;
