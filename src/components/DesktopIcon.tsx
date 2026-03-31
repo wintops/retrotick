@@ -97,6 +97,7 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
   return (
     <div
       data-desktop-icon
+      data-store-path={storePath}
       class="flex flex-col items-center w-[75px] p-1 cursor-default select-none"
       draggable={!editing}
       onClick={handleClick}

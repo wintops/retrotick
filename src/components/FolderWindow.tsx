@@ -42,14 +42,47 @@ export function FolderWindow({
 
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Focus content area when the window becomes focused
+  useEffect(() => {
+    if (focused && !minimized) contentRef.current?.focus();
+  }, [focused, minimized]);
+
   function handleKeyDown(e: KeyboardEvent) {
-    if (!fm.selected || fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
-    if (e.key === 'F2') {
+    if (fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
+    const { key } = e;
+
+    if (key === 'Enter' && fm.selected) {
+      e.preventDefault();
+      const item = fm.items.find(i => i.name === fm.selected);
+      if (item) handleOpen(item);
+      return;
+    }
+    if (key === 'F2' && fm.selected) {
       e.preventDefault();
       fm.setEditingName(fm.selected);
-    } else if (e.key === 'Delete') {
+      return;
+    }
+    if (key === 'Delete' && fm.selected) {
       e.preventDefault();
       fm.setConfirmDelete(fm.selected);
+      return;
+    }
+    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
+      e.preventDefault();
+      if (fm.items.length === 0) return;
+      if (!fm.selected) { fm.setSelected(fm.items[0].name); return; }
+      const idx = fm.items.findIndex(i => i.name === fm.selected);
+      if (idx === -1) { fm.setSelected(fm.items[0].name); return; }
+      const el = contentRef.current;
+      const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
+      let next = idx;
+      if (key === 'ArrowLeft') next = Math.max(0, idx - 1);
+      else if (key === 'ArrowRight') next = Math.min(fm.items.length - 1, idx + 1);
+      else if (key === 'ArrowUp') next = Math.max(0, idx - cols);
+      else if (key === 'ArrowDown') next = Math.min(fm.items.length - 1, idx + cols);
+      fm.setSelected(fm.items[next].name);
+      const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(fm.items[next].name)}"]`);
+      icon?.scrollIntoView({ block: 'nearest' });
     }
   }
 
