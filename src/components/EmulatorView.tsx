@@ -447,6 +447,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const emu = new Emulator();
     emu.configuredLcid = loadSettings().localeId;
 
+    // Sync virtual filesystem from IndexedDB into the emulator's FileManager
+    const syncVirtualFiles = async (e: Emulator) => {
+      const files = await getAllFiles();
+      e.fs.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
+      const cache = (e.fs as { virtualFileCache?: Map<string, ArrayBuffer> }).virtualFileCache;
+      if (cache) {
+        cache.clear();
+        for (const f of files) cache.set(f.name.toUpperCase(), f.data);
+      }
+    };
+    const onDesktopChanged = () => { syncVirtualFiles(emu); };
+    window.addEventListener('desktop-files-changed', onDesktopChanged);
+
     // Async init for registry + profiles, then start emulator
     let regFlushTimer: ReturnType<typeof setTimeout> | null = null;
     let profFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -488,12 +501,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       emu.profileStore = profStore;
 
       // Populate virtual filesystem before load() so NE DLL PATH search can find files
-      const allFiles = await getAllFiles();
-      emu.fs.virtualFiles = allFiles.map(f => ({ name: f.name, size: f.data.byteLength }));
-      const cache = (emu.fs as any).virtualFileCache as Map<string, ArrayBuffer> | undefined;
-      if (cache) {
-        for (const f of allFiles) cache.set(f.name.toUpperCase(), f.data);
-      }
+      await syncVirtualFiles(emu);
 
       await emu.load(arrayBuffer, peInfo, canvas);
     };
@@ -780,6 +788,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     }
 
     return () => {
+      window.removeEventListener('desktop-files-changed', onDesktopChanged);
       if (regFlushTimer !== null) clearTimeout(regFlushTimer);
       if (emuRef.current) {
         if (processRegistry && emuRef.current.pid) {
