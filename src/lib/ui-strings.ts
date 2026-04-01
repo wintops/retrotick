@@ -106,6 +106,13 @@ export interface UiStrings {
   browse: string;
   apply: string;
   bgPreview: string;
+  // Clipboard
+  cut: string;
+  copy_: string;
+  paste: string;
+  // Multi-delete
+  confirmDeleteMultiple: string;
+  confirmMultipleDelete: string;
   // Missing DLL warning
   missingDlls: string;
   missingDllsHint: string;
@@ -218,6 +225,11 @@ const en: UiStrings = {
   bgPreview: 'Preview',
   missingDlls: 'Missing DLL modules: {0}',
   missingDllsHint: 'The program may not work correctly.\nTry importing the required DLL files to the desktop (a separate folder is fine).',
+  cut: 'Cut',
+  copy_: 'Copy',
+  paste: 'Paste',
+  confirmDeleteMultiple: "Are you sure you want to delete these {0} items?",
+  confirmMultipleDelete: 'Confirm Multiple File Delete',
   findTitle: 'Find', replaceTitle: 'Replace', findWhat: 'Find what:', replaceWith: 'Replace with:',
   findNext: 'Find Next', replaceBtn: 'Replace', replaceAll: 'Replace All',
 };
@@ -321,6 +333,11 @@ const fr: UiStrings = {
   bgPreview: 'Aper\u00e7u',
   missingDlls: 'Modules DLL manquants\u00a0: {0}',
   missingDllsHint: 'Le programme risque de ne pas fonctionner correctement.\nEssayez d\u2019importer les fichiers DLL requis sur le bureau (un dossier \u00e0 part convient).',
+  cut: 'Couper',
+  copy_: 'Copier',
+  paste: 'Coller',
+  confirmDeleteMultiple: '\u00cates-vous s\u00fbr de vouloir supprimer ces {0} \u00e9l\u00e9ments\u00a0?',
+  confirmMultipleDelete: 'Confirmer la suppression',
   findTitle: 'Rechercher', replaceTitle: 'Remplacer', findWhat: 'Rechercher :', replaceWith: 'Remplacer par :',
   findNext: 'Suivant', replaceBtn: 'Remplacer', replaceAll: 'Remplacer tout',
 };
@@ -424,6 +441,11 @@ const de: UiStrings = {
   bgPreview: 'Vorschau',
   missingDlls: 'Fehlende DLL-Module: {0}',
   missingDllsHint: 'Das Programm funktioniert m\u00f6glicherweise nicht korrekt.\nVersuchen Sie, die erforderlichen DLL-Dateien auf den Desktop zu importieren (ein separater Ordner ist in Ordnung).',
+  cut: 'Ausschneiden',
+  copy_: 'Kopieren',
+  paste: 'Einf\u00fcgen',
+  confirmDeleteMultiple: 'M\u00f6chten Sie diese {0} Elemente wirklich l\u00f6schen?',
+  confirmMultipleDelete: 'L\u00f6schen mehrerer Dateien best\u00e4tigen',
   findTitle: 'Suchen', replaceTitle: 'Ersetzen', findWhat: 'Suchen nach:', replaceWith: 'Ersetzen durch:',
   findNext: 'Weitersuchen', replaceBtn: 'Ersetzen', replaceAll: 'Alle ersetzen',
 };
@@ -527,6 +549,11 @@ const es: UiStrings = {
   bgPreview: 'Vista previa',
   missingDlls: 'M\u00f3dulos DLL faltantes: {0}',
   missingDllsHint: 'Es posible que el programa no funcione correctamente.\nIntente importar los archivos DLL necesarios al escritorio (una carpeta separada est\u00e1 bien).',
+  cut: 'Cortar',
+  copy_: 'Copiar',
+  paste: 'Pegar',
+  confirmDeleteMultiple: '\u00bfEst\u00e1 seguro de que desea eliminar estos {0} elementos?',
+  confirmMultipleDelete: 'Confirmar eliminaci\u00f3n m\u00faltiple',
   findTitle: 'Buscar', replaceTitle: 'Reemplazar', findWhat: 'Buscar:', replaceWith: 'Reemplazar por:',
   findNext: 'Buscar siguiente', replaceBtn: 'Reemplazar', replaceAll: 'Reemplazar todo',
 };
@@ -630,6 +657,11 @@ const ja: UiStrings = {
   bgPreview: '\u30d7\u30ec\u30d3\u30e5\u30fc',
   missingDlls: 'DLL\u30e2\u30b8\u30e5\u30fc\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093: {0}',
   missingDllsHint: '\u30d7\u30ed\u30b0\u30e9\u30e0\u304c\u6b63\u3057\u304f\u52d5\u4f5c\u3057\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002\n\u5fc5\u8981\u306aDLL\u30d5\u30a1\u30a4\u30eb\u3092\u30c7\u30b9\u30af\u30c8\u30c3\u30d7\u306b\u30a4\u30f3\u30dd\u30fc\u30c8\u3057\u3066\u304f\u3060\u3055\u3044\uff08\u5225\u306e\u30d5\u30a9\u30eb\u30c0\u3067\u3082\u69cb\u3044\u307e\u305b\u3093\uff09\u3002',
+  cut: '\u5207\u308a\u53d6\u308a',
+  copy_: '\u30b3\u30d4\u30fc',
+  paste: '\u8cbc\u308a\u4ed8\u3051',
+  confirmDeleteMultiple: '\u3053\u308c\u3089\u306e {0} \u500b\u306e\u9805\u76ee\u3092\u524a\u9664\u3057\u3066\u3082\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f',
+  confirmMultipleDelete: '\u8907\u6570\u30d5\u30a1\u30a4\u30eb\u306e\u524a\u9664\u306e\u78ba\u8a8d',
   findTitle: '\u691c\u7d22', replaceTitle: '\u7f6e\u63db', findWhat: '\u691c\u7d22\u3059\u308b\u6587\u5b57\u5217:', replaceWith: '\u7f6e\u63db\u5f8c\u306e\u6587\u5b57\u5217:',
   findNext: '\u6b21\u3092\u691c\u7d22', replaceBtn: '\u7f6e\u63db', replaceAll: '\u3059\u3079\u3066\u7f6e\u63db',
 };
@@ -733,6 +765,11 @@ const zhCN: UiStrings = {
   bgPreview: '\u9884\u89c8',
   missingDlls: '\u7f3a\u5c11DLL\u6a21\u5757: {0}',
   missingDllsHint: '\u7a0b\u5e8f\u53ef\u80fd\u65e0\u6cd5\u6b63\u5e38\u5de5\u4f5c\u3002\n\u8bf7\u5c1d\u8bd5\u5c06\u6240\u9700\u7684DLL\u6587\u4ef6\u5bfc\u5165\u5230\u684c\u9762\uff08\u653e\u5728\u5355\u72ec\u7684\u6587\u4ef6\u5939\u4e2d\u4e5f\u53ef\u4ee5\uff09\u3002',
+  cut: '\u526a\u5207',
+  copy_: '\u590d\u5236',
+  paste: '\u7c98\u8d34',
+  confirmDeleteMultiple: '\u786e\u5b9a\u8981\u5220\u9664\u8fd9 {0} \u4e2a\u9879\u76ee\u5417\uff1f',
+  confirmMultipleDelete: '\u786e\u8ba4\u5220\u9664\u591a\u4e2a\u6587\u4ef6',
   findTitle: '\u67e5\u627e', replaceTitle: '\u66ff\u6362', findWhat: '\u67e5\u627e\u5185\u5bb9:', replaceWith: '\u66ff\u6362\u4e3a:',
   findNext: '\u67e5\u627e\u4e0b\u4e00\u4e2a', replaceBtn: '\u66ff\u6362', replaceAll: '\u5168\u90e8\u66ff\u6362',
 };
@@ -836,6 +873,11 @@ const ptBR: UiStrings = {
   bgPreview: 'Visualiza\u00e7\u00e3o',
   missingDlls: 'M\u00f3dulos DLL ausentes: {0}',
   missingDllsHint: 'O programa pode n\u00e3o funcionar corretamente.\nTente importar os arquivos DLL necess\u00e1rios para a \u00e1rea de trabalho (uma pasta separada serve).',
+  cut: 'Recortar',
+  copy_: 'Copiar',
+  paste: 'Colar',
+  confirmDeleteMultiple: 'Tem certeza de que deseja excluir estes {0} itens?',
+  confirmMultipleDelete: 'Confirmar exclus\u00e3o m\u00faltipla',
   findTitle: 'Localizar', replaceTitle: 'Substituir', findWhat: 'Localizar:', replaceWith: 'Substituir por:',
   findNext: 'Localizar pr\u00f3xima', replaceBtn: 'Substituir', replaceAll: 'Substituir tudo',
 };
@@ -939,6 +981,11 @@ const it: UiStrings = {
   bgPreview: 'Anteprima',
   missingDlls: 'Moduli DLL mancanti: {0}',
   missingDllsHint: 'Il programma potrebbe non funzionare correttamente.\nProvare a importare i file DLL necessari sul desktop (anche in una cartella separata va bene).',
+  cut: 'Taglia',
+  copy_: 'Copia',
+  paste: 'Incolla',
+  confirmDeleteMultiple: 'Eliminare questi {0} elementi?',
+  confirmMultipleDelete: 'Conferma eliminazione multipla',
   findTitle: 'Trova', replaceTitle: 'Sostituisci', findWhat: 'Trova:', replaceWith: 'Sostituisci con:',
   findNext: 'Trova successivo', replaceBtn: 'Sostituisci', replaceAll: 'Sostituisci tutto',
 };
@@ -1042,6 +1089,11 @@ const pl: UiStrings = {
   bgPreview: 'Podgl\u0105d',
   missingDlls: 'Brakuj\u0105ce modu\u0142y DLL: {0}',
   missingDllsHint: 'Program mo\u017ce nie dzia\u0142a\u0107 poprawnie.\nSpr\u00f3buj zaimportowa\u0107 wymagane pliki DLL na pulpit (oddzielny folder te\u017c wystarczy).',
+  cut: 'Wytnij',
+  copy_: 'Kopiuj',
+  paste: 'Wklej',
+  confirmDeleteMultiple: 'Czy na pewno chcesz usun\u0105\u0107 te {0} elementy?',
+  confirmMultipleDelete: 'Potwierd\u017a usuni\u0119cie wielu plik\u00f3w',
   findTitle: 'Znajd\u017a', replaceTitle: 'Zamie\u0144', findWhat: 'Znajd\u017a:', replaceWith: 'Zamie\u0144 na:',
   findNext: 'Znajd\u017a nast\u0119pny', replaceBtn: 'Zamie\u0144', replaceAll: 'Zamie\u0144 wszystko',
 };
@@ -1145,6 +1197,11 @@ const ko: UiStrings = {
   bgPreview: '\ubbf8\ub9ac \ubcf4\uae30',
   missingDlls: '\ub204\ub77d\ub41c DLL \ubaa8\ub4c8: {0}',
   missingDllsHint: '\ud504\ub85c\uadf8\ub7a8\uc774 \uc62c\ubc14\ub974\uac8c \uc791\ub3d9\ud558\uc9c0 \uc54a\uc744 \uc218 \uc788\uc2b5\ub2c8\ub2e4.\n\ud544\uc694\ud55c DLL \ud30c\uc77c\uc744 \ubc14\ud0d5 \ud654\uba74\uc5d0 \uac00\uc838\uc624\uc2ed\uc2dc\uc624 (\ubcc4\ub3c4\uc758 \ud3f4\ub354\uc5d0 \ub123\uc5b4\ub3c4 \ub429\ub2c8\ub2e4).',
+  cut: '\uc798\ub77c\ub0b4\uae30',
+  copy_: '\ubcf5\uc0ac',
+  paste: '\ubd99\uc5ec\ub123\uae30',
+  confirmDeleteMultiple: '\uc774 {0}\uac1c \ud56d\ubaa9\uc744 \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
+  confirmMultipleDelete: '\uc5ec\ub7ec \ud30c\uc77c \uc0ad\uc81c \ud655\uc778',
   findTitle: '\ucc3e\uae30', replaceTitle: '\ubc14\uafb8\uae30', findWhat: '\ucc3e\uc744 \ub0b4\uc6a9:', replaceWith: '\ubc14\uafb8 \ub0b4\uc6a9:',
   findNext: '\ub2e4\uc74c \ucc3e\uae30', replaceBtn: '\ubc14\uafb8\uae30', replaceAll: '\ubaa8\ub450 \ubc14\uafb8\uae30',
 };

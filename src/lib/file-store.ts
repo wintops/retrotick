@@ -209,6 +209,30 @@ export async function readDroppedItems(dataTransfer: DataTransfer, prefix: strin
   return results;
 }
 
+export async function copyEntry(sourceName: string, destName: string): Promise<void> {
+  const all = await getAllFiles();
+  if (isFolder(sourceName)) {
+    const oldPrefix = sourceName.endsWith('/') ? sourceName : sourceName + '/';
+    const newPrefix = destName.endsWith('/') ? destName : destName + '/';
+    const toCopy = all.filter(f => f.name === oldPrefix || f.name.startsWith(oldPrefix));
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      for (const f of toCopy) {
+        const newName = f.name === oldPrefix ? newPrefix : newPrefix + f.name.slice(oldPrefix.length);
+        store.put({ name: newName, data: f.data.slice(0), addedAt: Date.now() } satisfies StoredFile);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } else {
+    const f = all.find(s => s.name === sourceName);
+    if (!f) return;
+    await addFile(destName, f.data.slice(0));
+  }
+}
+
 export async function getItemsInFolder(prefix: string): Promise<StoredFile[]> {
   const all = await getAllFiles();
   return all.filter(f => {

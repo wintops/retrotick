@@ -5,6 +5,8 @@ import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles,
 import type { Emulator } from '../lib/emu/emulator';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
+import type { ClipboardState } from '../hooks/useClipboard';
+import { useRubberBand } from '../hooks/useRubberBand';
 import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
 import { MenuDropdown } from './win2k/MenuBar';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
@@ -16,24 +18,90 @@ interface Props {
   onViewResources: (arrayBuffer: ArrayBuffer, fileName?: string) => void;
   onOpenFolder: (path: string) => void;
   onShowDisplayProperties?: () => void;
+  clipboard: ClipboardState | null;
+  onCut: (items: string[], prefix: string) => void;
+  onCopy: (items: string[], prefix: string) => void;
+  onPaste: (prefix: string) => Promise<void>;
 }
 
-export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplayProperties }: Props) {
+export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplayProperties, clipboard, onCut, onCopy, onPaste }: Props) {
   const fetchItems = useCallback(() => getRootItems(), []);
   const fm = useFolderTools('', fetchItems);
   const [dragOver, setDragOver] = useState(false);
   const desktopRef = useRef<HTMLDivElement>(null);
 
+  const selectedArray = [...fm.selected];
+
+  const { rect: rubberRect, onPointerDown: onRubberBandDown, consumeDrag } = useRubberBand(
+    desktopRef,
+    useCallback((names: Set<string>) => fm.setSelection(names), [fm.setSelection]),
+  );
+
   function handleKeyDown(e: KeyboardEvent) {
-    if (!fm.selected || fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
-    if (e.key === 'F2') {
+    if (fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
+    const { key } = e;
+
+    if (e.ctrlKey && key === 'a') {
       e.preventDefault();
-      fm.setEditingName(fm.selected);
-    } else if (e.key === 'Delete') {
+      fm.selectAll();
+      return;
+    }
+    if (e.ctrlKey && key === 'x' && fm.selected.size > 0) {
       e.preventDefault();
-      fm.setConfirmDelete(fm.selected);
+      onCut([...fm.selected], '');
+      return;
+    }
+    if (e.ctrlKey && key === 'c' && fm.selected.size > 0) {
+      e.preventDefault();
+      onCopy([...fm.selected], '');
+      return;
+    }
+    if (e.ctrlKey && key === 'v') {
+      e.preventDefault();
+      onPaste('').then(() => fm.loadItems());
+      return;
+    }
+    if (key === 'Enter' && fm.selected.size === 1) {
+      e.preventDefault();
+      const name = [...fm.selected][0];
+      const item = fm.items.find(i => i.name === name);
+      if (item) handleOpen(item.name, item.isFolder);
+      return;
+    }
+    if (key === 'F2' && fm.selected.size === 1) {
+      e.preventDefault();
+      fm.setEditingName([...fm.selected][0]);
+      return;
+    }
+    if (key === 'Delete' && fm.selected.size > 0) {
+      e.preventDefault();
+      fm.setConfirmDelete([...fm.selected]);
+      return;
+    }
+    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
+      e.preventDefault();
+      if (fm.items.length === 0) return;
+      if (fm.selected.size === 0) { fm.selectOne(fm.items[0].name); return; }
+      const anchor = fm.anchor || [...fm.selected][0];
+      const idx = fm.items.findIndex(i => i.name === anchor);
+      if (idx === -1) { fm.selectOne(fm.items[0].name); return; }
+      const el = desktopRef.current;
+      const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
+      let next = idx;
+      if (key === 'ArrowLeft') next = Math.max(0, idx - 1);
+      else if (key === 'ArrowRight') next = Math.min(fm.items.length - 1, idx + 1);
+      else if (key === 'ArrowUp') next = Math.max(0, idx - cols);
+      else if (key === 'ArrowDown') next = Math.min(fm.items.length - 1, idx + cols);
+      if (e.shiftKey) {
+        fm.selectRange(fm.items[next].name);
+      } else {
+        fm.selectOne(fm.items[next].name);
+      }
     }
   }
+
+  // Focus desktop on mount so arrow keys work immediately
+  useEffect(() => { desktopRef.current?.focus(); }, []);
 
   // Auto-open from URL param on first load
   useEffect(() => {
@@ -49,16 +117,20 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     e.preventDefault();
     setDragOver(false);
 
-    const internalPath = e.dataTransfer?.getData(INTERNAL_MIME);
-    if (internalPath) {
-      const dName = displayName(internalPath);
-      const isDir = isFolder(internalPath);
-      const newName = isDir ? dName + '/' : dName;
-      if (internalPath !== newName) {
-        await renameEntry(internalPath, newName);
-        await fm.loadItems();
-        window.dispatchEvent(new Event('desktop-files-changed'));
+    const raw = e.dataTransfer?.getData(INTERNAL_MIME);
+    if (raw) {
+      let paths: string[];
+      try { paths = JSON.parse(raw); } catch { paths = [raw]; }
+      for (const internalPath of paths) {
+        const dName = displayName(internalPath);
+        const isDir = isFolder(internalPath);
+        const newName = isDir ? dName + '/' : dName;
+        if (internalPath !== newName) {
+          await renameEntry(internalPath, newName);
+        }
       }
+      await fm.loadItems();
+      window.dispatchEvent(new Event('desktop-files-changed'));
       return;
     }
 
@@ -96,13 +168,17 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     if (f) onViewResources(f.data, name);
   }
 
+  const isCutSource = clipboard?.mode === 'cut' && clipboard.sourcePrefix === '';
+  const cutSet = isCutSource ? new Set(clipboard!.items) : null;
+
   return (
     <div
       ref={desktopRef}
       tabIndex={-1}
       class="w-full select-none"
       style={{ minHeight: '100%', outline: 'none' }}
-      onClick={() => { if (fm.confirmDelete) return; fm.setSelected(null); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+      onClick={() => { if (fm.confirmDelete || consumeDrag()) return; fm.clearSelection(); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+      onPointerDown={onRubberBandDown}
       onKeyDown={handleKeyDown}
       onContextMenu={(e: MouseEvent) => {
         if (fm.confirmDelete) { e.preventDefault(); return; }
@@ -119,6 +195,9 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       {dragOver && (
         <div class="absolute inset-0 z-50 pointer-events-none" style={{ background: 'rgba(0,0,0,0.15)' }} />
       )}
+      {rubberRect && (
+        <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #FFF', background: 'rgba(0,0,128,0.2)', zIndex: 40 }} />
+      )}
 
       <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
         {fm.items.map(f => (
@@ -129,13 +208,24 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
             iconUrl={f.iconUrl}
             isFolder={f.isFolder}
             isExe={f.isExe}
-            selected={fm.selected === f.name}
+            selected={fm.selected.has(f.name)}
             editing={fm.editingName === f.name}
-            onSelect={() => { fm.setSelected(f.name); desktopRef.current?.focus(); }}
+            isCut={cutSet?.has(f.name)}
+            selectedPaths={selectedArray}
+            onSelect={(e) => {
+              if (e.ctrlKey) fm.selectToggle(f.name);
+              else if (e.shiftKey) fm.selectRange(f.name);
+              else fm.selectOne(f.name);
+              desktopRef.current?.focus();
+            }}
             onOpen={() => handleOpen(f.name, f.isFolder)}
             onRename={(newName) => fm.handleRename(f.name, newName)}
-            onContextMenu={(e: MouseEvent) => { fm.setBgContextMenu(null); fm.setContextMenu({ x: e.clientX, y: e.clientY, item: f }); }}
-            onDropOnIcon={(draggedPath) => fm.handleDropOnFolder(f.name, draggedPath)}
+            onContextMenu={(e: MouseEvent) => {
+              fm.setBgContextMenu(null);
+              if (!fm.selected.has(f.name)) fm.selectOne(f.name);
+              fm.setContextMenu({ x: e.clientX, y: e.clientY, item: f });
+            }}
+            onDropOnIcon={(paths) => fm.handleDropOnFolder(f.name, paths)}
             onDropExternalOnIcon={(e) => fm.handleExternalDropOnFolder(f.name, e)}
           />
         ))}
@@ -149,7 +239,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
 
       {/* Background context menu */}
       {fm.bgContextMenu && (() => {
-        const CMD_NEW_FOLDER = 1, CMD_REFRESH = 2, CMD_PROPERTIES = 3;
+        const CMD_NEW_FOLDER = 1, CMD_PASTE = 2, CMD_REFRESH = 3, CMD_PROPERTIES = 4;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
@@ -160,6 +250,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
               items={[
                 mi(CMD_NEW_FOLDER, t().newFolder),
                 sep,
+                mi(CMD_PASTE, t().paste, { isGrayed: !clipboard }),
+                sep,
                 mi(CMD_REFRESH, t().refresh),
                 { ...sep },
                 mi(CMD_PROPERTIES, t().properties),
@@ -168,6 +260,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
               onCommand={(id) => {
                 fm.setBgContextMenu(null);
                 if (id === CMD_NEW_FOLDER) fm.handleNewFolder();
+                else if (id === CMD_PASTE) onPaste('').then(() => fm.loadItems());
                 else if (id === CMD_REFRESH) { fm.setItems([]); setTimeout(fm.loadItems, 60); }
                 else if (id === CMD_PROPERTIES) onShowDisplayProperties?.();
               }}
@@ -180,28 +273,35 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       {/* File context menu */}
       {fm.contextMenu && (() => {
         const { item } = fm.contextMenu;
+        const multi = fm.selected.size > 1;
         const isScr = item.name.toLowerCase().endsWith('.scr');
-        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_DELETE = 4, CMD_RENAME = 5, CMD_PROPS = 6;
+        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_CUT = 4, CMD_COPY = 5, CMD_DELETE = 6, CMD_RENAME = 7, CMD_PROPS = 8;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
         const menuItems: MenuItem[] = [];
         if (item.isFolder) {
-          menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true }));
-          menuItems.push(mi(CMD_RENAME, t().rename));
+          menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true, isGrayed: multi }));
+          menuItems.push(sep);
+          menuItems.push(mi(CMD_CUT, t().cut));
+          menuItems.push(mi(CMD_COPY, t().copy_));
           menuItems.push(sep);
           menuItems.push(mi(CMD_DELETE, t().delete_));
+          menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
         } else {
-          if (item.isExe) menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true }));
-          if (isScr && item.isExe) menuItems.push(mi(CMD_CONFIGURE, t().configure));
-          menuItems.push(mi(CMD_VIEW, t().viewResources, { isDefault: !item.isExe }));
-          menuItems.push(mi(CMD_RENAME, t().rename));
+          if (item.isExe) menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true, isGrayed: multi }));
+          if (isScr && item.isExe) menuItems.push(mi(CMD_CONFIGURE, t().configure, { isGrayed: multi }));
+          menuItems.push(mi(CMD_VIEW, t().viewResources, { isDefault: !item.isExe, isGrayed: multi }));
+          menuItems.push(sep);
+          menuItems.push(mi(CMD_CUT, t().cut));
+          menuItems.push(mi(CMD_COPY, t().copy_));
           menuItems.push(sep);
           menuItems.push(mi(CMD_DELETE, t().delete_));
+          menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
         }
         menuItems.push({ ...sep });
-        menuItems.push(mi(CMD_PROPS, t().properties));
+        menuItems.push(mi(CMD_PROPS, t().properties, { isGrayed: multi }));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -212,8 +312,10 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
                 if (id === CMD_OPEN) handleOpen(item.name, item.isFolder);
                 else if (id === CMD_CONFIGURE) runExeWithArgs(item.name, '/c');
                 else if (id === CMD_VIEW) handleViewResources(item.name);
-                else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.setSelected(item.name); }
-                else if (id === CMD_DELETE) { fm.setConfirmDelete(item.name); fm.setContextMenu(null); }
+                else if (id === CMD_CUT) onCut([...fm.selected], '');
+                else if (id === CMD_COPY) onCopy([...fm.selected], '');
+                else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
+                else if (id === CMD_DELETE) { fm.setConfirmDelete([...fm.selected]); fm.setContextMenu(null); }
                 else if (id === CMD_PROPS) fm.setPropertiesItem(item);
               }}
               onClose={() => fm.setContextMenu(null)}
@@ -224,7 +326,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
 
       {fm.confirmDelete && (
         <DeleteConfirmDialog
-          name={fm.confirmDelete}
+          names={fm.confirmDelete}
           flashTrigger={fm.confirmFlash}
           onConfirm={() => fm.handleDelete(fm.confirmDelete!)}
           onCancel={() => fm.setConfirmDelete(null)}
