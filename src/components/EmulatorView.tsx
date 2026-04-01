@@ -569,27 +569,6 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
       });
 
-      // Enable WASM JIT if configured in DOS Settings
-      if (emu.isDOS) emu.wasmJitEnabled = loadDosSettings().jitEnabled;
-
-      // Assign shared AudioContext — created in App during user gesture
-      if (sharedAudioContext) {
-        emu.audioContext = sharedAudioContext;
-        if (emu.isDOS) emu.dosAudio.init(sharedAudioContext);
-      }
-
-      // Console app detection
-      if (emu.isConsole) {
-        setIsConsole(true);
-        setWindowReady(true);
-        if (!emu.consoleTitle) emu.consoleTitle = emu.exePath;
-        setWindowTitle(emu.consoleTitle);
-        onTitleChange?.(emu.consoleTitle);
-        setWindowStyle(WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX);
-        setCanvasSize({ w: 640, h: 480 });
-        onReady?.();
-      }
-
       emu.onConsoleTitleChange = () => {
         setWindowTitle(emu.consoleTitle);
         onTitleChange?.(emu.consoleTitle);
@@ -771,6 +750,27 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Load registry from IndexedDB then start
       initAndRun().then(() => {
+        // Enable WASM JIT if configured in DOS Settings
+        if (emu.isDOS) emu.wasmJitEnabled = loadDosSettings().jitEnabled;
+
+        // Assign shared AudioContext — created in App during user gesture
+        if (sharedAudioContext) {
+          emu.audioContext = sharedAudioContext;
+          if (emu.isDOS) emu.dosAudio.init(sharedAudioContext);
+        }
+
+        // Console app detection (must be after load() which sets isDOS/isConsole)
+        if (emu.isConsole) {
+          setIsConsole(true);
+          setWindowReady(true);
+          if (!emu.consoleTitle) emu.consoleTitle = emu.exePath;
+          setWindowTitle(emu.consoleTitle);
+          onTitleChange?.(emu.consoleTitle);
+          setWindowStyle(WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX);
+          setCanvasSize({ w: 640, h: 480 });
+          onReady?.();
+        }
+
         emu.run();
         if (emu.missingDlls.length > 0) {
           const s = t();
