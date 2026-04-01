@@ -53,10 +53,23 @@ export function EmulatorDialog({ info, emuRef, onDismiss, focused = true, flashT
     if (initialPos) setVisible(true);
   }, [initialPos]);
 
+  // Focus the first EDIT control when dialog becomes visible
+  useEffect(() => {
+    if (!visible || !measureRef.current) return;
+    const input = measureRef.current.querySelector('textarea, input') as HTMLElement | null;
+    if (input) {
+      input.focus();
+      if ('select' in input) (input as HTMLInputElement).select();
+    }
+  }, [visible]);
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); onDismiss(1, info.controlValues); }
+    if (e.key === 'Escape') { e.preventDefault(); onDismiss(2, info.controlValues); }
+  };
 
   return (
-    <div ref={measureRef} onClick={(e) => e.stopPropagation()} style={{ visibility: visible ? 'visible' : 'hidden', position: 'absolute', font: '12px/1 "Tahoma",sans-serif' }}>
+    <div ref={measureRef} onClick={(e) => e.stopPropagation()} onKeyDownCapture={handleKeyDown} style={{ visibility: visible ? 'visible' : 'hidden', position: 'absolute', font: '12px/1 "Tahoma",sans-serif' }}>
       <Window
         title={info.title}
         style={info.style | WS_DLGFRAME}
