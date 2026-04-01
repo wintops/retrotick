@@ -485,6 +485,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }, 500);
       };
       emu.profileStore = profStore;
+
+      // Populate virtual filesystem before load() so NE DLL PATH search can find files
+      const allFiles = await getAllFiles();
+      emu.fs.virtualFiles = allFiles.map(f => ({ name: f.name, size: f.data.byteLength }));
+      const cache = (emu.fs as any).virtualFileCache as Map<string, ArrayBuffer> | undefined;
+      if (cache) {
+        for (const f of allFiles) cache.set(f.name.toUpperCase(), f.data);
+      }
+
+      await emu.load(arrayBuffer, peInfo, canvas);
     };
 
     try {
@@ -517,9 +527,30 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       }
       emu.screenWidth = window.innerWidth;
       emu.screenHeight = window.innerHeight;
+
+      // Wire up async file I/O to IndexedDB via FileManager (before load() so
+      // NE DLL loading can fetch DLLs from PATH directories in IndexedDB)
+      emu.fs.onFileRequest = (fileName: string) => getFile(fileName);
+      emu.fs.onFileSave = (fileName: string, data: ArrayBuffer) => {
+        addFile(fileName, data).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
+      };
+      emu.fs.onFileDelete = (fileName: string) => {
+        deleteFile(fileName).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
+      };
+
+      // Wire up browser download for Z:\ file save
+      emu.fs.onFileSaveExternal = (name, data) => {
+        const blob = new Blob([data]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+
       onSetupEmulator?.(emu);
 
-      emu.load(arrayBuffer, peInfo, canvas);
       emuRef.current = emu;
       onRegisterCloseHandler?.(() => {
         if (emu.mainWindow) {
@@ -554,36 +585,6 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         setWindowTitle(emu.consoleTitle);
         onTitleChange?.(emu.consoleTitle);
       };
-
-      // Wire up async file I/O to IndexedDB via FileManager
-      emu.fs.onFileRequest = (fileName: string) => getFile(fileName);
-      emu.fs.onFileSave = (fileName: string, data: ArrayBuffer) => {
-        addFile(fileName, data).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
-      };
-      emu.fs.onFileDelete = (fileName: string) => {
-        deleteFile(fileName).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
-      };
-
-      // Wire up browser download for Z:\ file save
-      emu.fs.onFileSaveExternal = (name, data) => {
-        const blob = new Blob([data]);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      };
-
-      // Populate virtual filesystem with desktop files (for all app types)
-      getAllFiles().then(files => {
-        emu.fs.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
-        // Pre-populate data cache so file reads don't need another IndexedDB round-trip
-        const cache = (emu.fs as any).virtualFileCache as Map<string, ArrayBuffer> | undefined;
-        if (cache) {
-          for (const f of files) cache.set(f.name.toUpperCase(), f.data);
-        }
-      });
 
       // Listen for window changes from emulator
       emu.onWindowChange = (wnd: WindowInfo) => {
@@ -658,7 +659,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       };
 
       // Child console process from console parent: run in-process, share console
-      emu.onCreateChildConsole = (childExeName: string, childCmdLine: string, hProcess: number) => {
+      emu.onCreateChildConsole = async (childExeName: string, childCmdLine: string, hProcess: number) => {
         const lowerName = childExeName.toLowerCase();
         let childData: ArrayBuffer | undefined;
         let childFileName = childExeName;
@@ -701,7 +702,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
 
         // Load child (this creates its own consoleBuffer via initConsoleBuffer)
-        childEmu.load(childData, childPeInfo, canvas);
+        await childEmu.load(childData, childPeInfo, canvas);
         if (childEmu.isDOS) childEmu.wasmJitEnabled = loadDosSettings().jitEnabled;
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
