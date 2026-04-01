@@ -287,6 +287,12 @@ export function registerMessage(emu: Emulator): void {
     const trackPaint = message === WM_PAINT && hwnd === emu.mainWindow;
     if (trackPaint) { emu._dispatchPaintUsedBeginPaint = false; }
 
+    // For built-in controls (wndProc=0), handle the message internally
+    if (!wnd.wndProc) {
+      const builtin = handleBuiltinMessage(hwnd, message, wParam, lParam);
+      return builtin ?? 0;
+    }
+
     // Call WndProc via stack frame replacement
     const ret = emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam);
     if (ret === undefined) return undefined; // deferred — post-processing skipped
@@ -483,10 +489,12 @@ export function registerMessage(emu: Emulator): void {
       }
       if (newTitle !== wnd.title) {
         wnd.title = newTitle;
+        if (wnd.domInput) wnd.domInput.value = newTitle;
         if (wnd.parent && wnd.parent === emu.mainWindow) {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
       return 1;
     }
@@ -516,11 +524,13 @@ export function registerMessage(emu: Emulator): void {
     }
 
     if (message === WM_GETTEXTLENGTH) {
+      const text = wnd.title || '';
+      // For EDIT controls, return length with \r\n line endings (matching EM_GETHANDLE buffer)
       const cls = (wnd.classInfo?.baseClassName || wnd.classInfo?.className || '').toUpperCase();
       if (cls === 'EDIT') {
-        console.log(`[EDIT] WM_GETTEXTLENGTH hwnd=0x${hwnd.toString(16)} len=${(wnd.title || '').length}`);
+        return text.replace(/\r?\n/g, '\r\n').length;
       }
-      return (wnd.title || '').length;
+      return text.length;
     }
 
     // BM_SETCHECK (0x00F1)
@@ -750,12 +760,107 @@ export function registerMessage(emu: Emulator): void {
         }
         return 0;
       }
+      // EM_SETHANDLE: set the edit control's text buffer (used by Notepad)
+      const EM_SETHANDLE = 0x00BC;
+      const EM_GETHANDLE = 0x00BD;
+      if (message === EM_SETHANDLE) {
+        const handle = wParam;
+        if (handle) {
+          // wParam is a local memory handle — in our emulator it's a direct pointer
+          // Read UTF-16 string from the buffer
+          const newText = emu.memory.readUTF16String(handle);
+          wnd.title = newText;
+          if (wnd.domInput) wnd.domInput.value = newText;
+          wnd.editBufferHandle = handle;
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+      if (message === EM_GETHANDLE) {
+        // Sync current text (possibly edited via DOM) back to x86 memory buffer
+        let handle = wnd.editBufferHandle;
+        if (handle && wnd.title !== undefined) {
+          // DOM textarea uses \n, but Win32 Edit buffer expects \r\n
+          const text = wnd.title.replace(/\r?\n/g, '\r\n');
+          const neededBytes = (text.length + 1) * 2; // UTF-16 + null
+          // Reallocate if buffer is too small
+          const currentSize = emu.heapSize(handle);
+          if (currentSize < neededBytes) {
+            handle = emu.reallocHeap(handle, neededBytes);
+            wnd.editBufferHandle = handle;
+          }
+          // Write UTF-16 text to buffer
+          for (let i = 0; i < text.length; i++) {
+            emu.memory.writeU16(handle + i * 2, text.charCodeAt(i));
+          }
+          emu.memory.writeU16(handle + text.length * 2, 0);
+        }
+        return handle || 0;
+      }
+      // Clipboard messages for EDIT controls
+      const WM_CUT = 0x0300, WM_COPY = 0x0301, WM_PASTE = 0x0302, WM_CLEAR = 0x0303;
+      if (message === WM_COPY || message === WM_CUT) {
+        const start = wnd.editSelStart ?? 0;
+        const end = wnd.editSelEnd ?? 0;
+        const s = Math.min(start, end), e = Math.max(start, end);
+        if (s !== e) {
+          emu._clipboardText = text.substring(s, e);
+          if (message === WM_CUT) {
+            wnd.title = text.substring(0, s) + text.substring(e);
+            wnd.editSelStart = s;
+            wnd.editSelEnd = s;
+            wnd.editModified = true;
+            if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = s; }
+            emu.notifyControlOverlays();
+          }
+        }
+        return 0;
+      }
+      if (message === WM_PASTE) {
+        if (emu._clipboardText) {
+          const start = wnd.editSelStart ?? text.length;
+          const end = wnd.editSelEnd ?? text.length;
+          const s = Math.min(start, end), e = Math.max(start, end);
+          const newText = text.substring(0, s) + emu._clipboardText + text.substring(e);
+          wnd.title = newText;
+          const newPos = s + emu._clipboardText.length;
+          wnd.editSelStart = newPos;
+          wnd.editSelEnd = newPos;
+          wnd.editModified = true;
+          if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = newPos; }
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+      if (message === WM_CLEAR) {
+        const start = wnd.editSelStart ?? 0;
+        const end = wnd.editSelEnd ?? 0;
+        const s = Math.min(start, end), e = Math.max(start, end);
+        if (s !== e) {
+          wnd.title = text.substring(0, s) + text.substring(e);
+          wnd.editSelStart = s;
+          wnd.editSelEnd = s;
+          wnd.editModified = true;
+          if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = s; }
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+
       if (message === EM_EMPTYUNDOBUFFER) return 0;
       if (message === EM_CANUNDO) return 0; // no undo support
       if (message === EM_UNDO) return 0;
       if (message === EM_GETFIRSTVISIBLELINE) return 0;
       if (message === EM_SCROLL) return 0;
-      if (message === EM_SCROLLCARET) return 0;
+      if (message === EM_SCROLLCARET) {
+        if (wnd.domInput) {
+          // Focus + setSelectionRange scrolls the textarea to show the caret
+          wnd.domInput.focus();
+          const pos = wnd.editSelStart ?? 0;
+          wnd.domInput.setSelectionRange(pos, wnd.editSelEnd ?? pos);
+        }
+        return 0;
+      }
       if (message === EM_SETMARGINS) return 0;
       if (message === EM_GETMARGINS) return 0;
     }
@@ -1796,6 +1901,7 @@ export function registerMessage(emu: Emulator): void {
         || (message >= 0x00B0 && message <= 0x00D5) // EM_* Edit control messages
         || (message >= 0x0180 && message <= 0x01B3) // LB_* ListBox messages
         || (message >= 0x0140 && message <= 0x0163) // CB_* ComboBox messages
+        || (message >= 0x0300 && message <= 0x0303) // WM_CUT/WM_COPY/WM_PASTE/WM_CLEAR
         || message >= 0x1000)) { // Common control messages
       return builtin;
     }
@@ -1836,10 +1942,12 @@ export function registerMessage(emu: Emulator): void {
       const newTitle = emu.memory.readUTF16String(lParam);
       if (newTitle !== wnd.title) {
         wnd.title = newTitle;
+        if (wnd.domInput) wnd.domInput.value = newTitle;
         if (wnd.parent && wnd.parent === emu.mainWindow) {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
       // Forward WM_SETTEXT to custom controls so they update their internal state
       if (wnd.wndProc) {
@@ -1860,7 +1968,13 @@ export function registerMessage(emu: Emulator): void {
     }
 
     if (message === WM_GETTEXTLENGTH) {
-      return (wnd.title || '').length;
+      const text = wnd.title || '';
+      // For EDIT controls, return length with \r\n line endings (matching EM_GETHANDLE buffer)
+      const cls = (wnd.classInfo?.baseClassName || wnd.classInfo?.className || '').toUpperCase();
+      if (cls === 'EDIT') {
+        return text.replace(/\r?\n/g, '\r\n').length;
+      }
+      return text.length;
     }
 
     if (!wnd.wndProc) {
@@ -1877,6 +1991,7 @@ export function registerMessage(emu: Emulator): void {
         || (message >= 0x00B0 && message <= 0x00D5) // EM_* Edit control messages
         || (message >= 0x0180 && message <= 0x01B3) // LB_* ListBox messages
         || (message >= 0x0140 && message <= 0x0163) // CB_* ComboBox messages
+        || (message >= 0x0300 && message <= 0x0303) // WM_CUT/WM_COPY/WM_PASTE/WM_CLEAR
         || message >= 0x1000)) { // Common control messages (ListView, TabControl, TreeView, etc.)
       return builtin;
     }

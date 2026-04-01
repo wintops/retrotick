@@ -1,6 +1,7 @@
 import { type Emulator, getNextCascadePos } from '../../emulator';
 import type { WindowInfo } from './types';
 import { getClientSize, clampToMinTrackSize } from './_helpers';
+import { buildMenuHandleTree } from './menu';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
   WM_SIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
@@ -82,13 +83,18 @@ export function registerCreateWindow(emu: Emulator): void {
       ownerThreadId: emu.currentThread?.id,
     };
 
+    // Auto-load menu from class menuName if hMenu=0 for non-child windows
+    const WS_CHILD = 0x40000000;
+    if (!hMenu && !(style & WS_CHILD) && cls.menuName && emu.menuItems) {
+      wnd.hMenu = buildMenuHandleTree(emu, emu.menuItems);
+    }
+
     const hwnd = emu.handles.alloc('window', wnd);
     wnd.hwnd = hwnd;
 
     console.log(`[WND] CreateWindowExA class="${className}" title="${title}" hwnd=0x${hwnd.toString(16)} pos=${x},${y} size=${width}x${height} parent=0x${hParent.toString(16)} style=0x${style.toString(16)}`);
 
     // Register as child of parent window
-    const WS_CHILD = 0x40000000;
     const WS_POPUP = 0x80000000;
     if (hParent && (style & WS_CHILD)) {
       const parentWnd = emu.handles.get<WindowInfo>(hParent);
@@ -200,7 +206,12 @@ export function registerCreateWindow(emu: Emulator): void {
       if ((height | 0) === (CW_USEDEFAULT | 0)) height = 240;
       if (y === (CW_USEDEFAULT | 0)) y = 0;
     }
+    // Clamp absurd sizes (e.g. from corrupted registry data)
+    const maxDim = Math.max(emu.screenWidth, emu.screenHeight, 1024) * 2;
+    if (width > maxDim) width = 320;
+    if (height > maxDim) height = 240;
 
+    const WS_CHILD_W = 0x40000000;
 
     const wnd: WindowInfo = {
       hwnd: 0, classInfo: cls,
@@ -214,13 +225,17 @@ export function registerCreateWindow(emu: Emulator): void {
       ownerThreadId: emu.currentThread?.id,
     };
 
+    // Auto-load menu from class menuName if hMenu=0 for non-child windows
+    if (!hMenu && !(style & WS_CHILD_W) && cls.menuName && emu.menuItems) {
+      wnd.hMenu = buildMenuHandleTree(emu, emu.menuItems);
+    }
+
     const hwnd = emu.handles.alloc('window', wnd);
     wnd.hwnd = hwnd;
 
     console.log(`[WND] CreateWindowExW class="${className}" title="${title}" hwnd=0x${hwnd.toString(16)} size=${width}x${height} parent=0x${hParent.toString(16)} style=0x${style.toString(16)}`);
 
     // Register as child of parent window
-    const WS_CHILD_W = 0x40000000;
     if (hParent && (style & WS_CHILD_W)) {
       const parentWnd = emu.handles.get<WindowInfo>(hParent);
       if (parentWnd) {
@@ -385,6 +400,11 @@ export function registerCreateWindow(emu: Emulator): void {
       // Mark window as needing paint (WM_PAINT synthesized by GetMessage)
       wnd.needsPaint = true;
       wnd.needsErase = true;
+    }
+
+    // Refresh control overlays when child window visibility changes
+    if (wnd.visible !== wasVisible && (wnd.style & WS_CHILD)) {
+      emu.notifyControlOverlays();
     }
 
     return wasVisible ? 1 : 0;

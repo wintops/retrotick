@@ -27,6 +27,7 @@ import { MessageBox, MB_YESNO, MB_ICONQUESTION, IDYES } from './win2k/MessageBox
 import { ProcessRegistry } from '../lib/emu/emulator';
 import type { Emulator } from '../lib/emu/emulator';
 import { displayName } from '../lib/file-store';
+import { useClipboard } from '../hooks/useClipboard';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
 import { t } from '../lib/regional-settings';
 import { DisplayPropertiesDialog } from './DisplayPropertiesDialog';
@@ -110,6 +111,7 @@ export function App() {
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
   const { createUrl } = useBlobUrls();
+  const { clipboard, cut: clipCut, copy: clipCopy, paste: clipPaste } = useClipboard();
   const audioContextRef = useRef<AudioContext | null>(null);
 
   /** Get or create the shared AudioContext. */
@@ -355,7 +357,8 @@ export function App() {
           } : {}),
         }} onPointerDown={() => setFocusedAppId(null)}>
           <Desktop onRunExe={handleRunExe} onViewResources={handleViewResources} onOpenFolder={handleOpenFolder}
-            onShowDisplayProperties={() => setShowDisplayProperties(true)} />
+            onShowDisplayProperties={() => setShowDisplayProperties(true)}
+            clipboard={clipboard} onCut={clipCut} onCopy={clipCopy} onPaste={clipPaste} />
         </div>
         {runningApps.map((app) => (
           <EmulatorView
@@ -409,6 +412,7 @@ export function App() {
             zIndex={getZIndex(folder.id)}
             focused={focusedAppId === folder.id}
             minimized={minimizedApps.has(folder.id)}
+            clipboard={clipboard} onCut={clipCut} onCopy={clipCopy} onPaste={clipPaste}
           />
         ))}
         {showWelcome && (

@@ -8,6 +8,8 @@ import {
 } from '../lib/file-store';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
+import type { ClipboardState } from '../hooks/useClipboard';
+import { useRubberBand } from '../hooks/useRubberBand';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { PropertiesDialog } from './PropertiesDialog';
 import type { PEInfo } from '../lib/pe';
@@ -29,16 +31,100 @@ interface FolderWindowProps {
   zIndex: number;
   focused: boolean;
   minimized: boolean;
+  clipboard: ClipboardState | null;
+  onCut: (items: string[], prefix: string) => void;
+  onCopy: (items: string[], prefix: string) => void;
+  onPaste: (prefix: string) => Promise<void>;
 }
 
 export function FolderWindow({
   folderPath, onStop, onFocus, onMinimize, onOpenFolder,
   onRunExe, onViewResources, zIndex, focused, minimized,
+  clipboard, onCut, onCopy, onPaste,
 }: FolderWindowProps) {
   const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
   const folderDisplayName = displayName(folderPath);
   const fetchItems = useCallback(() => getItemsInFolder(prefix), [prefix]);
   const fm = useFolderTools(prefix, fetchItems);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const selectedArray = [...fm.selected];
+
+  const { rect: rubberRect, onPointerDown: onRubberBandDown, consumeDrag } = useRubberBand(
+    contentRef,
+    useCallback((names: Set<string>) => fm.setSelection(names), [fm.setSelection]),
+  );
+
+  // Focus content area when the window becomes focused
+  useEffect(() => {
+    if (focused && !minimized) contentRef.current?.focus();
+  }, [focused, minimized]);
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
+    const { key } = e;
+
+    if (e.ctrlKey && key === 'a') {
+      e.preventDefault();
+      fm.selectAll();
+      return;
+    }
+    if (e.ctrlKey && key === 'x' && fm.selected.size > 0) {
+      e.preventDefault();
+      onCut([...fm.selected], prefix);
+      return;
+    }
+    if (e.ctrlKey && key === 'c' && fm.selected.size > 0) {
+      e.preventDefault();
+      onCopy([...fm.selected], prefix);
+      return;
+    }
+    if (e.ctrlKey && key === 'v') {
+      e.preventDefault();
+      onPaste(prefix).then(() => fm.loadItems());
+      return;
+    }
+    if (key === 'Enter' && fm.selected.size === 1) {
+      e.preventDefault();
+      const name = [...fm.selected][0];
+      const item = fm.items.find(i => i.name === name);
+      if (item) handleOpen(item);
+      return;
+    }
+    if (key === 'F2' && fm.selected.size === 1) {
+      e.preventDefault();
+      fm.setEditingName([...fm.selected][0]);
+      return;
+    }
+    if (key === 'Delete' && fm.selected.size > 0) {
+      e.preventDefault();
+      fm.setConfirmDelete([...fm.selected]);
+      return;
+    }
+    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
+      e.preventDefault();
+      if (fm.items.length === 0) return;
+      if (fm.selected.size === 0) { fm.selectOne(fm.items[0].name); return; }
+      const anchor = fm.anchor || [...fm.selected][0];
+      const idx = fm.items.findIndex(i => i.name === anchor);
+      if (idx === -1) { fm.selectOne(fm.items[0].name); return; }
+      const el = contentRef.current;
+      const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
+      let next = idx;
+      if (key === 'ArrowLeft') next = Math.max(0, idx - 1);
+      else if (key === 'ArrowRight') next = Math.min(fm.items.length - 1, idx + 1);
+      else if (key === 'ArrowUp') next = Math.max(0, idx - cols);
+      else if (key === 'ArrowDown') next = Math.min(fm.items.length - 1, idx + cols);
+      if (e.shiftKey) {
+        fm.selectRange(fm.items[next].name);
+      } else {
+        fm.selectOne(fm.items[next].name);
+      }
+      const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(fm.items[next].name)}"]`);
+      icon?.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   const [windowPos, setWindowPos] = useState({ x: 80 + Math.random() * 60, y: 40 + Math.random() * 40 });
   const [clientSize, setClientSize] = useState({ w: CLIENT_W, h: CLIENT_H });
@@ -122,14 +208,18 @@ export function FolderWindow({
 
   async function handleBackgroundDrop(e: DragEvent) {
     e.preventDefault();
-    const internalPath = e.dataTransfer?.getData(INTERNAL_MIME);
-    if (internalPath) {
-      if (internalPath.startsWith(prefix) && !internalPath.slice(prefix.length).includes('/')) return;
-      if (isFolder(internalPath) && internalPath.slice(0, -1).startsWith(prefix) && !internalPath.slice(prefix.length, -1).includes('/')) return;
-      const dName = displayName(internalPath);
-      const isDir = isFolder(internalPath);
-      const newName = prefix + dName + (isDir ? '/' : '');
-      await renameEntry(internalPath, newName);
+    const raw = e.dataTransfer?.getData(INTERNAL_MIME);
+    if (raw) {
+      let paths: string[];
+      try { paths = JSON.parse(raw); } catch { paths = [raw]; }
+      for (const internalPath of paths) {
+        if (internalPath.startsWith(prefix) && !internalPath.slice(prefix.length).includes('/')) continue;
+        if (isFolder(internalPath) && internalPath.slice(0, -1).startsWith(prefix) && !internalPath.slice(prefix.length, -1).includes('/')) continue;
+        const dName = displayName(internalPath);
+        const isDir = isFolder(internalPath);
+        const newName = prefix + dName + (isDir ? '/' : '');
+        await renameEntry(internalPath, newName);
+      }
       await fm.loadItems();
       window.dispatchEvent(new Event('desktop-files-changed'));
       return;
@@ -143,6 +233,10 @@ export function FolderWindow({
   const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
     id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
   });
+  const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
+
+  const isCutSource = clipboard?.mode === 'cut' && clipboard.sourcePrefix === prefix;
+  const cutSet = isCutSource ? new Set(clipboard!.items) : null;
 
   return (
     <div
@@ -166,8 +260,12 @@ export function FolderWindow({
         iconElement={FOLDER_ICON_16}
       >
         <div
-          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white' }}
-          onClick={() => { fm.setSelected(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+          ref={contentRef}
+          tabIndex={-1}
+          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white', outline: 'none', position: 'relative' }}
+          onClick={() => { if (consumeDrag()) return; fm.clearSelection(); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+          onPointerDown={onRubberBandDown}
+          onKeyDown={handleKeyDown}
           onContextMenu={(e: MouseEvent) => {
             if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
               e.preventDefault();
@@ -178,6 +276,9 @@ export function FolderWindow({
           onDragOver={(e: DragEvent) => e.preventDefault()}
           onDrop={handleBackgroundDrop}
         >
+          {rubberRect && (
+            <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #000', background: 'rgba(0,0,128,0.15)', zIndex: 40 }} />
+          )}
           <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
             {fm.items.map(item => (
               <DesktopIcon
@@ -188,16 +289,24 @@ export function FolderWindow({
                 isFolder={item.isFolder}
                 isExe={item.isExe}
                 darkText
-                selected={fm.selected === item.name}
+                selected={fm.selected.has(item.name)}
                 editing={fm.editingName === item.name}
-                onSelect={() => fm.setSelected(item.name)}
+                isCut={cutSet?.has(item.name)}
+                selectedPaths={selectedArray}
+                onSelect={(e) => {
+                  if (e.ctrlKey) fm.selectToggle(item.name);
+                  else if (e.shiftKey) fm.selectRange(item.name);
+                  else fm.selectOne(item.name);
+                  contentRef.current?.focus();
+                }}
                 onOpen={() => handleOpen(item)}
                 onRename={(newName) => fm.handleRename(item.name, newName)}
                 onContextMenu={(e: MouseEvent) => {
                   fm.setBgContextMenu(null);
+                  if (!fm.selected.has(item.name)) fm.selectOne(item.name);
                   fm.setContextMenu({ x: e.clientX, y: e.clientY, item });
                 }}
-                onDropOnIcon={(draggedPath) => fm.handleDropOnFolder(item.name, draggedPath)}
+                onDropOnIcon={(paths) => fm.handleDropOnFolder(item.name, paths)}
                 onDropExternalOnIcon={(e) => fm.handleExternalDropOnFolder(item.name, e)}
               />
             ))}
@@ -212,15 +321,22 @@ export function FolderWindow({
 
       {/* Background context menu */}
       {fm.bgContextMenu && (() => {
-        const CMD_NEW_FOLDER = 1, CMD_REFRESH = 2;
+        const CMD_NEW_FOLDER = 1, CMD_PASTE = 2, CMD_REFRESH = 3;
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
-              items={[mi(CMD_NEW_FOLDER, t().newFolder), mi(CMD_REFRESH, t().refresh)]}
+              items={[
+                mi(CMD_NEW_FOLDER, t().newFolder),
+                sep,
+                mi(CMD_PASTE, t().paste, { isGrayed: !clipboard }),
+                sep,
+                mi(CMD_REFRESH, t().refresh),
+              ]}
               x={fm.bgContextMenu.x} y={fm.bgContextMenu.y}
               onCommand={(id) => {
                 fm.setBgContextMenu(null);
                 if (id === CMD_NEW_FOLDER) fm.handleNewFolder();
+                else if (id === CMD_PASTE) onPaste(prefix).then(() => fm.loadItems());
                 else if (id === CMD_REFRESH) { fm.setItems([]); setTimeout(fm.loadItems, 60); }
               }}
               onClose={() => fm.setBgContextMenu(null)}
@@ -232,16 +348,20 @@ export function FolderWindow({
       {/* Item context menu */}
       {fm.contextMenu && (() => {
         const { item } = fm.contextMenu;
-        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4, CMD_PROPS = 5;
+        const multi = fm.selected.size > 1;
+        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4, CMD_PROPS = 5, CMD_CUT = 6, CMD_COPY = 7;
         const menuItems: MenuItem[] = [
-          mi(CMD_OPEN, t().open, { isDefault: true }),
+          mi(CMD_OPEN, t().open, { isDefault: true, isGrayed: multi }),
         ];
-        if (!item.isFolder) menuItems.push(mi(CMD_VIEW, t().viewResources));
-        menuItems.push(mi(CMD_RENAME, t().rename));
-        menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
+        if (!item.isFolder) menuItems.push(mi(CMD_VIEW, t().viewResources, { isGrayed: multi }));
+        menuItems.push(sep);
+        menuItems.push(mi(CMD_CUT, t().cut));
+        menuItems.push(mi(CMD_COPY, t().copy_));
+        menuItems.push(sep);
         menuItems.push(mi(CMD_DELETE, t().delete_));
-        menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
-        menuItems.push(mi(CMD_PROPS, t().properties));
+        menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
+        menuItems.push({ ...sep });
+        menuItems.push(mi(CMD_PROPS, t().properties, { isGrayed: multi }));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -250,14 +370,16 @@ export function FolderWindow({
               onCommand={(id) => {
                 fm.setContextMenu(null);
                 if (id === CMD_OPEN) handleOpen(item);
-                else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.setSelected(item.name); }
+                else if (id === CMD_CUT) onCut([...fm.selected], prefix);
+                else if (id === CMD_COPY) onCopy([...fm.selected], prefix);
+                else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
                 else if (id === CMD_VIEW && !item.isFolder) {
                   getAllFiles().then(all => {
                     const f = all.find(s => s.name === item.name);
                     if (f) onViewResources(f.data, displayName(item.name));
                   });
                 }
-                else if (id === CMD_DELETE) fm.setConfirmDelete(item.name);
+                else if (id === CMD_DELETE) fm.setConfirmDelete([...fm.selected]);
                 else if (id === CMD_PROPS) fm.setPropertiesItem(item);
               }}
               onClose={() => fm.setContextMenu(null)}
@@ -268,7 +390,7 @@ export function FolderWindow({
 
       {fm.confirmDelete && (
         <DeleteConfirmDialog
-          name={fm.confirmDelete}
+          names={fm.confirmDelete}
           flashTrigger={fm.confirmFlash}
           onConfirm={() => fm.handleDelete(fm.confirmDelete!)}
           onCancel={() => fm.setConfirmDelete(null)}

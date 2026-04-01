@@ -68,12 +68,19 @@ export function registerComdlg32(emu: Emulator): void {
       onResult: (result) => {
         let retVal = 0;
         if (result) {
-          // If imported file with data, store in externalFiles
-          if (result.data && result.path.toUpperCase().startsWith('Z:\\')) {
-            const data = new Uint8Array(result.data);
-            emu.fs.externalFiles.set(result.path.toUpperCase(), {
-              data, name: result.path.substring(3),
-            });
+          // Store file data so CreateFile can find it later
+          if (result.data) {
+            const upperPath = result.path.toUpperCase();
+            if (upperPath.startsWith('Z:\\')) {
+              const data = new Uint8Array(result.data);
+              emu.fs.externalFiles.set(upperPath, {
+                data, name: result.path.substring(3),
+              });
+            } else if (upperPath.startsWith('D:\\')) {
+              // Cache key is the store name (relative path), not the full D:\ path
+              const storeName = result.path.substring(3).replace(/\\/g, '/');
+              emu.fs.virtualFileCache?.set(storeName.toUpperCase(), result.data);
+            }
           }
           writePathToBuffer(result.path, filePtr, nMaxFile, isWide);
           setOfnOffsets(lpOfn, result.path);
@@ -213,9 +220,58 @@ export function registerComdlg32(emu: Emulator): void {
     return 0;
   });
 
-  comdlg32.register('ReplaceTextW', 1, () => 0);
+  comdlg32.register('ReplaceTextW', 1, () => {
+    const lpFr = emu.readArg(0);
+    if (!lpFr) return 0;
+
+    const hwndOwner = emu.memory.readU32(lpFr + FR_hwndOwner);
+    const editHwnd = findEditChild(hwndOwner);
+
+    emu.findReplacePtr = lpFr;
+
+    const findDlgHwnd = emu.handles.alloc('window', {
+      classInfo: { className: '#32770' },
+      title: 'Replace', visible: true, style: 0,
+      x: 0, y: 0, width: 0, height: 0,
+    } as WindowInfo);
+
+    emu.onShowCommonDialog?.({
+      type: 'find-replace',
+      editHwnd,
+      onClose: () => {
+        if (emu.findReplacePtr) {
+          const flags = emu.memory.readU32(emu.findReplacePtr + FR_Flags);
+          emu.memory.writeU32(emu.findReplacePtr + FR_Flags, (flags & ~FR_FINDNEXT) | FR_DIALOGTERM);
+          if (emu.registerWindowMessage) {
+            const msgId = emu.registerWindowMessage(FINDMSGSTRING);
+            emu.postMessage(hwndOwner, msgId, 0, emu.findReplacePtr);
+          }
+          emu.findReplacePtr = 0;
+        }
+        emu.handles.free(findDlgHwnd);
+      },
+    });
+
+    return findDlgHwnd;
+  });
   comdlg32.register('PrintDlgExW', 1, () => 1); // E_FAIL
-  comdlg32.register('GetFileTitleW', 3, () => 0);
+  comdlg32.register('GetFileTitleW', 3, () => {
+    const lpszFile = emu.readArg(0);
+    const lpszTitle = emu.readArg(1);
+    const cchSize = emu.readArg(2);
+    if (!lpszFile) return -1;
+    const fullPath = emu.memory.readUTF16String(lpszFile);
+    // Extract filename from path (after last \ or /)
+    const lastSep = Math.max(fullPath.lastIndexOf('\\'), fullPath.lastIndexOf('/'));
+    const title = lastSep >= 0 ? fullPath.substring(lastSep + 1) : fullPath;
+    if (!lpszTitle || cchSize === 0) return title.length + 1;
+    const toWrite = title.substring(0, cchSize - 1);
+    for (let i = 0; i < toWrite.length; i++) {
+      emu.memory.writeU16(lpszTitle + i * 2, toWrite.charCodeAt(i));
+    }
+    emu.memory.writeU16(lpszTitle + toWrite.length * 2, 0);
+    return 0;
+  });
   comdlg32.register('PageSetupDlgW', 1, () => 0);
   comdlg32.register('CommDlgExtendedError', 0, () => 0);
 }

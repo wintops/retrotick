@@ -11,19 +11,21 @@ interface Props {
   isExe?: boolean;
   selected: boolean;
   editing?: boolean;
+  isCut?: boolean;
   /** Use dark text (black, no shadow) for light backgrounds like folder windows */
   darkText?: boolean;
-  onSelect: () => void;
+  selectedPaths?: string[];
+  onSelect: (e: { ctrlKey: boolean; shiftKey: boolean }) => void;
   onOpen: () => void;
   onContextMenu: (e: MouseEvent) => void;
   onRename?: (newName: string) => void;
-  onDropOnIcon?: (storePath: string) => void;  // internal item dropped onto this folder icon
-  onDropExternalOnIcon?: (e: DragEvent) => void;  // OS file dropped onto this folder icon
+  onDropOnIcon?: (storePaths: string[]) => void;
+  onDropExternalOnIcon?: (e: DragEvent) => void;
 }
 
 export { INTERNAL_MIME, FOLDER_ICON_16, EXE_ICON_16 };
 
-export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selected, editing, darkText, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
+export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selected, editing, isCut, darkText, selectedPaths, onSelect, onOpen, onContextMenu, onRename, onDropOnIcon, onDropExternalOnIcon }: Props) {
   const [lastClick, setLastClick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const [editValue, setEditValue] = useState(name);
@@ -51,27 +53,26 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
     e.stopPropagation();
     if (editing) return;
     const now = Date.now();
-    if (now - lastClick < 400) {
+    if (now - lastClick < 400 && !e.ctrlKey && !e.shiftKey) {
       onOpen();
     } else {
-      onSelect();
+      onSelect({ ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey });
     }
     setLastClick(now);
   }
 
   function handleDragStart(e: DragEvent) {
     if (editing) { e.preventDefault(); return; }
-    e.dataTransfer!.setData(INTERNAL_MIME, storePath);
+    const paths = selected && selectedPaths && selectedPaths.length > 0 ? selectedPaths : [storePath];
+    e.dataTransfer!.setData(INTERNAL_MIME, JSON.stringify(paths));
     e.dataTransfer!.effectAllowed = 'move';
   }
 
   function handleDragOver(e: DragEvent) {
     if (!isFolder) return;
-    // Accept internal drags and external file drops
     const hasInternal = e.dataTransfer!.types.includes(INTERNAL_MIME);
     const hasFiles = e.dataTransfer!.types.includes('Files');
     if (!hasInternal && !hasFiles) return;
-    // Don't allow dropping a folder onto itself
     e.preventDefault();
     e.stopPropagation();
     setFolderDragOver(true);
@@ -83,32 +84,36 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
     e.stopPropagation();
     setFolderDragOver(false);
 
-    const internalPath = e.dataTransfer!.getData(INTERNAL_MIME);
-    if (internalPath) {
+    const raw = e.dataTransfer!.getData(INTERNAL_MIME);
+    if (raw) {
+      let paths: string[];
+      try { paths = JSON.parse(raw); } catch { paths = [raw]; }
       // Don't drop onto self or into own subtree
-      if (internalPath === storePath) return;
-      if (storePath.startsWith(internalPath)) return;
-      onDropOnIcon?.(internalPath);
+      paths = paths.filter(p => p !== storePath && !storePath.startsWith(p));
+      if (paths.length > 0) onDropOnIcon?.(paths);
     } else {
       onDropExternalOnIcon?.(e);
     }
   }
 
+  const iconFilter = (selected || folderDragOver)
+    ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)' }
+    : isCut ? { opacity: 0.5 } : undefined;
+
   return (
     <div
       data-desktop-icon
+      data-store-path={storePath}
       class="flex flex-col items-center w-[75px] p-1 cursor-default select-none"
       draggable={!editing}
       onClick={handleClick}
       onDragStart={handleDragStart}
-      onContextMenu={(e: Event) => { e.preventDefault(); onSelect(); onContextMenu(e as MouseEvent); }}
+      onContextMenu={(e: Event) => { e.preventDefault(); onContextMenu(e as MouseEvent); }}
       onDragOver={handleDragOver}
       onDragLeave={() => setFolderDragOver(false)}
       onDrop={handleDrop}
     >
-      <div class="w-[32px] h-[32px] flex items-center justify-center mb-1"
-        style={(selected || folderDragOver) ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)' } : undefined}
-      >
+      <div class="w-[32px] h-[32px] flex items-center justify-center mb-1" style={iconFilter}>
         {fileIcon32(name, { isFolder, iconUrl })}
       </div>
       {editing ? (
@@ -132,6 +137,7 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
           style={{
             color: darkText ? '#000' : '#FFF',
             textShadow: darkText ? 'none' : '1px 1px 0 #000',
+            ...(isCut && !selected ? { opacity: 0.5 } : {}),
             ...(selected ? { background: '#0A246A', color: '#FFF', textShadow: 'none', outline: '1px dotted #FFF', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
           }}
         >

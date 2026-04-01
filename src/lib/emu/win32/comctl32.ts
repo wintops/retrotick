@@ -261,7 +261,7 @@ export function registerComctl32(emu: Emulator): void {
       classInfo: { className: 'msctls_statusbar32', style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0, menuName: 0 },
       wndProc: 0, parent: hwndParent,
       x: 0, y: parentCh - statusH, width: parentWnd?.width || 320, height: statusH,
-      style: style | 0x10000000, exStyle: 0, title: text, visible: true,
+      style: style | 0x40000000, exStyle: 0, title: text, visible: !!(style & 0x10000000),
       hMenu: 0, extraBytes: new Uint8Array(0), userData: 0, controlId: wID,
       statusTexts: text ? [text] : [],
     };

@@ -19,16 +19,55 @@ export interface FileItem {
 
 export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredFile[]>) {
   const [items, setItems] = useState<FileItem[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileItem } | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [confirmFlash, setConfirmFlash] = useState(0);
   const [propertiesItem, setPropertiesItem] = useState<FileItem | null>(null);
   const [propsFlash, setPropsFlash] = useState(0);
   const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
   const iconUrls = useRef<string[]>([]);
+
+  function selectOne(name: string) {
+    setSelected(new Set([name]));
+    setAnchor(name);
+  }
+
+  const setSelection = useCallback((names: Set<string>) => {
+    setSelected(names);
+  }, []);
+
+  function selectToggle(name: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+    setAnchor(name);
+  }
+
+  function selectRange(name: string) {
+    if (!anchor) { selectOne(name); return; }
+    const anchorIdx = items.findIndex(i => i.name === anchor);
+    const targetIdx = items.findIndex(i => i.name === name);
+    if (anchorIdx === -1 || targetIdx === -1) { selectOne(name); return; }
+    const lo = Math.min(anchorIdx, targetIdx);
+    const hi = Math.max(anchorIdx, targetIdx);
+    const next = new Set<string>();
+    for (let i = lo; i <= hi; i++) next.add(items[i].name);
+    setSelected(next);
+  }
+
+  function selectAll() {
+    setSelected(new Set(items.map(i => i.name)));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   const loadItems = useCallback(async () => {
     for (const u of iconUrls.current) URL.revokeObjectURL(u);
@@ -75,10 +114,13 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     });
   }, [propertiesItem]);
 
-  async function handleDelete(name: string) {
-    if (isFolder(name)) await deleteFolder(name); else await deleteFile(name);
+  async function handleDelete(names: string[]) {
+    for (const name of names) {
+      if (isFolder(name)) await deleteFolder(name); else await deleteFile(name);
+    }
     setConfirmDelete(null);
     setContextMenu(null);
+    clearSelection();
     await loadItems();
     window.dispatchEvent(new Event('desktop-files-changed'));
   }
@@ -103,17 +145,19 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     await addFolder(fullPath);
     await loadItems();
     setEditingName(fullPath);
-    setSelected(fullPath);
+    selectOne(fullPath);
   }
 
-  async function handleDropOnFolder(folderName: string, draggedPath: string) {
-    if (draggedPath === folderName) return;
+  async function handleDropOnFolder(folderName: string, draggedPaths: string[]) {
     const folderPrefix = folderName.endsWith('/') ? folderName : folderName + '/';
-    if (draggedPath.startsWith(folderPrefix)) return;
-    const dName = displayName(draggedPath);
-    const isDir = isFolder(draggedPath);
-    const newName = folderPrefix + dName + (isDir ? '/' : '');
-    await renameEntry(draggedPath, newName);
+    for (const draggedPath of draggedPaths) {
+      if (draggedPath === folderName) continue;
+      if (draggedPath.startsWith(folderPrefix)) continue;
+      const dName = displayName(draggedPath);
+      const isDir = isFolder(draggedPath);
+      const newName = folderPrefix + dName + (isDir ? '/' : '');
+      await renameEntry(draggedPath, newName);
+    }
     await loadItems();
     window.dispatchEvent(new Event('desktop-files-changed'));
   }
@@ -127,7 +171,9 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   }
 
   return {
-    items, setItems, selected, setSelected,
+    items, setItems,
+    selected, setSelection, selectOne, selectToggle, selectRange, selectAll, clearSelection,
+    anchor, setAnchor,
     editingName, setEditingName,
     contextMenu, setContextMenu,
     bgContextMenu, setBgContextMenu,
