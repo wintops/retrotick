@@ -19,7 +19,7 @@ import { ResourceViewerWindow } from '../components/ResourceViewerWindow';
 import { FolderWindow } from '../components/FolderWindow';
 import { WelcomeWindow } from './WelcomeWindow';
 import { RegionalSettingsWindow } from '../components/RegionalSettingsWindow';
-import { Desktop } from '../components/Desktop';
+import { Desktop } from './Desktop';
 import { Taskbar } from '../components/win2k/Taskbar';
 import { FOLDER_ICON_16, EXE_ICON_16 } from '../components/DesktopIcon';
 import { MessageBox, MB_YESNO, MB_ICONQUESTION, IDYES } from '../components/win2k/MessageBox';
@@ -455,7 +455,7 @@ export function App() {
         })}
         onShutDown={() => setConfirmDialog({
           text: t().confirmShutDown,
-          onYes: () => { setConfirmDialog(null); window.location.href = 'https://github.com/lqs/retrotick'; },
+          onYes: () => { setConfirmDialog(null); window.location.href = 'https://wintops.com/'; },
         })}
       />
       {/* Confirm dialog */}

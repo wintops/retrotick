@@ -20,6 +20,7 @@ const GROUPS: ExampleGroup[] = [
   ]},
   { labelKey: 'programs', items: [
    { name: 'project1.exe', description: 'Project Demo' },
+   { name: 'visual.exe', description: 'Visual' },
     { name: 'calc.exe', description: 'Calculator' },
     { name: 'clock.exe', description: 'Clock' },
    
@@ -69,7 +70,7 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
 
   const remaining = ALL_EXAMPLES.filter(e => status.get(e.name) !== 'done').length;
   const allDone = remaining === 0;
-  const initialPos = useRef({ x: Math.max(0, (window.innerWidth - 440) / 2), y: Math.max(0, (window.innerHeight - 340) / 2) });
+  const initialPos = useRef({ x: Math.max(0, (window.innerWidth - 500) / 2), y: Math.max(0, (window.innerHeight - 300) / 2) });
 
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex, display: minimized ? 'none' : undefined, pointerEvents: 'none' }} onPointerDown={onFocus}>
@@ -90,7 +91,7 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
            WinTops
           </div>
           <div style={{ font: FONT, marginBottom: '4px', lineHeight: '1.4' }}>
-            Trader
+            Windows
           </div>
            
           <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '6px 0 5px' }} />
