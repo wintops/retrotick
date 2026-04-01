@@ -6,6 +6,7 @@ import type { Emulator } from '../lib/emu/emulator';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
 import type { ClipboardState } from '../hooks/useClipboard';
+import { useRubberBand } from '../hooks/useRubberBand';
 import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
 import { MenuDropdown } from './win2k/MenuBar';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
@@ -30,6 +31,11 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
   const desktopRef = useRef<HTMLDivElement>(null);
 
   const selectedArray = [...fm.selected];
+
+  const { rect: rubberRect, onPointerDown: onRubberBandDown, consumeDrag } = useRubberBand(
+    desktopRef,
+    useCallback((names: Set<string>) => fm.setSelection(names), [fm.setSelection]),
+  );
 
   function handleKeyDown(e: KeyboardEvent) {
     if (fm.editingName || fm.confirmDelete || fm.propertiesItem || fm.contextMenu || fm.bgContextMenu) return;
@@ -171,7 +177,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       tabIndex={-1}
       class="w-full select-none"
       style={{ minHeight: '100%', outline: 'none' }}
-      onClick={() => { if (fm.confirmDelete) return; fm.clearSelection(); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+      onClick={() => { if (fm.confirmDelete || consumeDrag()) return; fm.clearSelection(); fm.setEditingName(null); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+      onPointerDown={onRubberBandDown}
       onKeyDown={handleKeyDown}
       onContextMenu={(e: MouseEvent) => {
         if (fm.confirmDelete) { e.preventDefault(); return; }
@@ -187,6 +194,9 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     >
       {dragOver && (
         <div class="absolute inset-0 z-50 pointer-events-none" style={{ background: 'rgba(0,0,0,0.15)' }} />
+      )}
+      {rubberRect && (
+        <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #FFF', background: 'rgba(0,0,128,0.2)', zIndex: 40 }} />
       )}
 
       <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>

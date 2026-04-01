@@ -9,6 +9,7 @@ import {
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
 import type { ClipboardState } from '../hooks/useClipboard';
+import { useRubberBand } from '../hooks/useRubberBand';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { PropertiesDialog } from './PropertiesDialog';
 import type { PEInfo } from '../lib/pe';
@@ -49,6 +50,11 @@ export function FolderWindow({
   const contentRef = useRef<HTMLDivElement>(null);
 
   const selectedArray = [...fm.selected];
+
+  const { rect: rubberRect, onPointerDown: onRubberBandDown, consumeDrag } = useRubberBand(
+    contentRef,
+    useCallback((names: Set<string>) => fm.setSelection(names), [fm.setSelection]),
+  );
 
   // Focus content area when the window becomes focused
   useEffect(() => {
@@ -256,8 +262,9 @@ export function FolderWindow({
         <div
           ref={contentRef}
           tabIndex={-1}
-          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white', outline: 'none' }}
-          onClick={() => { fm.clearSelection(); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white', outline: 'none', position: 'relative' }}
+          onClick={() => { if (consumeDrag()) return; fm.clearSelection(); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+          onPointerDown={onRubberBandDown}
           onKeyDown={handleKeyDown}
           onContextMenu={(e: MouseEvent) => {
             if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
@@ -269,6 +276,9 @@ export function FolderWindow({
           onDragOver={(e: DragEvent) => e.preventDefault()}
           onDrop={handleBackgroundDrop}
         >
+          {rubberRect && (
+            <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #000', background: 'rgba(0,0,128,0.15)', zIndex: 40 }} />
+          )}
           <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
             {fm.items.map(item => (
               <DesktopIcon

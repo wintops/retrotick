@@ -36,6 +36,10 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     setAnchor(name);
   }
 
+  const setSelection = useCallback((names: Set<string>) => {
+    setSelected(names);
+  }, []);
+
   function selectToggle(name: string) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -168,7 +172,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   return {
     items, setItems,
-    selected, selectOne, selectToggle, selectRange, selectAll, clearSelection,
+    selected, setSelection, selectOne, selectToggle, selectRange, selectAll, clearSelection,
     anchor, setAnchor,
     editingName, setEditingName,
     contextMenu, setContextMenu,
