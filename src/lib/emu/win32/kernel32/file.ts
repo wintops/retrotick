@@ -61,7 +61,8 @@ export function registerFile(emu: Emulator): void {
         if (ab) syncData = new Uint8Array(ab);
       } else if (existing.source === 'virtual') {
         // Check in-memory cache for virtual files (IndexedDB-backed)
-        const cached = fs.virtualFileCache?.get(existing.name.toUpperCase());
+        const cacheKey = existing.name.toUpperCase();
+        const cached = fs.virtualFileCache?.get(cacheKey);
         if (cached) {
           syncData = new Uint8Array(cached);
         } else if (fs.onFileRequest) {
@@ -94,10 +95,40 @@ export function registerFile(emu: Emulator): void {
 
     if (dwCreationDisposition === OPEN_ALWAYS) {
       if (existing) {
-        const extData = existing.source === 'external' ? fs.externalFiles.get(upper)?.data ?? null : null;
+        let syncData: Uint8Array | null = null;
+        if (existing.source === 'external') {
+          syncData = fs.externalFiles.get(upper)?.data ?? null;
+        } else if (existing.source === 'virtual') {
+          const cached = fs.virtualFileCache?.get(existing.name.toUpperCase());
+          if (cached) syncData = new Uint8Array(cached);
+        } else if (existing.source === 'additional') {
+          const addBuf = emu.additionalFiles.get(existing.name);
+          if (addBuf) syncData = new Uint8Array(addBuf);
+        }
+        if (!syncData && existing.source === 'virtual' && fs.onFileRequest) {
+          // Async fetch from IndexedDB
+          const stackBytes = emu._currentThunkStackBytes;
+          emu.waitingForMessage = true;
+          const fileSize = existing.size;
+          const fileName = existing.name;
+          fs.fetchFileData(existing, emu.additionalFiles, resolved).then(buf => {
+            emu.waitingForMessage = false;
+            if (buf) fs.virtualFileCache?.set(fileName.toUpperCase(), buf);
+            const data = buf ? new Uint8Array(buf) : null;
+            const h = emu.handles.alloc('file', {
+              path: upper, access: dwDesiredAccess, pos: 0,
+              data, size: data ? data.length : fileSize, modified: false,
+            } satisfies OpenFile);
+            emuCompleteThunk(emu, h, stackBytes);
+            if (emu.running && !emu.halted) {
+              requestAnimationFrame(emu.tick);
+            }
+          });
+          return undefined as any;
+        }
         return emu.handles.alloc('file', {
           path: upper, access: dwDesiredAccess, pos: 0,
-          data: extData, size: existing.size, modified: false,
+          data: syncData, size: existing.size, modified: false,
         } satisfies OpenFile);
       }
       if (upper.startsWith('D:\\')) {
@@ -508,7 +539,25 @@ export function registerFile(emu: Emulator): void {
     return 1;
   });
 
-  kernel32.register('GetFileInformationByHandle', 2, () => 0);
+  // BY_HANDLE_FILE_INFORMATION: 52 bytes
+  // dwFileAttributes(4) ftCreationTime(8) ftLastAccessTime(8) ftLastWriteTime(8)
+  // dwVolumeSerialNumber(4) nFileSizeHigh(4) nFileSizeLow(4) nNumberOfLinks(4)
+  // nFileIndexHigh(4) nFileIndexLow(4)
+  kernel32.register('GetFileInformationByHandle', 2, () => {
+    const hFile = emu.readArg(0);
+    const lpInfo = emu.readArg(1);
+    if (emu.handles.getType(hFile) !== 'file') return 0;
+    const file = emu.handles.get<OpenFile>(hFile)!;
+    const size = file.data ? file.data.length : file.size;
+    // Zero the struct, then fill in key fields
+    for (let i = 0; i < 52; i += 4) emu.memory.writeU32(lpInfo + i, 0);
+    const FILE_ATTRIBUTE_NORMAL = 0x80;
+    emu.memory.writeU32(lpInfo, FILE_ATTRIBUTE_NORMAL); // dwFileAttributes
+    emu.memory.writeU32(lpInfo + 32, 0);                // nFileSizeHigh
+    emu.memory.writeU32(lpInfo + 36, size);              // nFileSizeLow
+    emu.memory.writeU32(lpInfo + 40, 1);                 // nNumberOfLinks
+    return 1;
+  });
 
   // ---- File mapping ----
   kernel32.register('CreateFileMappingA', 6, () => {
@@ -532,9 +581,10 @@ export function registerFile(emu: Emulator): void {
     const _flProtect = emu.readArg(2);
     const _dwMaxSizeHigh = emu.readArg(3);
     const dwMaxSizeLow = emu.readArg(4);
-    const size = dwMaxSizeLow || 0x10000;
-    const addr = emu.allocHeap(size);
     const file = emu.handles.get<OpenFile>(hFile);
+    const fileSize = file?.data?.length ?? file?.size ?? 0;
+    const size = dwMaxSizeLow || fileSize || 0x10000;
+    const addr = emu.allocHeap(size);
     if (file && file.data) {
       const copyLen = Math.min(file.data.length, size);
       for (let i = 0; i < copyLen; i++) emu.memory.writeU8(addr + i, file.data[i]);
@@ -547,7 +597,9 @@ export function registerFile(emu: Emulator): void {
     if (mapping && mapping.addr) return mapping.addr;
     return emu.allocHeap(0x10000);
   });
-  kernel32.register('UnmapViewOfFile', 1, () => 1);
+  kernel32.register('UnmapViewOfFile', 1, () => {
+    return 1;
+  });
 
   // ---- Time conversions ----
   kernel32.register('FileTimeToLocalFileTime', 2, () => {

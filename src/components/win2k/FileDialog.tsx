@@ -295,9 +295,9 @@ export function FileDialog({
       return;
     }
     const fileInfo = fileManager.findFile(path, additionalFiles);
-    if (fileInfo && fileInfo.source === 'virtual') {
-      fileManager.fetchFileData(fileInfo, additionalFiles, path).then(() => {
-        onResult({ path });
+    if (fileInfo) {
+      fileManager.fetchFileData(fileInfo, additionalFiles, path).then(buf => {
+        onResult({ path, data: buf ?? undefined });
       });
     } else {
       onResult({ path });

@@ -41,14 +41,21 @@ export function Edit({ text, fontCSS, fontColor, multiline, password, readonly, 
   useEffect(() => {
     if (ref.current && !userEditing.current) {
       ref.current.value = text || '';
+      // Setting .value moves cursor to end — reset to beginning
+      // (EM_SETSEL will override if the emulator needs a different position)
+      ref.current.selectionStart = ref.current.selectionEnd = 0;
     }
   }, [text]);
 
-  // Auto-focus editable Edit controls on mount and select all text
+  // Auto-focus editable Edit controls on mount
   useEffect(() => {
     if (editable && ref.current) {
       ref.current.focus();
-      ref.current.select();
+      // focus() moves cursor to end — reset to beginning (EM_SETSEL will override if needed)
+      ref.current.setSelectionRange(0, 0);
+      // Reset: programmatic focus should not block subsequent text syncs
+      // (onFocus sets userEditing=true, but this was not a user interaction)
+      userEditing.current = false;
     }
   }, []);
 

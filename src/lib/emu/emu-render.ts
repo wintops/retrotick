@@ -52,9 +52,7 @@ export function notifyControlOverlays(emu: Emulator): void {
   const allChildren: CollectedChild[] = [];
   collectChildren(emu, wnd, 0, 0, allChildren);
   const overlays = buildOverlays(emu, allChildren);
-  if (overlays.length > 0) {
-    emu.onControlsChanged(overlays);
-  }
+  emu.onControlsChanged(overlays);
 }
 
 const DOM_CLASSES = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MSCTLS_TRACKBAR32', 'MSCTLS_PROGRESS32', 'MSCTLS_HOTKEY32', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT', 'SYSTABCONTROL32', 'SYSLISTVIEW32', 'MSCTLS_STATUSBAR32', 'MSCTLS_STATUSBAR', 'SYSTREEVIEW32'];

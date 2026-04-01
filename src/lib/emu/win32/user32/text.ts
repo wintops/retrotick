@@ -115,6 +115,7 @@ export function registerText(emu: Emulator): void {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
     }
     return 1;
@@ -135,6 +136,7 @@ export function registerText(emu: Emulator): void {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
     }
     return 1;

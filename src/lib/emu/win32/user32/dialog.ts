@@ -721,6 +721,7 @@ export function registerDialog(emu: Emulator): void {
   user32.register('EndDialog', 2, () => {
     const hwndDlg = emu.readArg(0);
     const nResult = emu.readArg(1);
+    console.log(`[DLG] EndDialog hwnd=0x${hwndDlg.toString(16)} result=${nResult}`);
     if (emu.dialogState && emu.dialogState.hwnd === hwndDlg) {
       emu.dialogState.result = nResult;
       emu.dialogState.ended = true;

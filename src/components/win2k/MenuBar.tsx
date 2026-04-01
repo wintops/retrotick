@@ -102,7 +102,7 @@ export function MenuDropdown({ items, onCommand, onClose, isSubmenu, x, y }: {
   );
 }
 
-export function MenuBar({ menus, onCommand, onFocus }: { menus: MenuResult[]; onCommand: (id: number) => void; onFocus?: () => void }) {
+export function MenuBar({ menus, onCommand, onFocus, onMenuOpen }: { menus: MenuResult[]; onCommand: (id: number) => void; onFocus?: () => void; onMenuOpen?: (index: number) => void }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
 
   useEffect(() => {
@@ -135,7 +135,9 @@ export function MenuBar({ menus, onCommand, onFocus }: { menus: MenuResult[]; on
               e.stopPropagation();
               e.preventDefault();
               if (item.children) {
-                setOpenIdx(openIdx === i ? null : i);
+                const newIdx = openIdx === i ? null : i;
+                if (newIdx !== null) onMenuOpen?.(newIdx);
+                setOpenIdx(newIdx);
               }
             }}
             onPointerUp={(e) => {
@@ -145,7 +147,12 @@ export function MenuBar({ menus, onCommand, onFocus }: { menus: MenuResult[]; on
                 setOpenIdx(null);
               }
             }}
-            onPointerEnter={() => { if (openIdx !== null) setOpenIdx(i); }}
+            onPointerEnter={() => {
+              if (openIdx !== null) {
+                onMenuOpen?.(i);
+                setOpenIdx(i);
+              }
+            }}
           >
             {formatMnemonic(item.text)}
           </div>

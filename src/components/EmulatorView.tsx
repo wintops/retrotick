@@ -4,7 +4,7 @@ import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
 import type { DialogInfo, ControlOverlay, ProcessRegistry, CommonDialogRequest } from '../lib/emu/emulator';
 import type { WindowInfo } from '../lib/emu/win32/user32/index';
-import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
+import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_INITMENU, WM_INITMENUPOPUP, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
 import { MessageBox, MsgBoxIcon, MB_ICONERROR } from './win2k/MessageBox';
 import { MenuBar } from './win2k/MenuBar';
 import { Window, WS_DLGFRAME, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, getBorderWidth } from './win2k/Window';
@@ -14,7 +14,7 @@ import { ConsoleView } from './ConsoleView';
 import { renderControlOverlay, effectiveClass } from './ControlOverlay';
 import { EmulatorDialog } from './EmulatorDialog';
 import { EXE_ICON_16 } from './DesktopIcon';
-import { FindDialog } from './FindDialog';
+import { FindDialog, FindReplaceDialog } from './FindDialog';
 import { FileDialog } from './win2k/FileDialog';
 import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
@@ -410,6 +410,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
   const [findTerm, setFindTerm] = useState('');
+  const [replaceTerm, setReplaceTerm] = useState('');
   const [modalFlashTrigger, setModalFlashTrigger] = useState(0);
   const flashModal = useCallback(() => setModalFlashTrigger(c => c + 1), []);
 
@@ -795,7 +796,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
   // --- Find dialog: Find Next handler ---
   const handleFindNext = useCallback(() => {
-    if (!commonDialog || commonDialog.type !== 'find' || !findTerm) return;
+    if (!commonDialog || (commonDialog.type !== 'find' && commonDialog.type !== 'find-replace') || !findTerm) return;
     const emu = emuRef.current;
     if (!emu) return;
     const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
@@ -829,6 +830,50 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       }
     }
   }, [commonDialog, findTerm]);
+
+  // --- Find/Replace: Replace handler ---
+  const handleReplace = useCallback(() => {
+    if (!commonDialog || commonDialog.type !== 'find-replace' || !findTerm) return;
+    const emu = emuRef.current;
+    if (!emu) return;
+    const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
+    if (!wnd) return;
+    const text = wnd.domInput?.value || wnd.title || '';
+    const selStart = wnd.editSelStart ?? 0;
+    const selEnd = wnd.editSelEnd ?? 0;
+    // If current selection matches the find term, replace it
+    const selected = text.substring(selStart, selEnd);
+    if (selected.toLowerCase() === findTerm.toLowerCase()) {
+      const newText = text.substring(0, selStart) + replaceTerm + text.substring(selEnd);
+      wnd.title = newText;
+      if (wnd.domInput) wnd.domInput.value = newText;
+      wnd.editSelStart = selStart;
+      wnd.editSelEnd = selStart + replaceTerm.length;
+      if (wnd.domInput) wnd.domInput.setSelectionRange(selStart, selStart + replaceTerm.length);
+      emu.notifyControlOverlays();
+    }
+    // Then find next
+    handleFindNext();
+  }, [commonDialog, findTerm, replaceTerm, handleFindNext]);
+
+  // --- Find/Replace: Replace All handler ---
+  const handleReplaceAll = useCallback(() => {
+    if (!commonDialog || commonDialog.type !== 'find-replace' || !findTerm) return;
+    const emu = emuRef.current;
+    if (!emu) return;
+    const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
+    if (!wnd) return;
+    const text = wnd.domInput?.value || wnd.title || '';
+    // Case-insensitive replace all
+    const regex = new RegExp(findTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const newText = text.replace(regex, replaceTerm);
+    const count = (text.match(regex) || []).length;
+    if (count > 0) {
+      wnd.title = newText;
+      if (wnd.domInput) wnd.domInput.value = newText;
+      emu.notifyControlOverlays();
+    }
+  }, [commonDialog, findTerm, replaceTerm]);
 
   // --- Resize drag handling ---
   const onResizeStart = useCallback((edge: string, e: PointerEvent) => {
@@ -1112,6 +1157,36 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     emu.postMessage(emu.mainWindow, WM_COMMAND, id, 0);
   }, []);
 
+  const handleMenuOpen = useCallback((index: number) => {
+    const emu = emuRef.current;
+    if (!emu || !emu.mainWindow) return;
+    const wnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+    if (!wnd?.wndProc) return;
+    const hMenu = wnd.hMenu || 0;
+    console.log(`[MENU] handleMenuOpen index=${index} hMenu=0x${hMenu.toString(16)} wndProc=0x${wnd.wndProc.toString(16)}`);
+    // Sync DOM textarea selection to emulator state before WM_INITMENU
+    // (apps like Notepad call EM_GETSEL during WM_INITMENU to enable/disable Cut/Copy/Delete)
+    for (const [, child] of emu.handles.findByType<WindowInfo>('window')) {
+      if (child.classInfo?.className?.toUpperCase() === 'EDIT' && child.domInput) {
+        child.editSelStart = child.domInput.selectionStart ?? 0;
+        child.editSelEnd = child.domInput.selectionEnd ?? 0;
+      }
+    }
+    // Send WM_INITMENU (some apps use this) then WM_INITMENUPOPUP
+    const savedESP = emu.cpu.reg[4];
+    const savedEIP = emu.cpu.eip;
+    const savedWaiting = emu.waitingForMessage;
+    emu.waitingForMessage = false;
+    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENU, hMenu, 0);
+    // Get submenu handle for INITMENUPOPUP
+    const menuData = hMenu ? emu.handles.get<{ items: { hSubMenu: number }[] }>(hMenu) : null;
+    const hSubMenu = menuData?.items?.[index]?.hSubMenu || 0;
+    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENUPOPUP, hSubMenu, index);
+    emu.cpu.reg[4] = savedESP;
+    emu.cpu.eip = savedEIP;
+    emu.waitingForMessage = savedWaiting;
+  }, []);
+
   const onTitleBarMouseDown = useCallback((e: PointerEvent) => {
     // Don't start drag on caption buttons
     if ((e.target as HTMLElement).closest('span[style*="border"]')) return;
@@ -1254,6 +1329,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             focused={focused}
           />
         )}
+        {commonDialog?.type === 'find-replace' && (
+          <FindReplaceDialog
+            findTerm={findTerm}
+            replaceTerm={replaceTerm}
+            onFindChange={setFindTerm}
+            onReplaceChange={setReplaceTerm}
+            onFindNext={handleFindNext}
+            onReplace={handleReplace}
+            onReplaceAll={handleReplaceAll}
+            onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); setReplaceTerm(''); }}
+            focused={focused}
+          />
+        )}
         {(commonDialog?.type === 'file-open' || commonDialog?.type === 'file-save') && emuRef.current && (
           <FileDialog
             mode={commonDialog.type === 'file-open' ? 'open' : 'save'}
@@ -1283,7 +1371,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         minimized={false}
         blocked={hasModalDialog}
         onBlockedClick={flashModal}
-        menus={<MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} />}
+        menus={<MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} onMenuOpen={handleMenuOpen} />}
         onClose={() => {
           const emu = emuRef.current;
           if (emu?.mainWindow) {
@@ -1382,6 +1470,20 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onTermChange={setFindTerm}
           onFindNext={handleFindNext}
           onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); }}
+          focused={focused}
+          parentRef={desktopRef}
+        />
+      )}
+      {commonDialog?.type === 'find-replace' && (
+        <FindReplaceDialog
+          findTerm={findTerm}
+          replaceTerm={replaceTerm}
+          onFindChange={setFindTerm}
+          onReplaceChange={setReplaceTerm}
+          onFindNext={handleFindNext}
+          onReplace={handleReplace}
+          onReplaceAll={handleReplaceAll}
+          onClose={() => { commonDialog.onClose(); setCommonDialog(null); setFindTerm(''); setReplaceTerm(''); }}
           focused={focused}
           parentRef={desktopRef}
         />

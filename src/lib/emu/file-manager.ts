@@ -139,8 +139,8 @@ export class DefaultFileManager implements FileManager {
   onFileSaveExternal?: (name: string, data: ArrayBuffer) => void;
 
   persistOnClose(file: OpenFile): void {
-    // If file was modified and on D:\, save back via callback
-    if (file.modified && file.data && file.path.startsWith('D:\\') && this.onFileSave) {
+    // If file was modified and on D:\, update in-memory cache and save via callback
+    if (file.modified && file.data && file.path.startsWith('D:\\')) {
       const relPath = file.path.substring(3);
       const vf = this.virtualFiles.find(f => this.vfToRelPath(f.name) === relPath);
       const name = vf ? vf.name : relPath.replace(/\\/g, '/');
@@ -154,7 +154,7 @@ export class DefaultFileManager implements FileManager {
         this.virtualFiles.push({ name, size: actualSize });
       }
       this.virtualFileCache.set(name.toUpperCase(), ab);
-      this.onFileSave(name, ab);
+      if (this.onFileSave) this.onFileSave(name, ab);
     }
 
     // If file was modified and on Z:\, update externalFiles and trigger browser download
@@ -312,6 +312,16 @@ export class DefaultFileManager implements FileManager {
     if (resolved.startsWith('D:\\')) {
       const relPath = resolved.substring(3);
       if (relPath) {
+        // Check additionalFiles first (same as findFile)
+        let sub = relPath;
+        while (sub) {
+          for (const [name] of additionalFiles) {
+            if (name.toUpperCase().replace(/\//g, '\\') === sub) return FILE_ATTRIBUTE_ARCHIVE;
+          }
+          const idx = sub.indexOf('\\');
+          if (idx < 0) break;
+          sub = sub.substring(idx + 1);
+        }
         const folderStore = relPath.replace(/\\/g, '/') + '/';
         if (this.virtualFiles.some(f => f.name.toUpperCase() === folderStore)) {
           return FILE_ATTRIBUTE_DIRECTORY;

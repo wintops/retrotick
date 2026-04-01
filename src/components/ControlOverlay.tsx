@@ -4,6 +4,7 @@ import type { Emulator, ControlOverlay } from '../lib/emu/emulator';
 import type { WindowInfo } from '../lib/emu/win32/user32/index';
 import type { TreeViewItem, ListViewItem, ListViewColumn } from '../lib/emu/win32/user32/types';
 import { WM_COMMAND, WS_BORDER, WS_EX_CLIENTEDGE } from '../lib/emu/win32/types';
+import { encodeMBCS } from '../lib/emu/memory';
 import { Button } from './win2k/Button';
 import { Checkbox } from './win2k/Checkbox';
 import { Radio } from './win2k/Radio';
@@ -358,10 +359,11 @@ export function renderControlOverlay(
           }
           const dsBase = emu.cpu?.segBases.get(emu.cpu.ds) ?? 0;
           const addr = dsBase + handle;
-          for (let i = 0; i < text.length; i++) {
-            emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
+          const encoded = encodeMBCS(text);
+          for (let i = 0; i < encoded.length; i++) {
+            emu.memory.writeU8(addr + i, encoded[i]);
           }
-          emu.memory.writeU8(addr + text.length, 0);
+          emu.memory.writeU8(addr + encoded.length, 0);
         }
         // Also update dialog controlValues so GetDlgItemInt/GetDlgItemText see it
         if (emu.dialogState && wnd.controlId !== undefined) {

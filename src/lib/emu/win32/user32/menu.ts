@@ -410,6 +410,14 @@ export function registerMenu(emu: Emulator): void {
       const prev = (item.flags & MF_CHECKED) ? MF_CHECKED : 0;
       if (uCheck & MF_CHECKED) item.flags |= MF_CHECKED;
       else item.flags &= ~MF_CHECKED;
+      // Sync to legacy menuItems for React UI
+      if (emu.menuItems) {
+        const legacy = byPos
+          ? findLegacyByPos(emu.menuItems, uIDCheckItem)
+          : findLegacyById(emu.menuItems, uIDCheckItem);
+        if (legacy) legacy.isChecked = !!(uCheck & MF_CHECKED);
+      }
+      emu.onMenuChanged?.();
       return prev;
     }
     // Fallback to legacy emu.menuItems
@@ -438,6 +446,14 @@ export function registerMenu(emu: Emulator): void {
       const prev = (item.flags & (MF_GRAYED | MF_DISABLED)) ? MF_GRAYED : 0;
       item.flags &= ~(MF_GRAYED | MF_DISABLED);
       item.flags |= (uEnable & (MF_GRAYED | MF_DISABLED));
+      // Sync to legacy menuItems for React UI
+      if (emu.menuItems) {
+        const legacy = byPos
+          ? findLegacyByPos(emu.menuItems, uIDEnableItem)
+          : findLegacyById(emu.menuItems, uIDEnableItem);
+        if (legacy) legacy.isGrayed = !!(uEnable & (MF_GRAYED | MF_DISABLED));
+      }
+      emu.onMenuChanged?.();
       return prev;
     }
     if (!emu.menuItems) return 0xFFFFFFFF;
@@ -447,7 +463,7 @@ export function registerMenu(emu: Emulator): void {
       : findLegacyById(emu.menuItems, uIDEnableItem);
     if (!found) return 0xFFFFFFFF;
     const prev = found.isGrayed ? MF_GRAYED : 0;
-    found.isGrayed = !!(uEnable & MF_GRAYED);
+    found.isGrayed = !!(uEnable & (MF_GRAYED | MF_DISABLED));
     emu.onMenuChanged?.();
     return prev;
   });
@@ -468,6 +484,16 @@ export function registerMenu(emu: Emulator): void {
           else menu.items[idx].flags &= ~MF_CHECKED;
         }
       }
+      // Sync to legacy menuItems for React UI
+      if (emu.menuItems) {
+        for (let i = idFirst; i <= idLast; i++) {
+          const legacy = byPos
+            ? findLegacyByPos(emu.menuItems, i)
+            : findLegacyById(emu.menuItems, i);
+          if (legacy) legacy.isChecked = (i === idCheck);
+        }
+      }
+      emu.onMenuChanged?.();
       return 1;
     }
     if (!emu.menuItems) return 1;
@@ -751,9 +777,36 @@ function writeMenuItemInfo(emu: Emulator, ptr: number, item: InternalMenuItem, w
   }
 }
 
-// --- Legacy emu.menuItems helpers (for resource-loaded menus) ---
+// --- Build handle tree from PE-extracted MenuItem[] ---
 
 import type { MenuItem } from '../../../pe/types';
+
+/**
+ * Build a full menu handle hierarchy from PE-extracted MenuItem[].
+ * Creates handles for the top-level menu bar and each popup submenu,
+ * so that GetMenu/GetSubMenu/EnableMenuItem work correctly from x86 code.
+ */
+export function buildMenuHandleTree(emu: Emulator, items: MenuItem[]): number {
+  function convertItems(peItems: MenuItem[]): InternalMenuItem[] {
+    return peItems.map(item => {
+      let hSubMenu = 0;
+      if (item.children && item.children.length > 0) {
+        const subData: MenuData = { items: convertItems(item.children) };
+        hSubMenu = emu.handles.alloc('menu', subData);
+      }
+      let flags = 0;
+      if (item.isSeparator) flags |= MF_SEPARATOR;
+      if (item.isGrayed) flags |= MF_GRAYED;
+      if (item.isChecked) flags |= MF_CHECKED;
+      if (hSubMenu) flags |= MF_POPUP;
+      return { id: item.id, text: item.text, flags, hSubMenu, itemData: 0, hBmpItem: 0 } as InternalMenuItem;
+    });
+  }
+  const menuData: MenuData = { items: convertItems(items) };
+  return emu.handles.alloc('menu', menuData);
+}
+
+// --- Legacy emu.menuItems helpers (for resource-loaded menus) ---
 
 function findLegacyById(items: MenuItem[], id: number): MenuItem | null {
   for (const item of items) {
