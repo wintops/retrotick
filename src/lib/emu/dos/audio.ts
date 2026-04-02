@@ -72,6 +72,7 @@ export class DosAudio {
     this.opl2.setSampleRate(audioContext.sampleRate);
     this.opl2.onTimerIRQ = () => this.onSBIRQ();
     this.speaker = new PCSpeaker(audioContext);
+    this.speaker.initGuitar(); // fire-and-forget; falls back to square if unavailable
     this.gus.outputRate = audioContext.sampleRate;
 
     // Ring buffer stores interleaved stereo frames (L, R, L, R, ...).
