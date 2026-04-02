@@ -5,7 +5,8 @@ import { parsePE, extractExports } from '../../../pe';
 
 import { buildThunkTable } from '../../emu-thunks-pe';
 import { rebuildThunkPages } from '../../emu-load';
-import { emuCallDllMain } from '../../emu-exec';
+import { emuCallDllMain, emuCompleteThunk } from '../../emu-exec';
+import type { FileInfo } from '../../file-manager';
 
 // Module-level type no longer needed — exports are stored on emu.loadedDllExports
 
@@ -117,7 +118,112 @@ function hasRegisteredApis(emu: Emulator, dllName: string): boolean {
   return false;
 }
 
-function loadDll(emu: Emulator, rawName: string): number {
+/** Result of PATH search: either sync data or a pending async fetch. */
+interface PathSearchPending {
+  pending: true;
+  fileInfo: FileInfo;
+  fullPath: string;
+  dir: string;
+}
+type PathSearchResult = ArrayBuffer | PathSearchPending | undefined;
+
+/**
+ * Search for a DLL in PATH directories via the FileManager.
+ * Returns ArrayBuffer (sync), PathSearchPending (needs async fetch), or undefined (not found).
+ */
+function findDllInPath(emu: Emulator, basename: string): PathSearchResult {
+  const pathEnv = emu.envVars.get('PATH') ?? '';
+  if (!pathEnv) return undefined;
+  const fs = emu.fs;
+  const dirs = pathEnv.split(';');
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const sep = dir.endsWith('\\') ? '' : '\\';
+    const fullPath = dir + sep + basename;
+    const fileInfo = fs.findFile(fullPath, emu.additionalFiles);
+    if (!fileInfo) continue;
+    // Try to get data synchronously
+    if (fileInfo.source === 'additional') {
+      const data = emu.additionalFiles.get(fileInfo.name);
+      if (data) {
+        console.log(`[LoadLibrary] Found "${basename}" in PATH dir ${dir}`);
+        return data;
+      }
+    } else if (fileInfo.source === 'external') {
+      const ext = fs.externalFiles.get(fullPath.toUpperCase());
+      if (ext) {
+        console.log(`[LoadLibrary] Found "${basename}" in PATH dir ${dir}`);
+        return ext.data.buffer.slice(ext.data.byteOffset, ext.data.byteOffset + ext.data.byteLength) as ArrayBuffer;
+      }
+    } else if (fileInfo.source === 'virtual') {
+      // Check in-memory cache first
+      const dfm = fs as { virtualFileCache?: Map<string, ArrayBuffer> };
+      if (dfm.virtualFileCache) {
+        const cached = dfm.virtualFileCache.get(fileInfo.name.toUpperCase());
+        if (cached) {
+          console.log(`[LoadLibrary] Found "${basename}" in PATH dir ${dir} (cached)`);
+          return cached;
+        }
+      }
+      // Not cached — return pending so caller can fetch async from IndexedDB
+      console.log(`[LoadLibrary] Found "${basename}" in PATH dir ${dir} (async fetch needed)`);
+      return { pending: true, fileInfo, fullPath, dir };
+    }
+  }
+  return undefined;
+}
+
+/** Load a DLL PE buffer into the emulator. Returns the base address. */
+function loadDllFromBuffer(emu: Emulator, ab: ArrayBuffer, rawName: string, basename: string): number {
+  // Detect address conflicts before loading
+  const { imageBase: preferred, sizeOfImage: dllSize } = parsePEHeader(ab);
+  const occupiedRanges: { base: number; size: number }[] = [];
+  occupiedRanges.push({ base: emu.pe.imageBase, size: emu.pe.sizeOfImage });
+  for (const [, mod] of emu.loadedModules) {
+    occupiedRanges.push({ base: mod.base, size: mod.sizeOfImage ?? 0x100000 });
+  }
+  let actualBase = preferred;
+  for (const r of occupiedRanges) {
+    if (actualBase < r.base + r.size && actualBase + dllSize > r.base) {
+      actualBase = ((r.base + r.size + 0xFFFF) & ~0xFFFF) >>> 0;
+    }
+  }
+  const baseOverride = actualBase !== preferred ? actualBase : undefined;
+
+  // Load DLL PE into emulator memory
+  const pe = loadPE(ab, emu.memory, baseOverride);
+
+  // Build thunks for the DLL's own imports (it imports from kernel32, user32, etc.)
+  const savedPe = emu.pe;
+  emu.pe = pe;
+  buildThunkTable(emu);
+  emu.pe = savedPe;
+  rebuildThunkPages(emu);
+
+  // Extract export table
+  const peInfo = parsePE(ab);
+  const exportResult = extractExports(peInfo, ab);
+  const exportFuncs = exportResult?.functions ?? [];
+
+  emu.loadedDllExports.set(basename, { base: pe.imageBase, exports: exportFuncs });
+  emu.loadedModules.set(basename, { base: pe.imageBase, resourceRva: pe.resourceRva, imageBase: pe.imageBase, sizeOfImage: pe.sizeOfImage });
+
+  console.log(`[LoadLibrary] Loaded "${rawName}" at 0x${pe.imageBase.toString(16)}, ${exportFuncs.length} exports`);
+
+  // Resolve transitive dependencies
+  if (emu.additionalFiles.size > 0) {
+    resolveSubDllImports(emu, pe);
+  }
+
+  // Call DllMain(DLL_PROCESS_ATTACH)
+  if (pe.entryPoint && pe.entryPoint !== pe.imageBase) {
+    emuCallDllMain(emu, pe.entryPoint, pe.imageBase);
+  }
+
+  return pe.imageBase;
+}
+
+function loadDll(emu: Emulator, rawName: string): number | undefined {
   // Normalize: strip path, lowercase, ensure .dll extension
   let basename = rawName.replace(/^.*[\\/]/, '').toLowerCase();
   if (!basename.includes('.')) basename += '.dll';
@@ -130,8 +236,43 @@ function loadDll(emu: Emulator, rawName: string): number {
     const key = fname.replace(/.*[/\\]/, '').toLowerCase();
     if (key === basename) { ab = data; break; }
   }
+
+  // If not in additionalFiles, search PATH directories via FileManager
   if (!ab) {
-    console.log(`[LoadLibrary] "${rawName}" not found in additionalFiles`);
+    const pathResult = findDllInPath(emu, basename);
+    if (pathResult && 'pending' in (pathResult as object)) {
+      // Async path: file is in IndexedDB, needs async fetch
+      const info = pathResult as PathSearchPending;
+      const stackBytes = emu._currentThunkStackBytes;
+      emu.waitingForMessage = true;
+      const capturedRawName = rawName;
+      const capturedBasename = basename;
+      emu.fs.fetchFileData(info.fileInfo, emu.additionalFiles, info.fullPath).then(buf => {
+        emu.waitingForMessage = false;
+        if (buf) {
+          // Cache for future lookups
+          const dfm = emu.fs as { virtualFileCache?: Map<string, ArrayBuffer> };
+          dfm.virtualFileCache?.set(info.fileInfo.name.toUpperCase(), buf);
+          try {
+            const base = loadDllFromBuffer(emu, buf, capturedRawName, capturedBasename);
+            emuCompleteThunk(emu, base, stackBytes);
+          } catch (e: unknown) {
+            console.log(`[LoadLibrary] Failed to load "${capturedRawName}": ${e instanceof Error ? e.message : String(e)}`);
+            emuCompleteThunk(emu, 0, stackBytes);
+          }
+        } else {
+          emuCompleteThunk(emu, 0, stackBytes);
+        }
+        if (emu.running && !emu.halted) {
+          requestAnimationFrame(emu.tick);
+        }
+      });
+      return undefined; // signals async in progress
+    }
+    ab = pathResult as ArrayBuffer | undefined;
+  }
+
+  if (!ab) {
     if (!hasRegisteredApis(emu, basename)) {
       // Truly missing DLL — notify user
       if (!emu.missingDlls.includes(basename)) {
@@ -146,52 +287,7 @@ function loadDll(emu: Emulator, rawName: string): number {
   }
 
   try {
-    // Detect address conflicts before loading
-    const { imageBase: preferred, sizeOfImage: dllSize } = parsePEHeader(ab);
-    const occupiedRanges: { base: number; size: number }[] = [];
-    occupiedRanges.push({ base: emu.pe.imageBase, size: emu.pe.sizeOfImage });
-    for (const [, mod] of emu.loadedModules) {
-      occupiedRanges.push({ base: mod.base, size: mod.sizeOfImage ?? 0x100000 });
-    }
-    let actualBase = preferred;
-    for (const r of occupiedRanges) {
-      if (actualBase < r.base + r.size && actualBase + dllSize > r.base) {
-        actualBase = ((r.base + r.size + 0xFFFF) & ~0xFFFF) >>> 0;
-      }
-    }
-    const baseOverride = actualBase !== preferred ? actualBase : undefined;
-
-    // Load DLL PE into emulator memory
-    const pe = loadPE(ab, emu.memory, baseOverride);
-
-    // Build thunks for the DLL's own imports (it imports from kernel32, user32, etc.)
-    const savedPe = emu.pe;
-    emu.pe = pe;
-    buildThunkTable(emu);
-    emu.pe = savedPe;
-    rebuildThunkPages(emu);
-
-    // Extract export table
-    const peInfo = parsePE(ab);
-    const exportResult = extractExports(peInfo, ab);
-    const exportFuncs = exportResult?.functions ?? [];
-
-    emu.loadedDllExports.set(basename, { base: pe.imageBase, exports: exportFuncs });
-    emu.loadedModules.set(basename, { base: pe.imageBase, resourceRva: pe.resourceRva, imageBase: pe.imageBase, sizeOfImage: pe.sizeOfImage });
-
-    console.log(`[LoadLibrary] Loaded "${rawName}" at 0x${pe.imageBase.toString(16)}, ${exportFuncs.length} exports`);
-
-    // Resolve transitive dependencies: load DLLs imported by this DLL from additionalFiles
-    if (emu.additionalFiles.size > 0) {
-      resolveSubDllImports(emu, pe);
-    }
-
-    // Call DllMain(DLL_PROCESS_ATTACH) for the loaded DLL
-    if (pe.entryPoint && pe.entryPoint !== pe.imageBase) {
-      emuCallDllMain(emu, pe.entryPoint, pe.imageBase);
-    }
-
-    return pe.imageBase;
+    return loadDllFromBuffer(emu, ab, rawName, basename);
   } catch (e: unknown) {
     console.log(`[LoadLibrary] Failed to load "${rawName}": ${e instanceof Error ? e.message : String(e)}`);
     return 0;

@@ -127,7 +127,7 @@ function topoSortDlls(entries: DllEntry[], loadedSet: Set<string>): DllEntry[] {
   return result;
 }
 
-export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
+export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): Promise<void> {
   console.log('[EMU] load() called, arrayBuffer size:', arrayBuffer.byteLength);
   emu.arrayBuffer = arrayBuffer;
   emu.peInfo = peInfo;
@@ -284,7 +284,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.localHeapEnd = emu.localHeapBase + heapMax;
 
     // Load NE DLLs referenced by the main exe (before setting heap base)
-    const neDllEntries = loadNEDlls(emu);
+    const neDllEntries = await loadNEDlls(emu);
 
     // Global heap/virtual allocator after all NE segments (exe + DLLs)
     // nextSelector * 0x10000 is the next linear address after all segments
@@ -813,8 +813,48 @@ interface NEDllEntry {
   heapSize: number;
 }
 
+/** Search for a DLL in PATH directories via the FileManager. */
+async function findNEDllInPath(emu: Emulator, modName: string): Promise<ArrayBuffer | undefined> {
+  const pathEnv = emu.envVars.get('PATH') ?? '';
+  if (!pathEnv) return undefined;
+  const fs = emu.fs;
+  const dirs = pathEnv.split(';');
+  const modLower = modName.toLowerCase();
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const sep = dir.endsWith('\\') ? '' : '\\';
+    for (const ext of ['.dll', '.ocx', '.vbx', '.drv']) {
+      const fullPath = dir + sep + modLower + ext;
+      const fileInfo = fs.findFile(fullPath, emu.additionalFiles);
+      if (!fileInfo) continue;
+      // Try synchronous sources first
+      if (fileInfo.source === 'additional') {
+        const data = emu.additionalFiles.get(fileInfo.name);
+        if (data) {
+          console.log(`[NE DLL] Found ${modName} in PATH dir ${dir}`);
+          return data;
+        }
+      } else if (fileInfo.source === 'external') {
+        const ext2 = fs.externalFiles.get(fullPath.toUpperCase());
+        if (ext2) {
+          console.log(`[NE DLL] Found ${modName} in PATH dir ${dir}`);
+          return ext2.data.buffer.slice(ext2.data.byteOffset, ext2.data.byteOffset + ext2.data.byteLength) as ArrayBuffer;
+        }
+      } else if (fileInfo.source === 'virtual') {
+        // Fetch from IndexedDB (async)
+        const buf = await fs.fetchFileData(fileInfo, emu.additionalFiles, fullPath);
+        if (buf) {
+          console.log(`[NE DLL] Found ${modName} in PATH dir ${dir} (IndexedDB)`);
+          return buf;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Load NE DLLs referenced by the main NE exe. Returns DLL entry points to call. */
-function loadNEDlls(emu: Emulator): NEDllEntry[] {
+async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
   if (!emu.ne) return [];
 
   const ne = emu.ne;
@@ -851,8 +891,12 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
       }
       if (dllBuf) break;
     }
+    // If not in additionalFiles, search PATH directories via FileManager
     if (!dllBuf) {
-      console.warn(`[NE DLL] Module ${modName} not found in additionalFiles`);
+      dllBuf = await findNEDllInPath(emu, modName);
+    }
+    if (!dllBuf) {
+      console.warn(`[NE DLL] Module ${modName} not found`);
       emu.missingDlls.push(modName);
       continue;
     }

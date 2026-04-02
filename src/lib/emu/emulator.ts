@@ -505,7 +505,7 @@ export class Emulator {
   /** Environment variable store (uppercase key → value), shared by kernel32 and msvcrt */
   envVars = new Map<string, string>([
     ['COMSPEC',                  'C:\\WINDOWS\\SYSTEM32\\CMD.EXE'],
-    ['PATH',                     'C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\WINDOWS\\SYSTEM32\\WBEM'],
+    ['PATH',                     'D:\\DOS;C:\\DOS;D:\\WINDOWS;C:\\WINDOWS;D:\\WINDOWS\\SYSTEM;C:\\WINDOWS\\SYSTEM;D:\\WINDOWS\\SYSTEM32;C:\\WINDOWS\\SYSTEM32;D:\\WINDOWS\\SYSTEM32\\WBEM;C:\\WINDOWS\\SYSTEM32\\WBEM'],
     ['PATHEXT',                  '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC'],
     ['SYSTEMROOT',               'C:\\WINDOWS'],
     ['SYSTEMDRIVE',              'C:'],
@@ -990,9 +990,9 @@ export class Emulator {
   }
 
   // Delegated to emu-load.ts
-  load(arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
+  async load(arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): Promise<void> {
     this._arrayBuffer = arrayBuffer;
-    emuLoad(this, arrayBuffer, peInfo, canvas);
+    await emuLoad(this, arrayBuffer, peInfo, canvas);
   }
 
   findResourceEntry(typeId: number | string, nameId: number | string): { dataRva: number; dataSize: number } | null {

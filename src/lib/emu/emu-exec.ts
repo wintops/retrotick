@@ -1168,7 +1168,7 @@ export function emuTick(emu: Emulator): void {
   _diagTickCount++;
   _diagTickTotalMs += performance.now() - tickStart;
   const now2 = performance.now();
-  if (now2 - _diagLastLog > 2000) {
+  if (emu.wasmJitEnabled && now2 - _diagLastLog > 2000) {
     console.log(`[WASM-DIAG] ${_diagTickCount} ticks in ${_diagTickTotalMs.toFixed(0)}ms | WASM: ${_diagWasmRuns} runs, ${_diagWasmInsns} insns | Interp: ${_diagInterpInsns} insns | exits: ${JSON.stringify(_diagWasmExits)} | avg tick: ${(_diagTickTotalMs/_diagTickCount).toFixed(1)}ms | use32=${emu.cpu.use32} realMode=${emu.cpu.realMode}`);
     _diagWasmRuns = 0; _diagWasmInsns = 0; _diagInterpInsns = 0;
     _diagWasmExits = {}; _diagTickCount = 0; _diagTickTotalMs = 0;
