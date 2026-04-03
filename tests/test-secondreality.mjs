@@ -67,7 +67,7 @@ emu.exePath = 'D:\\2nd_real\\SECOND.EXE';
 // REALITY.FC must be findable by file_int's fallback to dosOpenFile
 emu.additionalFiles.set('REALITY.FC', realityBuf);
 
-emu.load(secondBuf, peInfo, mockCanvas);
+await emu.load(secondBuf, peInfo, mockCanvas);
 emu.run();
 
 // Helper: dump MCB chain

@@ -58,7 +58,7 @@ const peInfo = parsePE(realArrayBuffer);
 const emu = new Emulator();
 emu.screenWidth = 800;
 emu.screenHeight = 600;
-emu.load(realArrayBuffer, peInfo, mockCanvas);
+await emu.load(realArrayBuffer, peInfo, mockCanvas);
 
 // Enable API tracing
 emu.traceApi = true;

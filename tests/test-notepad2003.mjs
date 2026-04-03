@@ -55,7 +55,7 @@ const extractedMenus = extractMenus(peInfo, realArrayBuffer);
 const emu = new Emulator();
 emu.screenWidth = 800;
 emu.screenHeight = 600;
-emu.load(realArrayBuffer, peInfo, mockCanvas);
+await emu.load(realArrayBuffer, peInfo, mockCanvas);
 if (extractedMenus.length > 0) emu.menuItems = extractedMenus[0].menu.items;
 emu.run();
 

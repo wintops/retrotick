@@ -20,7 +20,7 @@ const emu = new Emulator();
 emu.screenWidth = 320; emu.screenHeight = 200;
 emu.exeName = '2nd_real/SECOND.EXE'; emu.exePath = 'D:\\2nd_real\\SECOND.EXE';
 emu.additionalFiles.set('REALITY.FC', realityBuf);
-emu.load(secondBuf, parsePE(secondBuf), mockCanvas);
+await emu.load(secondBuf, parsePE(secondBuf), mockCanvas);
 emu.run();
 for (let t = 0; t < 500; t++) { if (emu.halted) break; emu.tick(); if (emu._dosWaitingForKey) { emu.dosKeyBuffer.push({ ascii: 0x0D, scan: 0x1C }); break; } }
 

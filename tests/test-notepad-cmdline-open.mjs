@@ -64,7 +64,7 @@ emu.screenHeight = 600;
 emu.commandLine = 'D:\\TEST.TXT';
 emu.additionalFiles.set('TEST.TXT', testData.buffer);
 
-emu.load(realArrayBuffer, peInfo, mockCanvas);
+await emu.load(realArrayBuffer, peInfo, mockCanvas);
 emu.run();
 
 // Tick until message loop

@@ -20,7 +20,7 @@ const princeBuf = readToArrayBuffer('C:/Users/Olivier/Documents/0_Perso/dosbox_d
 const emu = new Emulator();
 emu.screenWidth = 320; emu.screenHeight = 200;
 emu.exeName = 'POP1DEMO/PRINCE.EXE'; emu.exePath = 'D:\\POP1DEMO\\PRINCE.EXE';
-emu.load(princeBuf, parsePE(princeBuf), mockCanvas);
+await emu.load(princeBuf, parsePE(princeBuf), mockCanvas);
 emu.run();
 
 for (let i = 0; i < 5000; i++) {

@@ -60,7 +60,7 @@ emu.screenHeight = 600;
 emu.additionalFiles.set('COMMCTRL.DLL', readToArrayBuffer('H:/WINDOWS/SYSTEM/COMMCTRL.DLL'));
 emu.additionalFiles.set('VER.DLL', readToArrayBuffer('H:/WINDOWS/SYSTEM/VER.DLL'));
 emu.additionalFiles.set('SCONFIG.DLL', readToArrayBuffer('H:/WINDOWS/SYSTEM/SCONFIG.DLL'));
-emu.load(realArrayBuffer, peInfo, mockCanvas);
+await emu.load(realArrayBuffer, peInfo, mockCanvas);
 emu.run();
 
 let ticks = 0;
