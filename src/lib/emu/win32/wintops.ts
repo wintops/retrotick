@@ -1,18 +1,39 @@
-﻿import type { Emulator } from '../../emulator';
-import { GL1Context } from '../gl-context';
-import { getClientSize, clampToMinTrackSize } from '../user32/_helpers';
+﻿import type { Emulator } from '../emulator';
+import { GL1Context } from './gl-context';
+import { getClientSize, clampToMinTrackSize } from './user32/_helpers';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
   WM_SIZE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_ERASEBKGND, WM_PAINT, WM_DESTROY,
   WM_NCDESTROY, WM_WINDOWPOSCHANGED,
+  PS_NULL,
   CW_USEDEFAULT,
-} from '../types';
+} from './types';
 
+import type { PaletteInfo, BitmapInfo, DCInfo } from './gdi32/types';
+
+import { colorToCSS, isPaletteIndex, getPaletteIdx, resolveColor, ensurePalIndexBuf } from './gdi32/_helpers';
+
+
+
+ 
 export function registerWinTops(emu: Emulator): void {
   const kernel32 = emu.registerDll('KERNEL32.DLL');
   const user32 = emu.registerDll('USER32.DLL');
     const gdi32 = emu.registerDll('GDI32.DLL');
     const opengl32 = emu.registerDll('OPENGL32.DLL');
+    
+          function unRegisterAPI(dllName:string,name: string ): void {
+    const key = `${dllName}:${name}`;
+    if (emu.apiDefs.has(key)) {
+    emu.apiDefs.delete(key);
+     
+    }
+ 
+  }
+
+  unRegisterAPI('USER32.DLL','ShowWindow');
+  unRegisterAPI('GDI32.DLL','Rectangle');
+  unRegisterAPI('GDI32.DLL','StretchDIBits');
   
      user32.register('CharToOemW', 2, () => 1);
 
@@ -72,7 +93,7 @@ function readFloat(emu: Emulator, argIdx: number): number {
   
   
   
-gdi32.register('StretchDIBits1', 13, () => {
+gdi32.register('StretchDIBits', 13, () => {
   const hdc = emu.readArg(0);
   const xDest = emu.readArg(1) | 0;
   const yDest = emu.readArg(2) | 0;
@@ -309,5 +330,49 @@ wnd.needsPaint = true;
 
     return wasVisible ? 1 : 0;
   });
+  
+  
+  
+  
+   gdi32.register('Rectangle', 5, () => {
+    const hdc = emu.readArg(0);
+    const left = emu.readArg(1) | 0;
+    const top = emu.readArg(2) | 0;
+    const right = emu.readArg(3) | 0;
+    const bottom = emu.readArg(4) | 0;
+
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+
+    const brush = emu.getBrush(dc.selectedBrush);
+    
+      if (isPaletteIndex(brush.color)) {
+          const pal = emu.handles.get<PaletteInfo>(dc.selectedPalette);
+          const [r, g, b] = resolveColor(brush.color, pal);
+          dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+        } 
+    
+else  
+      dc.ctx.fillStyle = colorToCSS(brush.color);
+      
+      dc.ctx.fillRect(left, top, right - left, bottom - top);
+    
+    
+ 
+
+    const pen = emu.getPen(dc.selectedPen);
+    if (pen && pen.style !== PS_NULL) {
+      // Pixel-perfect rectangle border (no anti-aliasing)
+      dc.ctx.fillStyle = colorToCSS(pen.color);
+      dc.ctx.fillRect(left, top, right - left, 1);           // top
+      dc.ctx.fillRect(left, bottom - 1, right - left, 1);    // bottom
+      dc.ctx.fillRect(left, top, 1, bottom - top);           // left
+      dc.ctx.fillRect(right - 1, top, 1, bottom - top);      // right
+    }
+
+    emu.syncDCToCanvas(hdc);
+    return 1;
+  });
+  
 }
  
