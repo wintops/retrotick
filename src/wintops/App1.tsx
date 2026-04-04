@@ -31,8 +31,6 @@ import { t } from '../lib/regional-settings';
 import { DisplayPropertiesDialog } from '../components/DisplayPropertiesDialog';
 import type { BackgroundSettings } from '../components/DisplayPropertiesDialog';
 
- 
-
 interface ResourceViewerApp {
   id: number;
   data: LoadedData;
@@ -47,7 +45,6 @@ interface RunningApp {
   exeName: string;
   commandLine?: string;
   onSetupEmulator?: (emu: Emulator) => void;
-   autoMaximize?: boolean; // 👈 加上这一行
 }
 
 interface OpenFolder {
@@ -110,16 +107,36 @@ export function App() {
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
   const { createUrl } = useBlobUrls();
+  const audioContextRef = useRef<AudioContext | null>(null);
 
+  /** Get or create the shared AudioContext. */
+  const ensureAudioContext = useCallback(() => {
+    let ctx = audioContextRef.current;
+    if (!ctx) {
+      ctx = new AudioContext();
+      audioContextRef.current = ctx;
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }, []);
 
-  // ==============================
-  // ✅ 自动运行 EXE 标记（只运行一次）
-  // ==============================
-  const hasAutoRun = useRef(false);
-
-
-
-  
+  // Create AudioContext on first user gesture (click/keydown/pointerdown)
+  useEffect(() => {
+    const handler = () => {
+      ensureAudioContext();
+      document.removeEventListener('click', handler);
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('pointerdown', handler);
+    };
+    document.addEventListener('click', handler);
+    document.addEventListener('keydown', handler);
+    document.addEventListener('pointerdown', handler);
+    return () => {
+      document.removeEventListener('click', handler);
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('pointerdown', handler);
+    };
+  }, [ensureAudioContext]);
 
   const focusApp = useCallback((id: number | null) => {
     if (id !== null) {
@@ -134,61 +151,17 @@ export function App() {
     return 100 + (idx >= 0 ? idx : 0);
   }, []);
 
-const handleRunExe = useCallback((
-  arrayBuffer: ArrayBuffer, 
-  peInfo: PEInfo, 
-  additionalFiles?: Map<string, ArrayBuffer>, 
-  exeName: string = 'unknown', 
-  commandLine?: string, 
-  onSetupEmulator?: (emu: Emulator) => void
-) => {
-  const id = nextAppId.current++;
-  const langId = detectPELanguageId(peInfo.resources);
-  const htmlLang = langToHtmlLang(langId);
-
- 
-
-  setRunningApps(prev => [...prev, {
-    id,
-    arrayBuffer,
-    peInfo,
-    additionalFiles,
-    exeName,
-    commandLine,
-    onSetupEmulator,
-  }]);
-
-  setAppLangs(prev => new Map(prev).set(id, htmlLang));
-  setLoadingAppIds(prev => new Set(prev).add(id));
-  focusApp(id);
-}, [focusApp]);
-
-  // ==============================
-  // ✅ 自动加载并运行 EXE
-  // ==============================
-  const autoRunExe = useCallback(async (url: string) => {
-    try {
-      const res = await fetch(url);
-      const buf = await res.arrayBuffer();
-      const peInfo = parsePE(buf);
-      handleRunExe(buf, peInfo, undefined, url.split('/').pop() || 'auto.exe');
-    } catch (e) {
-      console.error('AutoRun failed', e);
-    }
-  }, [handleRunExe]);
-
-  // ==============================
-  // ✅ 页面加载完成 → 自动运行
-  // ==============================
-  useEffect(() => {
-    if (hasAutoRun.current) return;
-    hasAutoRun.current = true;
-
-    // 👉 在这里换成你要自动运行的 EXE 路径
-    setTimeout(() => {
-      autoRunExe('/examples/m403');
-    }, 800);
-  }, [autoRunExe]);
+  const handleRunExe = useCallback((arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles?: Map<string, ArrayBuffer>, exeName: string = 'unknown', commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => {
+    // Create/resume AudioContext during this user gesture (double-click on EXE)
+    ensureAudioContext();
+    const id = nextAppId.current++;
+    const langId = detectPELanguageId(peInfo.resources);
+    const htmlLang = langToHtmlLang(langId);
+    setRunningApps(prev => [...prev, { id, arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onSetupEmulator }]);
+    setAppLangs(prev => new Map(prev).set(id, htmlLang));
+    setLoadingAppIds(prev => new Set(prev).add(id));
+    focusApp(id);
+  }, [focusApp, ensureAudioContext]);
 
   const handleViewResources = useCallback(async (arrayBuffer: ArrayBuffer, fileName?: string) => {
     try {
@@ -376,8 +349,6 @@ const handleRunExe = useCallback((
             onShowDisplayProperties={() => setShowDisplayProperties(true)} />
         </div>
         {runningApps.map((app) => (
-
-
           <EmulatorView
             key={app.id}
             arrayBuffer={app.arrayBuffer}
@@ -387,11 +358,10 @@ const handleRunExe = useCallback((
             commandLine={app.commandLine}
             onSetupEmulator={app.onSetupEmulator}
             processRegistry={processRegistry}
- 
+            audioContext={audioContextRef.current}
             onStop={() => handleStopApp(app.id)}
             onFocus={() => handleFocusApp(app.id)}
             onReady={() => handleAppReady(app.id)}
-            
             onRunExe={handleRunExe}
             onTitleChange={(title) => setWindowTitles(prev => new Map(prev).set(app.id, title))}
             onIconChange={(url) => setWindowIcons(prev => new Map(prev).set(app.id, url))}
@@ -400,7 +370,6 @@ const handleRunExe = useCallback((
             zIndex={getZIndex(app.id)}
             focused={focusedAppId === app.id}
             minimized={minimizedApps.has(app.id)}
-      
           />
         ))}
         {resourceViewers.map((app) => (
@@ -462,6 +431,7 @@ const handleRunExe = useCallback((
         )}
       </div>
 
+      {/* Confirm dialog */}
       {confirmDialog && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 99999 }}>
           <MessageBox
