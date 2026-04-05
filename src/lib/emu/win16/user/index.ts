@@ -81,7 +81,12 @@ export function registerWin16User(emu: Emulator): void {
       const po = clientOrigin(wnd.parent);
       return { x: po.x + (wnd.x || 0), y: po.y + (wnd.y || 0) };
     }
-    // Top-level window (no parent): client origin = window pos + non-client area
+    // Main window: the canvas IS the client area, so origin is (0, 0).
+    // Non-client chrome (title bar, borders, menu) is rendered by the HTML
+    // frame, not on the canvas. GetDC(0) returns the canvas, so screen
+    // coords must equal canvas coords for ClientToScreen/ScreenToClient.
+    if (hwnd === emu.mainWindow) return { x: 0, y: 0 };
+    // Other top-level windows (non-main): include non-client area
     const { bw, captionH, menuH } = getNonClientMetrics(wnd.style, wnd.hMenu !== 0, true);
     return { x: (wnd.x || 0) + bw, y: (wnd.y || 0) + bw + captionH + menuH };
   };
