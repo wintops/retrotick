@@ -1058,7 +1058,6 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     // Block mouse events while a modal dialog/MessageBox is showing
     if (emu.messageBoxes.length > 0) return;
     if (emu.dialogState) return;
-
     // Resume AudioContext if suspended (user gesture)
     if (emu.audioContext?.state === 'suspended') emu.audioContext.resume();
 
@@ -1068,6 +1067,25 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
     const wParam = buildMKFlags(e);
     if (emu.capturedWindow) {
+      // Auto-release capture when no buttons pressed and cursor is outside the
+      // captured window (matches Windows behavior for WM_MOUSEMOVE tracking)
+      if (msg === WM_MOUSEMOVE && e.buttons === 0) {
+        const cw = emu.handles.get<WindowInfo>(emu.capturedWindow);
+        if (cw) {
+          let ox = 0, oy = 0;
+          let h = emu.capturedWindow;
+          while (h && h !== emu.mainWindow) {
+            const w = emu.handles.get<WindowInfo>(h);
+            if (!w) break;
+            ox += w.x; oy += w.y;
+            h = w.parent;
+          }
+          const rx = x - ox, ry = y - oy;
+          if (rx < 0 || ry < 0 || rx >= cw.width || ry >= cw.height) {
+            emu.capturedWindow = 0;
+          }
+        }
+      }
       // SetCapture: convert canvas coords to coords relative to captured window.
       // Walk up the parent chain to compute absolute canvas position, stopping
       // at the main window (canvas coords = main window's coordinate space).
