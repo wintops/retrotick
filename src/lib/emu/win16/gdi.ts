@@ -722,7 +722,6 @@ export function registerWin16Gdi(emu: Emulator): void {
     const h = (hRaw << 16) >> 16;
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
-
     if (rop === BLACKNESS16) {
       dc.ctx.fillStyle = '#000';
       dc.ctx.fillRect(x, y, w, h);
@@ -940,19 +939,29 @@ export function registerWin16Gdi(emu: Emulator): void {
       const dstData = dcGetImageData(dstDC, xDst, yDst, w, h);
       const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
 
-      // Get pattern brush colors
+      // Get pattern brush
       const brush = emu.getBrush(dstDC.selectedBrush);
-      const txC = dstDC.textColor, bkC = dstDC.bkColor;
-      const txR = txC & 0xFF, txG = (txC >> 8) & 0xFF, txB = (txC >> 16) & 0xFF;
-      const bkR = bkC & 0xFF, bkG = (bkC >> 8) & 0xFF, bkB = (bkC >> 16) & 0xFF;
       let patPixels: Uint8ClampedArray | null = null;
       let patW = 8, patH = 8;
+      let patIsMono = false;
       if (brush?.patternBitmap) {
         const patCtx = brush.patternBitmap.getContext('2d')!;
         patW = brush.patternBitmap.width || 8;
         patH = brush.patternBitmap.height || 8;
         patPixels = patCtx.getImageData(0, 0, patW, patH).data;
+        // Detect monochrome pattern (only pure black and white pixels)
+        patIsMono = true;
+        for (let pi = 0; pi < patPixels.length; pi += 4) {
+          const pr = patPixels[pi], pg = patPixels[pi+1], pb = patPixels[pi+2];
+          if (!((pr === 0 && pg === 0 && pb === 0) || (pr === 255 && pg === 255 && pb === 255))) {
+            patIsMono = false; break;
+          }
+        }
       }
+      // For mono patterns, colorize with textColor/bkColor (Windows behavior)
+      const txC = dstDC.textColor, bkC = dstDC.bkColor;
+      const txR = txC & 0xFF, txG = (txC >> 8) & 0xFF, txB = (txC >> 16) & 0xFF;
+      const bkR = bkC & 0xFF, bkG = (bkC >> 8) & 0xFF, bkB = (bkC >> 16) & 0xFF;
 
       // For pattern tiling, compute canvas-space origin
       const tf = dstDC.ctx.getTransform();
@@ -965,15 +974,24 @@ export function registerWin16Gdi(emu: Emulator): void {
           const i = (py * w + px) * 4;
           // Source (mask) pixel
           const sr = srcData.data[i], sg = srcData.data[i+1], sb = srcData.data[i+2];
-          // Pattern pixel (from brush, colorized with textColor/bkColor for mono)
+          // Pattern pixel
           let pR: number, pG: number, pB: number;
           if (patPixels) {
             const tileX = ((cX + px) % patW + patW) % patW;
             const tileY = ((cY + py) % patH + patH) % patH;
-            const isBlack = patPixels[(tileY * patW + tileX) * 4] === 0;
-            pR = isBlack ? txR : bkR;
-            pG = isBlack ? txG : bkG;
-            pB = isBlack ? txB : bkB;
+            const pOff = (tileY * patW + tileX) * 4;
+            if (patIsMono) {
+              // Mono pattern: colorize black→textColor, white→bkColor
+              const isBlack = patPixels[pOff] === 0;
+              pR = isBlack ? txR : bkR;
+              pG = isBlack ? txG : bkG;
+              pB = isBlack ? txB : bkB;
+            } else {
+              // Color pattern: use actual pixel colors
+              pR = patPixels[pOff];
+              pG = patPixels[pOff + 1];
+              pB = patPixels[pOff + 2];
+            }
           } else {
             pR = brush ? (brush.color & 0xFF) : 0;
             pG = brush ? ((brush.color >> 8) & 0xFF) : 0;
@@ -1775,13 +1793,29 @@ export function registerWin16Gdi(emu: Emulator): void {
     if (!bmp || !lpBits || cbBuffer <= 0) return 0;
     const imgData = bmp.ctx.createImageData(bmp.width, bmp.height);
     const px = imgData.data;
-    const total = Math.min(cbBuffer, bmp.width * bmp.height);
-    for (let i = 0; i < total; i++) {
-      const v = emu.memory.readU8(lpBits + i);
-      px[i * 4] = v; px[i * 4 + 1] = v; px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+    if (bmp.monochrome) {
+      // 1bpp: each byte contains 8 pixels (MSB = leftmost), rows WORD-aligned
+      const bytesPerRow = Math.ceil(bmp.width / 16) * 2;
+      for (let y = 0; y < bmp.height; y++) {
+        for (let x = 0; x < bmp.width; x++) {
+          const byteIdx = y * bytesPerRow + (x >> 3);
+          if (byteIdx >= cbBuffer) break;
+          const bit = (emu.memory.readU8(lpBits + byteIdx) >> (7 - (x & 7))) & 1;
+          const off = (y * bmp.width + x) * 4;
+          const v = bit ? 255 : 0; // 1 = white, 0 = black
+          px[off] = v; px[off + 1] = v; px[off + 2] = v; px[off + 3] = 255;
+        }
+      }
+    } else {
+      // Color bitmap: each byte is one pixel channel (simple grayscale fallback)
+      const total = Math.min(cbBuffer, bmp.width * bmp.height);
+      for (let i = 0; i < total; i++) {
+        const v = emu.memory.readU8(lpBits + i);
+        px[i * 4] = v; px[i * 4 + 1] = v; px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+      }
     }
     bmp.ctx.putImageData(imgData, 0, 0);
-    return total;
+    return cbBuffer;
   }, 106);
 
   // Ordinal 117: SetDCOrg(hdc, x, y) — pascal, 6 bytes
