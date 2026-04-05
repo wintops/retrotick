@@ -8,6 +8,7 @@ import type { DCInfo } from './types';
 import type { WindowInfo } from '../user32/types';
 import { colorToCSS, disableSmoothing } from './_helpers';
 import { decodeDib } from '../../../pe/decode-dib';
+import { dcPutImageData } from '../../emu-window';
 import { resolvePaletteColors } from './palette';
 import { emuCompleteThunk } from '../../emu-exec';
 
@@ -264,7 +265,7 @@ export function registerBitmap(emu: Emulator): void {
       }
     }
 
-    dc.ctx.putImageData(imgData, xDest, yDest);
+    dcPutImageData(dc, imgData, xDest, yDest);
     emu.syncDCToCanvas(hdc);
     return drawH;
   });

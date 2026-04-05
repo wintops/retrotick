@@ -3,6 +3,7 @@ import type { DCInfo, BitmapInfo, BrushInfo, PenInfo, PaletteInfo } from '../win
 import { OPAQUE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
 import { decodeDib } from '../../pe/decode-dib';
+import { dcGetImageData, dcPutImageData } from '../emu-window';
 
 function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
   const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
@@ -495,6 +496,9 @@ export function registerWin16Gdi(emu: Emulator): void {
         let pr = 0, pg = 0, pb = 0;
         if (pen) { pr = pen.color & 0xFF; pg = (pen.color >> 8) & 0xFF; pb = (pen.color >> 16) & 0xFF; }
         const cw = dc.canvas.width || 1, ch = dc.canvas.height || 1;
+        // getImageData ignores canvas transforms — apply offset manually
+        const tf = dc.ctx.getTransform();
+        const oX = Math.round(tf.e), oY = Math.round(tf.f);
         const imgData = dc.ctx.getImageData(0, 0, cw, ch);
         const d = imgData.data;
         let x0 = dc.penPosX, y0 = dc.penPosY, x1 = x, y1 = y;
@@ -502,8 +506,9 @@ export function registerWin16Gdi(emu: Emulator): void {
         const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
         let err = dx - dy;
         while (true) {
-          if (x0 >= 0 && x0 < cw && y0 >= 0 && y0 < ch) {
-            const off = (y0 * cw + x0) * 4;
+          const cx = x0 + oX, cy = y0 + oY;
+          if (cx >= 0 && cx < cw && cy >= 0 && cy < ch) {
+            const off = (cy * cw + cx) * 4;
             const dr = d[off], dg = d[off+1], db = d[off+2];
             let rr: number, rg: number, rb: number;
             switch (rop2) {
@@ -607,15 +612,19 @@ export function registerWin16Gdi(emu: Emulator): void {
     const fillR = brush.color & 0xFF, fillG = (brush.color >> 8) & 0xFF, fillB = (brush.color >> 16) & 0xFF;
     const bndR = crColor & 0xFF, bndG = (crColor >> 8) & 0xFF, bndB = (crColor >> 16) & 0xFF;
     const w = dc.canvas.width, h = dc.canvas.height;
-    if (x < 0 || x >= w || y < 0 || y >= h) return 0;
+    // getImageData ignores canvas transforms — apply offset manually
+    const tf = dc.ctx.getTransform();
+    const oX = Math.round(tf.e), oY = Math.round(tf.f);
+    const sx = x + oX, sy = y + oY;
+    if (sx < 0 || sx >= w || sy < 0 || sy >= h) return 0;
     const imgData = dc.ctx.getImageData(0, 0, w, h);
     const px = imgData.data;
     const isBoundary = (i: number) => px[i] === bndR && px[i + 1] === bndG && px[i + 2] === bndB;
-    const startIdx = (y * w + x) * 4;
+    const startIdx = (sy * w + sx) * 4;
     if (isBoundary(startIdx)) return 0;
     const visited = new Uint8Array(w * h);
-    const stack = [x + y * w];
-    visited[x + y * w] = 1;
+    const stack = [sx + sy * w];
+    visited[sx + sy * w] = 1;
     while (stack.length > 0) {
       const pos = stack.pop()!;
       const px0 = pos % w, py0 = (pos / w) | 0;
@@ -872,7 +881,7 @@ export function registerWin16Gdi(emu: Emulator): void {
 
     if (rop === SRCCOPY16) {
       if (srcMono || dstMono) {
-        dstDC.ctx.putImageData(getConvertedSrcData(), xDst, yDst);
+        dcPutImageData(dstDC, getConvertedSrcData(), xDst, yDst);
       } else {
         dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
       }
@@ -884,34 +893,34 @@ export function registerWin16Gdi(emu: Emulator): void {
         px[i+1] = 255 - px[i+1];
         px[i+2] = 255 - px[i+2];
       }
-      dstDC.ctx.putImageData(srcData, xDst, yDst);
+      dcPutImageData(dstDC, srcData, xDst, yDst);
     } else if (rop === SRCPAINT16) {
       const srcData = getConvertedSrcData();
-      const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
+      const dstData = dcGetImageData(dstDC, xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] |= srcData.data[i];
         dstData.data[i+1] |= srcData.data[i+1];
         dstData.data[i+2] |= srcData.data[i+2];
       }
-      dstDC.ctx.putImageData(dstData, xDst, yDst);
+      dcPutImageData(dstDC, dstData, xDst, yDst);
     } else if (rop === SRCAND16) {
       const srcData = getConvertedSrcData();
-      const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
+      const dstData = dcGetImageData(dstDC, xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] &= srcData.data[i];
         dstData.data[i+1] &= srcData.data[i+1];
         dstData.data[i+2] &= srcData.data[i+2];
       }
-      dstDC.ctx.putImageData(dstData, xDst, yDst);
+      dcPutImageData(dstDC, dstData, xDst, yDst);
     } else if (rop === SRCINVERT16) {
       const srcData = getConvertedSrcData();
-      const dstData = dstDC.ctx.getImageData(xDst, yDst, w, h);
+      const dstData = dcGetImageData(dstDC, xDst, yDst, w, h);
       for (let i = 0; i < srcData.data.length; i += 4) {
         dstData.data[i] ^= srcData.data[i];
         dstData.data[i+1] ^= srcData.data[i+1];
         dstData.data[i+2] ^= srcData.data[i+2];
       }
-      dstDC.ctx.putImageData(dstData, xDst, yDst);
+      dcPutImageData(dstDC, dstData, xDst, yDst);
     } else if (rop === 0xe20746) {
       // ROP 0xE20746: DSPDxax = (Dst ^ (Src & (Pat ^ Dst)))
       //   equivalent to: (D AND NOT S) OR (P AND S)
@@ -927,12 +936,8 @@ export function registerWin16Gdi(emu: Emulator): void {
       // 55AA pattern brush (hbrMonoDither): applies a checkerboard pattern
       // through a mono mask to dim the button background.
       //
-      // Uses transform-aware getImageData/putImageData because child window
-      // DCs share the main canvas with a translate+clip transform.
-      const tf = dstDC.ctx.getTransform();
-      const cX = Math.round(tf.e + xDst * tf.a);
-      const cY = Math.round(tf.f + yDst * tf.d);
-      const dstData = dstDC.ctx.getImageData(cX, cY, w, h);
+      // Uses dcGetImageData/dcPutImageData for transform + clip awareness.
+      const dstData = dcGetImageData(dstDC, xDst, yDst, w, h);
       const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
 
       // Get pattern brush colors
@@ -948,6 +953,11 @@ export function registerWin16Gdi(emu: Emulator): void {
         patH = brush.patternBitmap.height || 8;
         patPixels = patCtx.getImageData(0, 0, patW, patH).data;
       }
+
+      // For pattern tiling, compute canvas-space origin
+      const tf = dstDC.ctx.getTransform();
+      const cX = Math.round(tf.e + xDst * tf.a);
+      const cY = Math.round(tf.f + yDst * tf.d);
 
       // Apply Wine's formula per-channel: Dst ^ (Src & (Pat ^ Dst))
       for (let py = 0; py < h; py++) {
@@ -977,7 +987,7 @@ export function registerWin16Gdi(emu: Emulator): void {
           dstData.data[i+3] = 255;
         }
       }
-      dstDC.ctx.putImageData(dstData, cX, cY);
+      dcPutImageData(dstDC, dstData, xDst, yDst);
     } else {
       // Fallback for other unimplemented ROPs.
       dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
@@ -1547,7 +1557,11 @@ export function registerWin16Gdi(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     if (dc) {
       try {
-        const imgData = dc.ctx.getImageData(x, y, 1, 1);
+        // getImageData ignores canvas transforms — apply offset manually
+        const tf = dc.ctx.getTransform();
+        const cx = Math.round(tf.e + x * tf.a);
+        const cy = Math.round(tf.f + y * tf.d);
+        const imgData = dc.ctx.getImageData(cx, cy, 1, 1);
         const [r, g, b] = imgData.data;
         return r | (g << 8) | (b << 16);
       } catch { /* empty */ }
@@ -2104,7 +2118,11 @@ export function registerWin16Gdi(emu: Emulator): void {
     const fillR = brush.color & 0xFF, fillG = (brush.color >> 8) & 0xFF, fillB = (brush.color >> 16) & 0xFF;
     const tgtR = crColor & 0xFF, tgtG = (crColor >> 8) & 0xFF, tgtB = (crColor >> 16) & 0xFF;
     const w = dc.canvas.width, h = dc.canvas.height;
-    if (x < 0 || x >= w || y < 0 || y >= h) return 0;
+    // getImageData ignores canvas transforms — apply offset manually
+    const tf = dc.ctx.getTransform();
+    const oX = Math.round(tf.e), oY = Math.round(tf.f);
+    const sx = x + oX, sy = y + oY;
+    if (sx < 0 || sx >= w || sy < 0 || sy >= h) return 0;
     const imgData = dc.ctx.getImageData(0, 0, w, h);
     const px = imgData.data;
 
@@ -2112,20 +2130,20 @@ export function registerWin16Gdi(emu: Emulator): void {
     let shouldFill: (i: number) => boolean;
     if (fuFillType === FLOODFILLSURFACE) {
       // Fill while pixel matches crColor (surface fill)
-      const startIdx = (y * w + x) * 4;
+      const startIdx = (sy * w + sx) * 4;
       if (px[startIdx] !== tgtR || px[startIdx + 1] !== tgtG || px[startIdx + 2] !== tgtB) return 0;
       if (fillR === tgtR && fillG === tgtG && fillB === tgtB) return 1; // already filled
       shouldFill = (i: number) => px[i] === tgtR && px[i + 1] === tgtG && px[i + 2] === tgtB;
     } else {
       // Fill until boundary color hit
-      const startIdx = (y * w + x) * 4;
+      const startIdx = (sy * w + sx) * 4;
       if (px[startIdx] === tgtR && px[startIdx + 1] === tgtG && px[startIdx + 2] === tgtB) return 0;
       shouldFill = (i: number) => !(px[i] === tgtR && px[i + 1] === tgtG && px[i + 2] === tgtB);
     }
 
     const visited = new Uint8Array(w * h);
-    const stack = [x + y * w];
-    visited[x + y * w] = 1;
+    const stack = [sx + sy * w];
+    visited[sx + sy * w] = 1;
     while (stack.length > 0) {
       const pos = stack.pop()!;
       const px0 = pos % w;
@@ -2419,7 +2437,7 @@ export function registerWin16Gdi(emu: Emulator): void {
       }
     }
 
-    dc.ctx.putImageData(imgData, (xDest << 16) >> 16, (yDest << 16) >> 16);
+    dcPutImageData(dc, imgData, (xDest << 16) >> 16, (yDest << 16) >> 16);
     emu.syncDCToCanvas(hdc);
     return drawH;
   }, 443);

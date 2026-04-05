@@ -100,6 +100,9 @@ export function registerDraw(emu: Emulator): void {
       let pr = 0, pg = 0, pb = 0;
       if (pen) { pr = pen.color & 0xFF; pg = (pen.color >> 8) & 0xFF; pb = (pen.color >> 16) & 0xFF; }
       const cw = dc.canvas.width || 1, ch = dc.canvas.height || 1;
+      // getImageData ignores canvas transforms — apply offset manually
+      const tf = dc.ctx.getTransform();
+      const oX = Math.round(tf.e), oY = Math.round(tf.f);
       const imgData = dc.ctx.getImageData(0, 0, cw, ch);
       const d = imgData.data;
       let x0 = dc.penPosX, y0 = dc.penPosY, x1 = x, y1 = y;
@@ -107,8 +110,9 @@ export function registerDraw(emu: Emulator): void {
       const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
       let err = dx - dy;
       while (true) {
-        if (x0 >= 0 && x0 < cw && y0 >= 0 && y0 < ch) {
-          const off = (y0 * cw + x0) * 4;
+        const cx = x0 + oX, cy = y0 + oY;
+        if (cx >= 0 && cx < cw && cy >= 0 && cy < ch) {
+          const off = (cy * cw + cx) * 4;
           const dr = d[off], dg = d[off+1], db = d[off+2];
           let rr: number, rg: number, rb: number;
           switch (rop2) {
@@ -221,13 +225,17 @@ export function registerDraw(emu: Emulator): void {
       }
     }
 
+    // getImageData ignores canvas transforms — apply offset manually
+    const tf = dc.ctx.getTransform();
+    const cx = Math.round(tf.e + x * tf.a);
+    const cy = Math.round(tf.f + y * tf.d);
     // Bounds check to avoid OOM from getImageData with large/negative coordinates
-    if (x < 0 || y < 0) return 0xFFFFFFFF;
+    if (cx < 0 || cy < 0) return 0xFFFFFFFF;
     const canvas = dc.ctx.canvas;
-    if (canvas && (x >= canvas.width || y >= canvas.height)) return 0xFFFFFFFF;
+    if (canvas && (cx >= canvas.width || cy >= canvas.height)) return 0xFFFFFFFF;
 
     try {
-      const imgData = dc.ctx.getImageData(x, y, 1, 1);
+      const imgData = dc.ctx.getImageData(cx, cy, 1, 1);
       const [r, g, b] = imgData.data;
       return r | (g << 8) | (b << 16);
     } catch {
@@ -271,10 +279,13 @@ export function registerDraw(emu: Emulator): void {
       const r = penColor & 0xFF, g = (penColor >> 8) & 0xFF, b = (penColor >> 16) & 0xFF;
       const cw = (dc.canvas as OffscreenCanvas).width || 640;
       const ch = (dc.canvas as OffscreenCanvas).height || 480;
+      // getImageData ignores canvas transforms — apply offset manually
+      const tf = dc.ctx.getTransform();
+      const oX = Math.round(tf.e), oY = Math.round(tf.f);
       const imgData = dc.ctx.getImageData(0, 0, cw, ch);
       const data = imgData.data;
       const setPixel = (x: number, y: number) => {
-        x = Math.round(x); y = Math.round(y);
+        x = Math.round(x) + oX; y = Math.round(y) + oY;
         if (x < 0 || x >= cw || y < 0 || y >= ch) return;
         const idx = (y * cw + x) * 4;
         data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
@@ -918,7 +929,11 @@ function floodFillImpl(
   const canvas = dc.ctx.canvas || dc.canvas;
   if (!canvas) return;
   const w = canvas.width, h = canvas.height;
-  if (w <= 0 || h <= 0 || x < 0 || x >= w || y < 0 || y >= h) return;
+  // getImageData ignores canvas transforms — apply offset manually
+  const tf = dc.ctx.getTransform();
+  const oX = Math.round(tf.e), oY = Math.round(tf.f);
+  const sx = x + oX, sy = y + oY;
+  if (w <= 0 || h <= 0 || sx < 0 || sx >= w || sy < 0 || sy >= h) return;
 
   const imgData = dc.ctx.getImageData(0, 0, w, h);
   const px = imgData.data;
@@ -952,10 +967,10 @@ function floodFillImpl(
     }
   };
 
-  if (!shouldFill(x, y)) return;
+  if (!shouldFill(sx, sy)) return;
 
   // Scanline flood fill with stack
-  const stack: number[] = [x, y];
+  const stack: number[] = [sx, sy];
   const MAX_PIXELS = w * h;
   let filled = 0;
 

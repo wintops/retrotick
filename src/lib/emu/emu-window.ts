@@ -330,6 +330,28 @@ export function releaseChildDC(emu: Emulator, hdc: number): void {
   }
 }
 
+/**
+ * Read destination pixels at transform-aware canvas coordinates.
+ * getImageData ignores canvas transforms, so we manually apply the offset.
+ */
+export function dcGetImageData(dc: DCInfo, x: number, y: number, w: number, h: number): ImageData {
+  const tf = dc.ctx.getTransform();
+  const cx = Math.round(tf.e + x * tf.a);
+  const cy = Math.round(tf.f + y * tf.d);
+  return dc.ctx.getImageData(cx, cy, w, h);
+}
+
+/**
+ * Write pixels via temp canvas + drawImage to respect transform + clip.
+ * putImageData ignores both canvas transform and clip region;
+ * drawImage respects both.
+ */
+export function dcPutImageData(dc: DCInfo, imgData: ImageData, x: number, y: number): void {
+  const tmp = new OffscreenCanvas(imgData.width, imgData.height);
+  tmp.getContext('2d')!.putImageData(imgData, 0, 0);
+  dc.ctx.drawImage(tmp, x, y);
+}
+
 export function syncDCToCanvas(emu: Emulator, _hdc: number): void {
   // Window DCs draw directly to the main canvas — nothing to sync
   // Memory DCs are OffscreenCanvas which need explicit BitBlt
