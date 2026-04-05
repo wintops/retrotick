@@ -107,6 +107,7 @@ export function getSegOverrideSel(cpu: CPU): number {
     case 0x36: return cpu.ss;
     case 0x3E: return cpu.ds;
     case 0x64: return 0; // FS — handled via fsBase
+    case 0x65: return cpu.gs;
     default: return cpu.ds;
   }
 }

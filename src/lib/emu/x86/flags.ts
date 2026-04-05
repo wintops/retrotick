@@ -33,7 +33,8 @@ export function materializeFlags(cpu: CPU): void {
       f |= r8 === 0 ? ZF : 0;
       f |= r8 & 0x80 ? SF : 0;
       f |= PARITY_TABLE[r8] ? PF : 0;
-      f |= (res > 0xFF) ? CF : 0;
+      // CF: detect unsigned overflow including carry-in (lazyCF=0 for ADD, 1 for ADC)
+      f |= ((a & 0xFF) + (b & 0xFF) + cpu.lazyCF > 0xFF) ? CF : 0;
       f |= ((~(a ^ b) & (a ^ res)) & 0x80) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
@@ -43,7 +44,7 @@ export function materializeFlags(cpu: CPU): void {
       f |= r16 === 0 ? ZF : 0;
       f |= r16 & 0x8000 ? SF : 0;
       f |= PARITY_TABLE[r16 & 0xFF] ? PF : 0;
-      f |= (res > 0xFFFF) ? CF : 0;
+      f |= ((a & 0xFFFF) + (b & 0xFFFF) + cpu.lazyCF > 0xFFFF) ? CF : 0;
       f |= ((~(a ^ b) & (a ^ res)) & 0x8000) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
@@ -53,9 +54,8 @@ export function materializeFlags(cpu: CPU): void {
       f |= r32 === 0 ? ZF : 0;
       f |= r32 & 0x80000000 ? SF : 0;
       f |= PARITY_TABLE[r32 & 0xFF] ? PF : 0;
-      // CF: unsigned overflow. b is stored as unsigned (JS double) for ADC support
-      // so use b directly (not b >>> 0, which truncates values > 0xFFFFFFFF)
-      f |= ((a >>> 0) + (b >= 0 ? b : b + 0x100000000)) > 0xFFFFFFFF ? CF : 0;
+      // CF: unsigned overflow. lazyCF carries the ADC carry-in (0 for plain ADD).
+      f |= ((a >>> 0) + (b >>> 0) + cpu.lazyCF) > 0xFFFFFFFF ? CF : 0;
       f |= ((~(a ^ b) & (a ^ res)) & 0x80000000) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
@@ -65,7 +65,8 @@ export function materializeFlags(cpu: CPU): void {
       f |= r8 === 0 ? ZF : 0;
       f |= r8 & 0x80 ? SF : 0;
       f |= PARITY_TABLE[r8] ? PF : 0;
-      f |= ((a & 0xFF) < (b & 0xFF)) ? CF : 0;
+      // CF: unsigned borrow. lazyCF carries the SBB borrow-in (0 for plain SUB).
+      f |= ((a & 0xFF) < (b & 0xFF) + cpu.lazyCF) ? CF : 0;
       f |= (((a ^ b) & (a ^ res)) & 0x80) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
@@ -75,7 +76,7 @@ export function materializeFlags(cpu: CPU): void {
       f |= r16 === 0 ? ZF : 0;
       f |= r16 & 0x8000 ? SF : 0;
       f |= PARITY_TABLE[r16 & 0xFF] ? PF : 0;
-      f |= ((a & 0xFFFF) < (b & 0xFFFF)) ? CF : 0;
+      f |= ((a & 0xFFFF) < (b & 0xFFFF) + cpu.lazyCF) ? CF : 0;
       f |= (((a ^ b) & (a ^ res)) & 0x8000) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
@@ -85,8 +86,8 @@ export function materializeFlags(cpu: CPU): void {
       f |= r32 === 0 ? ZF : 0;
       f |= r32 & 0x80000000 ? SF : 0;
       f |= PARITY_TABLE[r32 & 0xFF] ? PF : 0;
-      // CF: unsigned borrow. b is stored as unsigned (JS double) for SBB support
-      f |= ((a >>> 0) < (b >= 0 ? b : b + 0x100000000)) ? CF : 0;
+      // CF: unsigned borrow. lazyCF carries the SBB borrow-in (0 for plain SUB).
+      f |= ((a >>> 0) < (b >>> 0) + cpu.lazyCF) ? CF : 0;
       f |= (((a ^ b) & (a ^ res)) & 0x80000000) ? OF : 0;
       f |= ((a ^ b ^ res) & 0x10) ? AF : 0;
       break;
