@@ -235,8 +235,21 @@ if (!globalThis._oplRegistered) {
 
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);
-    if (port === 0x02) return this.dma.readAddr(1);
-    if (port === 0x03) return this.dma.readCount(1);
+    if (port === 0x02) {
+      // Sync DMA transfer before reading current address — zpollme uses this
+      // to determine where to write in the buffer. Without sync, the address
+      // is only updated every 512 instructions and zpollme sees stale values.
+      if (this.sbDsp.dmaActive) {
+        if (this.sbDsp.tickDMA(this.dma, this.readMemory)) this.onSBIRQ();
+      }
+      return this.dma.readAddr(1);
+    }
+    if (port === 0x03) {
+      if (this.sbDsp.dmaActive) {
+        if (this.sbDsp.tickDMA(this.dma, this.readMemory)) this.onSBIRQ();
+      }
+      return this.dma.readCount(1);
+    }
     if (port === 0x04) return this.dma.readAddr(2);
     if (port === 0x05) return this.dma.readCount(2);
     if (port === 0x06) return this.dma.readAddr(3);
