@@ -88,6 +88,40 @@ if (emu.waitingForMessage) {
   const t01b1 = emu.thunkToApi.get(0xF01B1);
   console.log(`[TEST] Thunk@0xF01B1: ${t01b1 ? `${t01b1.dll}:${t01b1.name} (${t01b1.displayName})` : 'NOT FOUND'}`);
 
+  // Check message queue
+  console.log(`[TEST] Message queue length: ${emu._messageQueue?.length || 0}`);
+  if (emu._messageQueue) {
+    for (const msg of emu._messageQueue) {
+      console.log(`  queued: hwnd=0x${msg.hwnd.toString(16)} msg=0x${msg.message.toString(16)} wP=${msg.wParam} lP=0x${msg.lParam.toString(16)}`);
+    }
+  }
+  // Process queued messages (WM_SIZE etc.) before dumping children
+  emu.traceApi = true;
+  emu.waitingForMessage = false;
+  let extraTicks = 0;
+  while (!emu.waitingForMessage && !emu.halted && extraTicks < 50) {
+    emu.tick();
+    extraTicks++;
+  }
+  emu.traceApi = false;
+  console.log(`[TEST] Processed ${extraTicks} extra ticks, halted=${emu.halted}`);
+
+  // Dump child windows
+  if (mainWnd?.childList) {
+    for (const ch of mainWnd.childList) {
+      const w = emu.handles.get(ch);
+      if (!w) continue;
+      console.log(`  child 0x${ch.toString(16)} class="${w.classInfo?.className}" vis=${w.visible} pos=(${w.x},${w.y}) size=${w.width}x${w.height} style=0x${(w.style||0).toString(16)} wndProc=0x${(w.wndProc||0).toString(16)}`);
+      if (w.childList) {
+        for (const gc of w.childList) {
+          const gw = emu.handles.get(gc);
+          if (!gw) continue;
+          console.log(`    grandchild 0x${gc.toString(16)} class="${gw.classInfo?.className}" vis=${gw.visible} pos=(${gw.x},${gw.y}) size=${gw.width}x${gw.height}`);
+        }
+      }
+    }
+  }
+
   // Simulate menu open (WM_INITMENU + WM_INITMENUPOPUP) like EmulatorView.tsx does
   const WM_INITMENU = 0x0116;
   const WM_INITMENUPOPUP = 0x0117;
