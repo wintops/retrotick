@@ -22,7 +22,7 @@ export { GUS } from './gus';
 export class DosAudio {
   private opl2: OPL2;
   private speaker: PCSpeaker;
-  private sbDsp: SoundBlasterDSP;
+  readonly sbDsp: SoundBlasterDSP;
   readonly dma = new DMAController();
   private ctx: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;

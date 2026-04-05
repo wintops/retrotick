@@ -271,11 +271,18 @@ export class SoundBlasterDSP {
           dma.currentAddr[1] = dma.baseAddr[1];
           dma.currentCount[1] = dma.baseCount[1];
         } else {
-          // Single-cycle: mask channel, stop transfer
+          // Single-cycle: mask channel, stop transfer.
+          // Only fire DSP IRQ if enough samples were transferred. Programs like
+          // STMIK use a small DMA buffer (4096) with a large DSP block (65001);
+          // the DMA TC fires early and zpollme reprograms it. On a real SB the
+          // DSP IRQ only fires after dmaLength bytes are received.
           dma.mask |= (1 << 1);
           this.dmaActive = false;
-          this.irqPending = true;
-          return true;
+          if (this.dmaTransferred >= this.dmaLength) {
+            this.irqPending = true;
+            return true;
+          }
+          return false;
         }
       }
     }
