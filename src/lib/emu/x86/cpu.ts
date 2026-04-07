@@ -27,6 +27,7 @@ export class CPU {
   lazyResult = 0;
   lazyA = 0;
   lazyB = 0;
+  lazyCF = 0; // carry-in for ADC/SBB (0 or 1); kept separate so AF uses original b
   flagsCache = 0x0202; // bit 1 always set, IF=1 (interrupts enabled)
   flagsValid = true;
 
@@ -214,6 +215,7 @@ export class CPU {
     this.lazyResult = result;
     this.lazyA = a;
     this.lazyB = b;
+    this.lazyCF = 0;
     this.flagsValid = false;
   }
 
@@ -344,15 +346,19 @@ export class CPU {
       case 2: { // ADC
         const cf = this.getFlag(CF) ? 1 : 0;
         result = (a + b + cf) | 0;
-        // Store unsigned b + cf to avoid signed overflow losing carry info
-        this.setLazy(addOp, result, a, (b >>> 0) + cf);
+        // Store original b (not b+cf) so AF formula (a^b^res)&0x10 uses correct b.
+        // lazyCF stores the carry-in separately for CF computation.
+        this.setLazy(addOp, result, a, b);
+        this.lazyCF = cf;
         return result;
       }
       case 3: { // SBB
         const cf = this.getFlag(CF) ? 1 : 0;
         result = (a - b - cf) | 0;
-        // Store unsigned b + cf to avoid signed overflow losing borrow info
-        this.setLazy(subOp, result, a, (b >>> 0) + cf);
+        // Store original b (not b+cf) so AF formula uses correct b.
+        // lazyCF stores the borrow-in separately for CF computation.
+        this.setLazy(subOp, result, a, b);
+        this.lazyCF = cf;
         return result;
       }
       case 4: // AND

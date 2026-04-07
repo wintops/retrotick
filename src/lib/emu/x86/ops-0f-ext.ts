@@ -294,26 +294,24 @@ export function exec0FExt(
 
     // PUSH FS (0F A0)
     case 0xA0:
-      if (opSize === 16) cpu.push16(0);
-      else cpu.push32(0);
+      if (opSize === 16) cpu.push16(cpu.fs);
+      else cpu.push32(cpu.fs);
       return true;
 
     // POP FS (0F A1)
     case 0xA1:
-      if (opSize === 16) cpu.pop16();
-      else cpu.pop32();
+      cpu.fs = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
       return true;
 
     // PUSH GS (0F A8)
     case 0xA8:
-      if (opSize === 16) cpu.push16(0);
-      else cpu.push32(0);
+      if (opSize === 16) cpu.push16(cpu.gs);
+      else cpu.push32(cpu.gs);
       return true;
 
     // POP GS (0F A9)
     case 0xA9:
-      if (opSize === 16) cpu.pop16();
-      else cpu.pop32();
+      cpu.gs = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
       return true;
 
     // 0F 3F xx xx — undocumented (used by CPU-Z for CPU detection); treat as 4-byte NOP

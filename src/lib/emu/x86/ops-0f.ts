@@ -262,6 +262,14 @@ export function exec0F(
       break;
     }
 
+    // INVD (0F 08) — Invalidate caches (privileged, NOP in emulator)
+    case 0x08:
+      break;
+
+    // WBINVD (0F 09) — Writeback and invalidate caches (privileged, NOP in emulator)
+    case 0x09:
+      break;
+
     // MOV r32, CRn (0F 20 /r) — Read control register
     case 0x20: {
       const d = cpu.decodeModRM(32);
@@ -270,6 +278,13 @@ export function exec0F(
       if (crn === 0) val = cpu.emu?._cr0 ?? 0;
       // CR2 (page fault address), CR3 (page dir base), CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
+      break;
+    }
+
+    // MOV r32, DRn (0F 21 /r) — Read debug register (return 0)
+    case 0x21: {
+      const d = cpu.decodeModRM(32);
+      cpu.writeModRM(d, 0, 32);
       break;
     }
 
@@ -292,6 +307,26 @@ export function exec0F(
           cpu._addrSize16 = true;
         }
       }
+      break;
+    }
+
+    // MOV DRn, r32 (0F 23 /r) — Write debug register (ignore)
+    case 0x23: {
+      cpu.decodeModRM(32); // consume modrm, discard value
+      break;
+    }
+
+    // WRMSR (0F 30) — Write Model Specific Register (ignore)
+    case 0x30: {
+      // ECX = MSR index, EDX:EAX = value to write — just discard
+      break;
+    }
+
+    // RDMSR (0F 32) — Read Model Specific Register (return 0)
+    case 0x32: {
+      // ECX = MSR index — return 0 in EDX:EAX
+      cpu.reg[0] = 0; // EAX
+      cpu.reg[2] = 0; // EDX
       break;
     }
 
