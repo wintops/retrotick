@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+﻿import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 import tailwindcss from '@tailwindcss/vite';
 import { analyzer } from 'vite-bundle-analyzer';
@@ -9,6 +9,19 @@ export default defineConfig({
 		preact(),
 		tailwindcss(),
 		...(process.env.VITE_ENABLE_ANALYZER === '1' ? [analyzer()] : []),
-		viteSingleFile(),
+		//viteSingleFile(),
 	],
+build: {
+    outDir: 'dist',
+    rollupOptions: {
+      output: {
+        entryFileNames: '[name].js',
+
+        assetFileNames: '[name].[ext]', 
+
+
+    
+      },
+    },
+  },
 });
