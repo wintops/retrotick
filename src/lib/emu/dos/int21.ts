@@ -1175,6 +1175,20 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
         }
         imgSize = Math.min(imgSize, execData.length - headerSize);
+        // DOS extenders (DOS/4GW, DOS/16M, etc.) put their LE/LX/NE header
+        // past the MZ image. The MZ stub then jumps to that header, so it
+        // must be loaded into memory. Detect a valid e_lfanew with a known
+        // new-format signature and extend imgSize to cover the whole file.
+        if (execData.length >= 0x40) {
+          const e_lfanew = mzDv.getUint32(0x3C, true);
+          if (e_lfanew >= headerSize && e_lfanew + 4 <= execData.length) {
+            const sig = (execData[e_lfanew] << 8) | execData[e_lfanew + 1];
+            // 'LE', 'LX', 'NE', 'PE' magic numbers
+            if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+              imgSize = execData.length - headerSize;
+            }
+          }
+        }
         neededParas = 0x10 + Math.ceil(imgSize / 16) + e_minalloc;
       }
 
@@ -1256,6 +1270,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
         }
         imgSize = Math.min(imgSize, execData.length - headerSize);
+        // Match the size-calculation path: extend imgSize to cover the full
+        // file when a LE/LX/NE/PE header sits past the MZ image so DOS
+        // extenders can find their new-format header in memory.
+        if (execData.length >= 0x40) {
+          const e_lfanew = mzDv.getUint32(0x3C, true);
+          if (e_lfanew >= headerSize && e_lfanew + 4 <= execData.length) {
+            const sig = (execData[e_lfanew] << 8) | execData[e_lfanew + 1];
+            if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+              imgSize = execData.length - headerSize;
+            }
+          }
+        }
 
         // Copy image
         for (let i = 0; i < imgSize; i++) {

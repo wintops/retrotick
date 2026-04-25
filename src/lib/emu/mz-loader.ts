@@ -28,6 +28,21 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   }
   imageSize = Math.min(imageSize, arrayBuffer.byteLength - headerSize);
 
+  // DOS extenders (DOS/4GW, DOS/16M, etc.) put their LE/LX/NE/PE header
+  // past the MZ image. The MZ stub then jumps to that header to bootstrap
+  // protected mode. Detect a valid e_lfanew with a known new-format
+  // signature and extend imageSize to cover the whole file.
+  if (arrayBuffer.byteLength >= 0x40) {
+    const e_lfanew = dv.getUint32(0x3C, true);
+    if (e_lfanew >= headerSize && e_lfanew + 4 <= arrayBuffer.byteLength) {
+      const sig = (data[e_lfanew] << 8) | data[e_lfanew + 1];
+      // 'LE', 'LX', 'NE', 'PE' magic numbers
+      if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+        imageSize = arrayBuffer.byteLength - headerSize;
+      }
+    }
+  }
+
   const topSeg = 0xA000; // 640KB
   const LOAD_SEG = 0x0100; // PSP segment
 
