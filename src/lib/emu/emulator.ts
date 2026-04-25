@@ -378,6 +378,7 @@ export class Emulator {
   _dosPSP = 0;
   _dosLoadSegment = 0;
   _cr0 = 0x12;        // CR0 — MP (bit 1) + ET (bit 4): Pentium post-BIOS state with FPU present
+  _cr2 = 0;           // CR2 — last #PF faulting linear address (read by guest #PF handler)
   _cr3 = 0;           // Control Register 3 (page directory base) — stored for read-back, paging not actually performed
   _gdtBase = 0;       // GDT linear base address
   _gdtLimit = 0;      // GDT limit

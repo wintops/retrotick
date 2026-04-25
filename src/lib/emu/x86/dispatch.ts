@@ -222,6 +222,7 @@ export function dispatchException(
         cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
         cpu.loadCS(handler.sel);
         cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+        cpu._lastDispatchIs32 = clientIs32;
         return true;
       }
     }
@@ -259,6 +260,7 @@ export function dispatchException(
         cpu.setFlags(cpu.getFlags() & ~0x0100); // clear TF
         cpu.loadCS(selector);
         cpu.eip = cpu.segBase(selector) + offset;
+        cpu._lastDispatchIs32 = is32;
         return true;
       }
     }
@@ -421,6 +423,7 @@ export function cpuStep(cpu: CPU): void {
     }
   }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
+  cpu._lastInstrEip = instrEip; // exposed to fault catch in emu-exec.ts (PageFaultError rewind)
   // Per-instruction trace ring buffer (disabled for perf)
   if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
     const csBase_t = (cpu.cs << 4) >>> 0;

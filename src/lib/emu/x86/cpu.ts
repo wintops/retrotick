@@ -21,6 +21,15 @@ export class CPU {
   mem: Memory;
   reg = new Int32Array(8);
   eip = 0;
+  /** EIP at the start of the current instruction. Updated by cpuStep before
+   *  dispatch. Used by the #PF catch in emu-exec.ts to rewind after a
+   *  mid-instruction throw so the faulting instruction retries on IRET. */
+  _lastInstrEip = 0;
+  /** Width of the last successful dispatchException. Updated whenever the
+   *  function pushes an interrupt frame, so callers (e.g. the #PF catch in
+   *  emu-exec.ts) know whether to push the error code as 16- or 32-bit on top
+   *  of that frame. Defaults to 32-bit. */
+  _lastDispatchIs32 = true;
 
   // Lazy flag evaluation state
   lazyOp = LazyOp.NONE;

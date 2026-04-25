@@ -369,8 +369,9 @@ export function exec0F(
         // Shadow PE=1 in pseudo-V86 (see SMSW above).
         val = cpu._vm86 ? (rawCr0 | 1) >>> 0 : rawCr0;
       }
+      else if (crn === 2) val = cpu.emu?._cr2 ?? 0;
       else if (crn === 3) val = cpu.emu?._cr3 ?? 0;
-      // CR2 (page fault address), CR4 (extensions) — return 0
+      // CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
       break;
     }
@@ -386,6 +387,10 @@ export function exec0F(
     case 0x22: {
       const d = cpu.decodeModRM(32);
       const crn = d.regField;
+      if (crn === 2 && cpu.emu) {
+        cpu.emu._cr2 = d.val >>> 0;
+        break;
+      }
       if (crn === 3 && cpu.emu) {
         cpu.emu._cr3 = d.val >>> 0;
         // PD base changed — refresh paging state from current CR0.PG.

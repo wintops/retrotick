@@ -171,6 +171,16 @@ export class AccessViolationError extends Error {
   constructor(public addr: number) { super(`Access violation writing 0x${addr.toString(16)}`); }
 }
 
+/** Thrown when paging is enabled and a virtual address resolves to no PTE.
+ *  Caught by emu-exec.ts to dispatch INT 0Eh through the client's IDT so a
+ *  guest #PF handler (e.g. EOS's demand-mapper) can populate the PDE/PTE and
+ *  IRET back to retry the faulting instruction. */
+export class PageFaultError extends Error {
+  constructor(public vaddr: number, public isWrite: boolean) {
+    super(`#PF at 0x${vaddr.toString(16)} write=${isWrite}`);
+  }
+}
+
 // Sparse 32-bit memory using 64KB segments, lazily allocated
 const SEG_BITS = 16;
 const SEG_SIZE = 1 << SEG_BITS; // 65536
@@ -203,6 +213,12 @@ export class Memory {
   _pagingPdBase = 0;
   private _tlb = new Map<number, number>(); // virtPage → physPage
 
+  /** When true, unmapped reads/writes throw `PageFaultError` instead of
+   *  silently returning 0 / dropping. The catch in emu-exec.ts then routes the
+   *  fault through the client's IDT vector 0x0E. Mirrored from `_pagingEnabled`
+   *  by setPaging — a non-paging client sees no behavior change. */
+  _pfDispatchEnabled = false;
+
   /** Enable/disable PM paging with a 4KB-aligned page-directory base. */
   setPaging(enabled: boolean, pdBase: number): void {
     const newBase = pdBase & ~0xFFF;
@@ -211,6 +227,7 @@ export class Memory {
     }
     this._pagingEnabled = enabled;
     this._pagingPdBase = newBase;
+    this._pfDispatchEnabled = enabled;
   }
 
   /** Invalidate the full TLB (call on CR3 write, LTR, etc.). */
@@ -394,7 +411,16 @@ export class Memory {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._pagingEnabled) {
       const p = this.translate(addr);
-      if (p < 0) return 0; // Unmapped page — return 0 (TODO: dispatch #PF)
+      if (p < 0) {
+        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
+        // path needs a non-trivial PM ring transition that we don't emulate
+        // yet — silently returning 0 matches our pre-paging behavior so V86
+        // guests (e.g. EOS while servicing INT calls) don't halt.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, false);
+        }
+        return 0;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
@@ -410,7 +436,16 @@ export class Memory {
         return this.readU8(addr) | (this.readU8(addr + 1) << 8);
       }
       const p = this.translate(addr);
-      if (p < 0) return 0;
+      if (p < 0) {
+        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
+        // path needs a non-trivial PM ring transition that we don't emulate
+        // yet — silently returning 0 matches our pre-paging behavior so V86
+        // guests (e.g. EOS while servicing INT calls) don't halt.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, false);
+        }
+        return 0;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) {
@@ -432,7 +467,16 @@ export class Memory {
           (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
       }
       const p = this.translate(addr);
-      if (p < 0) return 0;
+      if (p < 0) {
+        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
+        // path needs a non-trivial PM ring transition that we don't emulate
+        // yet — silently returning 0 matches our pre-paging behavior so V86
+        // guests (e.g. EOS while servicing INT calls) don't halt.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, false);
+        }
+        return 0;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) {
@@ -478,7 +522,13 @@ export class Memory {
     if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
     if (this._pagingEnabled) {
       const p = this.translate(addr);
-      if (p < 0) return; // Unmapped — drop write (TODO: dispatch #PF)
+      if (p < 0) {
+        // See readU8: V86 #PF path not yet emulated; drop write silently.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, true);
+        }
+        return;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
@@ -507,7 +557,13 @@ export class Memory {
         return;
       }
       const p = this.translate(addr);
-      if (p < 0) return;
+      if (p < 0) {
+        // See readU8: V86 #PF path not yet emulated; drop write silently.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, true);
+        }
+        return;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
@@ -572,7 +628,13 @@ export class Memory {
         return;
       }
       const p = this.translate(addr);
-      if (p < 0) return;
+      if (p < 0) {
+        // See readU8: V86 #PF path not yet emulated; drop write silently.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+          throw new PageFaultError(addr, true);
+        }
+        return;
+      }
       addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }

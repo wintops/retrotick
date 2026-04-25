@@ -8,7 +8,7 @@ import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
 import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
 import { materializeFlags } from './x86/flags';
-import { AccessViolationError } from './memory';
+import { AccessViolationError, PageFaultError } from './memory';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -58,6 +58,30 @@ function raiseAccessViolation(emu: Emulator, faultAddr: number): void {
 
   emu._sehState = { excRecAddr: excRec, ctxAddr: ctx, currentReg: firstReg, dispCtxAddr: dispCtx };
   emu.dispatchToSehHandler(firstReg);
+}
+
+/** Handle a `PageFaultError` thrown from `cpu.step()`. Rewinds EIP to the
+ *  faulting instruction, sets CR2, drops the negative TLB entry so the retry
+ *  re-walks, and dispatches INT 0x0E through the client's IDT. The PM `#PF`
+ *  handler is responsible for populating the PDE/PTE and IRETing back; the
+ *  CPU then re-executes the faulting instruction.
+ *  Returns true on success, false when the IDT has no usable entry and the
+ *  emulator should halt. */
+function handlePageFault(emu: Emulator, e: PageFaultError): boolean {
+  const cpu = emu.cpu;
+  cpu.eip = cpu._lastInstrEip;
+  emu._cr2 = e.vaddr;
+  cpu.mem.invalidatePage(e.vaddr);
+  // Error code: P=0 (page not present is our only case) + W/R bit + U/S=0 + RSVD=0 + I/D=0
+  const errCode = e.isWrite ? 2 : 0;
+  if (!dispatchException(cpu, 0x0E, 'exception')) {
+    cpu.halted = true;
+    cpu.haltReason = `unhandled #PF vaddr=0x${e.vaddr.toString(16)} write=${e.isWrite}`;
+    return false;
+  }
+  if (cpu._lastDispatchIs32) cpu.push32(errCode);
+  else cpu.push16(errCode);
+  return true;
 }
 
 // Fast zero-delay scheduler using MessageChannel (avoids setTimeout's 4ms clamping
@@ -185,6 +209,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         if (ci > 0) { steps += ci; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
     }
@@ -209,6 +234,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = csHitC = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
       csHitA = csHitB = csHitC = 0;
@@ -266,6 +292,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         emu.cpu.step();
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
     }
@@ -1056,6 +1083,7 @@ export function emuTick(emu: Emulator): void {
           if (ci > 0) { stepCount += ci; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
           throw e;
         }
       }
@@ -1076,6 +1104,7 @@ export function emuTick(emu: Emulator): void {
           if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
           throw e;
         }
         // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
@@ -1173,6 +1202,7 @@ export function emuTick(emu: Emulator): void {
       emu.cpu.step();
     } catch (e) {
       if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+      if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
       throw e;
     }
     emu._pitInsnCount++;
