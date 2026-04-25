@@ -433,18 +433,21 @@ export class Memory {
       const p = this.translate(addr);
       if (p < 0) {
         // Only throw #PF in PM AND only when the guest has installed a PF
-        // handler in IDT[0x0E]. V86 mode skips because it would require a
-        // ring transition we don't emulate. PM-without-handler stays on the
-        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
-        // on but never map the IDT/GDT region in CR3) don't halt every time
-        // dispatch reads the IDT.
+        // handler in IDT[0x0E]. PM-without-handler stays on the legacy
+        // "return 0" path so DOS/4GW + EMUL5 (which run with paging on but
+        // never map the IDT/GDT region in CR3) don't halt every IDT read.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
-        return 0;
+        // V86 fallback: DPMI hosts identity-map low memory for V86 access.
+        // When the guest's CR3 doesn't map a V86 page, treat the linear
+        // address as physical instead of returning 0 — this lets V86 code
+        // hit VGA/BIOS/low-mem regions that the host would normally cover.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return 0;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
     if (this._flat && addr < this._flatMax) return this._flat[addr];
@@ -460,19 +463,15 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // Only throw #PF in PM AND only when the guest has installed a PF
-        // handler in IDT[0x0E]. V86 mode skips because it would require a
-        // ring transition we don't emulate. PM-without-handler stays on the
-        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
-        // on but never map the IDT/GDT region in CR3) don't halt every time
-        // dispatch reads the IDT.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
-        return 0;
+        // V86 fallback: identity-translate. See readU8 for rationale.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return 0;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
@@ -494,19 +493,15 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // Only throw #PF in PM AND only when the guest has installed a PF
-        // handler in IDT[0x0E]. V86 mode skips because it would require a
-        // ring transition we don't emulate. PM-without-handler stays on the
-        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
-        // on but never map the IDT/GDT region in CR3) don't halt every time
-        // dispatch reads the IDT.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
-        return 0;
+        // V86 fallback: identity-translate. See readU8 for rationale.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return 0;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
@@ -552,15 +547,15 @@ export class Memory {
     if (this._pagingEnabled) {
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8 above — same guard. PM-without-PF-handler drops writes
-        // silently; PM-with-handler throws and dispatches.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
-        return;
+        // V86 fallback: identity-translate. See readU8 for rationale.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
@@ -589,15 +584,15 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8 above — same guard. PM-without-PF-handler drops writes
-        // silently; PM-with-handler throws and dispatches.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
-        return;
+        // V86 fallback: identity-translate. See readU8 for rationale.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
@@ -662,15 +657,15 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8 above — same guard. PM-without-PF-handler drops writes
-        // silently; PM-with-handler throws and dispatches.
         if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
             && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
-        return;
+        // V86 fallback: identity-translate. See readU8 for rationale.
+        if (!(this._pmCpu && this._pmCpu.realMode)) return;
+      } else {
+        addr = p >>> 0;
       }
-      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     // DOS/4GW handler-table anchor write: see _dos4gwTableAnchored field

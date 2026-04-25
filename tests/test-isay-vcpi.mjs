@@ -56,6 +56,7 @@ let zeroCodeSteps = 0;
 let stepNum = 0;
 let lastCS = 0, lastEIP = 0;
 let wasPM = false;
+const pmEipSet = new Set();
 const pmInitialTrace = []; // first 30 PM steps — most important
 const pmTransitions = []; // detected far jumps / cs changes within PM
 // Rolling ring buffer of last 60 PM steps
@@ -166,6 +167,7 @@ emu.cpu.step = function() {
     const b3 = this.mem.readU8((eip + 3) >>> 0);
     if ((b0 | b1 | b2 | b3) === 0) zeroCodeSteps++;
     else nonZeroCodeSteps++;
+    pmEipSet.add(`${cs.toString(16)}:${eip.toString(16)}`);
   } else {
     wasPM = false;
   }
