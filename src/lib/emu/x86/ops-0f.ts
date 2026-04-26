@@ -267,8 +267,17 @@ export function exec0F(
     case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
+      // LAR is PM-only — in real mode and V86 it should #UD. DOS/4GW's
+      // V86-detection code at cs=1569:2c75 issues `LSL EAX,AX`/`LAR` against
+      // an RM segment value (e.g. 0x271e, the V86 SS) and uses the failure
+      // (ZF=0) to detect non-PM execution. Without this gate our cached PM
+      // segBases entry from the prior PM context wrongly succeeds and the
+      // routine then PUSHes 0xFFFE on a zero V86 stack, derailing CS to
+      // 0xFFFE on the first IRQ-induced IRETD.
       let rights: number | undefined;
-      if (!cpu.realMode && cpu.emu?._gdtBase) {
+      if (cpu.realMode || cpu._vm86) {
+        rights = undefined; // fail
+      } else if (cpu.emu?._gdtBase) {
         rights = cpu.loadGdtDescriptorAccessRights(sel);
         // Treat a slot with Present bit clear as invalid → ZF=0.
         if (rights !== undefined && (rights & 0x8000) === 0) rights = undefined;
@@ -304,6 +313,12 @@ export function exec0F(
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
       const canonical = sel >>> 3;
+      // PM-only: in real mode / V86, LSL must fail (ZF=0, dest unchanged).
+      // See LAR comment above.
+      if (cpu.realMode || cpu._vm86) {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+        break;
+      }
       // Fast path: segLimits Map (populated by the NE/Win16 loaders and by
       // the DPMI helpers that mutate GDT entries). Fallback to reading the
       // GDT descriptor when the selector was set up outside of any loader —
@@ -314,7 +329,7 @@ export function exec0F(
       // `rep movsw` — a wrong 0xFFFF causes it to overwrite 64KB of its
       // own PM code.
       let limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
-      if (limit === undefined && !cpu.realMode && cpu.emu?._gdtBase) {
+      if (limit === undefined && cpu.emu?._gdtBase) {
         limit = cpu.loadGdtDescriptorLimit(sel);
       }
       if (limit !== undefined) {
