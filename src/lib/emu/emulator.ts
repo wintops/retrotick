@@ -582,8 +582,10 @@ export class Emulator {
   _diagThunkIdx = 0;
   _diagThunkSize = 64;
   diagThunk(name: string) {
-    const sp = this.cpu.reg[4] & 0xFFFF;
-    this._diagThunkRing[this._diagThunkIdx % this._diagThunkSize] = `SP=${sp.toString(16)} ${name}`;
+    const sp = this.cpu.reg[4] >>> 0;
+    let retAddr = 0;
+    try { retAddr = this.memory.readU32(sp) >>> 0; } catch { /* ignore */ }
+    this._diagThunkRing[this._diagThunkIdx % this._diagThunkSize] = `retEIP=${retAddr.toString(16)} SP=${(sp & 0xFFFF).toString(16)} ${name}`;
     this._diagThunkIdx++;
   }
   diagThunkDump(): string {

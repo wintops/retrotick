@@ -405,8 +405,50 @@ export function registerMisc(emu: Emulator): void {
 
   user32.register('FindWindowA', 2, () => 0); // not found
   user32.register('FindWindowExA', 4, () => 0); // not found
-  user32.register('EnumDisplaySettingsA', 3, () => 0); // fail
-  user32.register('EnumDisplaySettingsW', 3, () => 0); // fail
+  // Common resolutions reported at 16bpp and 32bpp, 60Hz. Windows reports
+  // many modes; the demo's config dialog filters to >8bpp and picks 640x480.
+  const COMMON_MODES: [number, number][] = [
+    [640, 480], [800, 600], [1024, 768], [1152, 864],
+    [1280, 720], [1280, 800], [1280, 960], [1280, 1024],
+    [1366, 768], [1440, 900], [1600, 900], [1600, 1200],
+    [1680, 1050], [1920, 1080], [1920, 1200],
+  ];
+  const BPPS = [16, 32];
+  function fillDevmode(lpDevMode: number, w: number, h: number, bpp: number): void {
+    if (!lpDevMode) return;
+    for (let i = 0; i < 156; i += 4) emu.memory.writeU32(lpDevMode + i, 0);
+    emu.memory.writeU16(lpDevMode + 36, 156); // dmSize
+    // dmFields: DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY
+    emu.memory.writeU32(lpDevMode + 40, 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000);
+    emu.memory.writeU32(lpDevMode + 104, bpp);
+    emu.memory.writeU32(lpDevMode + 108, w);
+    emu.memory.writeU32(lpDevMode + 112, h);
+    emu.memory.writeU32(lpDevMode + 120, 60);
+  }
+  function pickMode(iModeNum: number): { w: number; h: number; bpp: number } | null {
+    if (iModeNum === -1) return { w: emu.screenWidth, h: emu.screenHeight, bpp: 32 };
+    // Build a mode list: each (w, h) paired with each BPP, ending with the native resolution.
+    const modes: { w: number; h: number; bpp: number }[] = [];
+    for (const [w, h] of COMMON_MODES) {
+      if (w > emu.screenWidth || h > emu.screenHeight) continue;
+      for (const bpp of BPPS) modes.push({ w, h, bpp });
+    }
+    // Append the native resolution at 32bpp if not already listed.
+    const hasNative = modes.some(m => m.w === emu.screenWidth && m.h === emu.screenHeight);
+    if (!hasNative) modes.push({ w: emu.screenWidth, h: emu.screenHeight, bpp: 32 });
+    if (iModeNum < 0 || iModeNum >= modes.length) return null;
+    return modes[iModeNum];
+  }
+  const enumDisplay = () => {
+    const iModeNum = emu.readArg(1) | 0;
+    const lpDevMode = emu.readArg(2);
+    const m = pickMode(iModeNum);
+    if (!m) return 0;
+    fillDevmode(lpDevMode, m.w, m.h, m.bpp);
+    return 1;
+  };
+  user32.register('EnumDisplaySettingsA', 3, enumDisplay);
+  user32.register('EnumDisplaySettingsW', 3, enumDisplay);
 
   // EnumDisplayDevicesA(lpDevice, iDevNum, lpDisplayDevice, dwFlags) → BOOL
   user32.register('EnumDisplayDevicesA', 4, () => {

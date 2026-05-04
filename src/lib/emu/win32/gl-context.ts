@@ -497,8 +497,8 @@ export class GL1Context {
     stack[stack.length - 1] = m;
   }
 
-  private get modelview(): Float32Array { return this.modelviewStack[this.modelviewStack.length - 1]; }
-  private get projection(): Float32Array { return this.projectionStack[this.projectionStack.length - 1]; }
+  get modelview(): Float32Array { return this.modelviewStack[this.modelviewStack.length - 1]; }
+  get projection(): Float32Array { return this.projectionStack[this.projectionStack.length - 1]; }
 
   private markDirty(): void { this.uniformsDirty = true; }
 
@@ -651,6 +651,34 @@ export class GL1Context {
 
   shadeModel(mode: number): void {
     this.cmd(() => { this._shadeModel = mode; });
+  }
+
+  colorMask(r: boolean, g: boolean, b: boolean, a: boolean): void {
+    this.cmd(() => { this.gl.colorMask(r, g, b, a); });
+  }
+
+  depthMask(flag: boolean): void {
+    this.cmd(() => { this.gl.depthMask(flag); });
+  }
+
+  stencilMask(mask: number): void {
+    this.cmd(() => { this.gl.stencilMask(mask); });
+  }
+
+  stencilFunc(func: number, ref: number, mask: number): void {
+    this.cmd(() => { this.gl.stencilFunc(func, ref, mask); });
+  }
+
+  stencilOp(fail: number, zfail: number, zpass: number): void {
+    this.cmd(() => { this.gl.stencilOp(fail, zfail, zpass); });
+  }
+
+  clearStencil(s: number): void {
+    this.cmd(() => { this.gl.clearStencil(s); });
+  }
+
+  polygonOffset(factor: number, units: number): void {
+    this.cmd(() => { this.gl.polygonOffset(factor, units); });
   }
 
   blendFunc(sfactor: number, dfactor: number): void {
@@ -858,6 +886,29 @@ export class GL1Context {
         glFormat = gl.RGBA; glInternal = gl.RGBA;
       }
       gl.texImage2D(gl.TEXTURE_2D, level, glInternal, width, height, border, glFormat, gl.UNSIGNED_BYTE, pixels);
+    });
+  }
+
+  build2DMipmaps(target: number, internalFormat: number,
+                 width: number, height: number,
+                 format: number, type: number, pixels: Uint8Array | null): void {
+    this.cmd(() => {
+      const gl = this.gl;
+      let glFormat: number;
+      let glInternal: number;
+      if (format === GL_RGBA || internalFormat === GL_RGBA || internalFormat === 4) {
+        glFormat = gl.RGBA; glInternal = gl.RGBA;
+      } else if (format === GL_RGB || internalFormat === GL_RGB || internalFormat === 3) {
+        glFormat = gl.RGB; glInternal = gl.RGB;
+      } else if (format === GL_LUMINANCE || internalFormat === GL_LUMINANCE || internalFormat === 1) {
+        glFormat = gl.LUMINANCE; glInternal = gl.LUMINANCE;
+      } else if (format === GL_LUMINANCE_ALPHA || internalFormat === GL_LUMINANCE_ALPHA || internalFormat === 2) {
+        glFormat = gl.LUMINANCE_ALPHA; glInternal = gl.LUMINANCE_ALPHA;
+      } else {
+        glFormat = gl.RGBA; glInternal = gl.RGBA;
+      }
+      gl.texImage2D(gl.TEXTURE_2D, 0, glInternal, width, height, 0, glFormat, gl.UNSIGNED_BYTE, pixels);
+      gl.generateMipmap(gl.TEXTURE_2D);
     });
   }
 
@@ -1153,6 +1204,20 @@ export class GL1Context {
       case GL_MAX_LIGHTS: return 2;
       default: return 0;
     }
+  }
+
+  // Return a 4-entry viewport array [x,y,w,h], or null if pname is not GL_VIEWPORT.
+  getViewport(): [number, number, number, number] {
+    const p = this.gl.getParameter(this.gl.VIEWPORT);
+    return [p[0], p[1], p[2], p[3]];
+  }
+
+  // Return the current projection or modelview matrix as a 16-entry Float32Array (column-major).
+  getMatrix(pname: number): Float32Array | null {
+    // GL_MODELVIEW_MATRIX=0x0BA6, GL_PROJECTION_MATRIX=0x0BA7
+    if (pname === 0x0BA6) return this.modelview;
+    if (pname === 0x0BA7) return this.projection;
+    return null;
   }
 
   getTexEnviv(pname: number): number {

@@ -148,7 +148,56 @@ export function registerOpengl32(emu: Emulator): void {
     const pname = emu.readArg(0);
     const ptr = emu.readArg(1);
     const gl = getGL(emu);
-    if (ptr) emu.memory.writeU32(ptr, gl ? gl.getIntegerv(pname) : 0);
+    if (!ptr) return 0;
+    if (pname === 0x0BA2 /* GL_VIEWPORT */) {
+      const vp = gl ? gl.getViewport() : [0, 0, 0, 0];
+      for (let i = 0; i < 4; i++) emu.memory.writeU32(ptr + i * 4, vp[i] | 0);
+    } else {
+      emu.memory.writeU32(ptr, gl ? gl.getIntegerv(pname) : 0);
+    }
+    return 0;
+  });
+
+  // glGetFloatv / glGetDoublev — mostly used to retrieve matrices
+  function writeMatrixFloats(ptr: number, m: Float32Array) {
+    const buf = new DataView(new ArrayBuffer(4));
+    for (let i = 0; i < 16; i++) {
+      buf.setFloat32(0, m[i], true);
+      emu.memory.writeU32(ptr + i * 4, buf.getUint32(0, true));
+    }
+  }
+  function writeMatrixDoubles(ptr: number, m: Float32Array) {
+    const buf = new DataView(new ArrayBuffer(8));
+    for (let i = 0; i < 16; i++) {
+      buf.setFloat64(0, m[i], true);
+      emu.memory.writeU32(ptr + i * 8, buf.getUint32(0, true));
+      emu.memory.writeU32(ptr + i * 8 + 4, buf.getUint32(4, true));
+    }
+  }
+  opengl32.register('glGetFloatv', 2, () => {
+    const pname = emu.readArg(0);
+    const ptr = emu.readArg(1);
+    const gl = getGL(emu);
+    if (!ptr || !gl) return 0;
+    const m = gl.getMatrix(pname);
+    if (m) writeMatrixFloats(ptr, m);
+    else if (pname === 0x0BA2 /* GL_VIEWPORT */) {
+      const vp = gl.getViewport();
+      const buf = new DataView(new ArrayBuffer(4));
+      for (let i = 0; i < 4; i++) {
+        buf.setFloat32(0, vp[i], true);
+        emu.memory.writeU32(ptr + i * 4, buf.getUint32(0, true));
+      }
+    }
+    return 0;
+  });
+  opengl32.register('glGetDoublev', 2, () => {
+    const pname = emu.readArg(0);
+    const ptr = emu.readArg(1);
+    const gl = getGL(emu);
+    if (!ptr || !gl) return 0;
+    const m = gl.getMatrix(pname);
+    if (m) writeMatrixDoubles(ptr, m);
     return 0;
   });
 
@@ -418,6 +467,98 @@ export function registerOpengl32(emu: Emulator): void {
     return 0;
   });
 
+  opengl32.register('glColor4f', 4, () => {
+    getGL(emu)?.color4f(readFloat(emu, 0), readFloat(emu, 1), readFloat(emu, 2), readFloat(emu, 3));
+    return 0;
+  });
+
+  opengl32.register('glColorMask', 4, () => {
+    getGL(emu)?.colorMask(!!emu.readArg(0), !!emu.readArg(1), !!emu.readArg(2), !!emu.readArg(3));
+    return 0;
+  });
+  opengl32.register('glDepthMask', 1, () => { getGL(emu)?.depthMask(!!emu.readArg(0)); return 0; });
+  opengl32.register('glStencilMask', 1, () => { getGL(emu)?.stencilMask(emu.readArg(0)); return 0; });
+  opengl32.register('glStencilFunc', 3, () => {
+    getGL(emu)?.stencilFunc(emu.readArg(0), emu.readArg(1) | 0, emu.readArg(2));
+    return 0;
+  });
+  opengl32.register('glStencilOp', 3, () => {
+    getGL(emu)?.stencilOp(emu.readArg(0), emu.readArg(1), emu.readArg(2));
+    return 0;
+  });
+  opengl32.register('glClearStencil', 1, () => { getGL(emu)?.clearStencil(emu.readArg(0) | 0); return 0; });
+  opengl32.register('glPolygonOffset', 2, () => {
+    getGL(emu)?.polygonOffset(readFloat(emu, 0), readFloat(emu, 1));
+    return 0;
+  });
+
+  // glColorMaterial(face, mode) — our shader treats glColor as the material color
+  // already, so this is effectively a no-op. Just accept the call.
+  opengl32.register('glColorMaterial', 2, () => 0);
+
+  // Fog — accept but don't implement (demos typically work fine without fog in WebGL)
+  opengl32.register('glFogf', 2, () => 0);
+  opengl32.register('glFogi', 2, () => 0);
+  opengl32.register('glFogfv', 2, () => 0);
+  opengl32.register('glFogiv', 2, () => 0);
+
+  // Attribute stack — no-op stubs (WebGL doesn't have server-side attrib stacks)
+  opengl32.register('glPushAttrib', 1, () => 0);
+  opengl32.register('glPopAttrib', 0, () => 0);
+  opengl32.register('glPushClientAttrib', 1, () => 0);
+  opengl32.register('glPopClientAttrib', 0, () => 0);
+
+  // TexGen — not available in WebGL2 core. Accept calls so sphere mapping etc.
+  // doesn't crash; the texcoords will simply not be generated automatically.
+  opengl32.register('glTexGeni', 3, () => 0);
+  opengl32.register('glTexGenf', 3, () => 0);
+  opengl32.register('glTexGend', 4, () => 0);
+  opengl32.register('glTexGenfv', 3, () => 0);
+  opengl32.register('glTexGeniv', 3, () => 0);
+  opengl32.register('glTexGendv', 3, () => 0);
+
+  // ReadPixels / CopyTexImage — used for screen-space effects.
+  // Stub: leave destination unchanged (caller sees garbage or zeros).
+  opengl32.register('glReadPixels', 7, () => 0);
+  opengl32.register('glReadBuffer', 1, () => 0);
+  opengl32.register('glDrawBuffer', 1, () => 0);
+  opengl32.register('glCopyTexImage2D', 8, () => 0);
+  opengl32.register('glCopyTexSubImage2D', 8, () => 0);
+  opengl32.register('glCopyPixels', 5, () => 0);
+  opengl32.register('glPixelTransferf', 2, () => 0);
+  opengl32.register('glPixelTransferi', 2, () => 0);
+  opengl32.register('glPixelZoom', 2, () => 0);
+
+  // Accumulation buffer — not supported, noop.
+  opengl32.register('glAccum', 2, () => 0);
+  opengl32.register('glClearAccum', 4, () => 0);
+
+  // Raster position / DrawPixels — rarely critical, noop.
+  opengl32.register('glRasterPos2i', 2, () => 0);
+  opengl32.register('glRasterPos2f', 2, () => 0);
+  opengl32.register('glRasterPos3f', 3, () => 0);
+  opengl32.register('glRasterPos3fv', 1, () => 0);
+  opengl32.register('glRasterPos4fv', 1, () => 0);
+  opengl32.register('glWindowPos2i', 2, () => 0);
+  opengl32.register('glWindowPos2f', 2, () => 0);
+  opengl32.register('glDrawPixels', 5, () => 0);
+  opengl32.register('glBitmap', 7, () => 0);
+
+  // Clip planes — noop (not supported by our shader).
+  opengl32.register('glClipPlane', 2, () => 0);
+
+  // Point & line attributes — noop (WebGL only has default sizes).
+  opengl32.register('glPointSize', 1, () => 0);
+  opengl32.register('glLineWidth', 1, () => 0);
+  opengl32.register('glLineStipple', 2, () => 0);
+  opengl32.register('glPolygonStipple', 1, () => 0);
+
+  // Error reporting — always return GL_NO_ERROR (0).
+  opengl32.register('glGetError', 0, () => 0);
+
+  // Edge flags — ignored.
+  opengl32.register('glEdgeFlag', 1, () => 0);
+
   opengl32.register('glColor4fv', 1, () => {
     const ptr = emu.readArg(0);
     const v = readFloatPtr(emu, ptr, 4);
@@ -544,6 +685,67 @@ export function registerOpengl32(emu: Emulator): void {
     naPtr = emu.readArg(2);
     return 0;
   });
+
+  // Texture coord array — tracked but only consumed by our glDrawArrays/Elements emulation
+  let taSize = 2, taStride = 0, taPtr = 0;
+  let caSize = 4, caStride = 0, caPtr = 0;
+  opengl32.register('glTexCoordPointer', 4, () => {
+    taSize = emu.readArg(0);
+    taStride = emu.readArg(2);
+    taPtr = emu.readArg(3);
+    return 0;
+  });
+  opengl32.register('glColorPointer', 4, () => {
+    caSize = emu.readArg(0);
+    caStride = emu.readArg(2);
+    caPtr = emu.readArg(3);
+    return 0;
+  });
+  void taSize; void taStride; void taPtr;
+  void caSize; void caStride; void caPtr;
+  // glArrayElement(i) — emit vertex i from the enabled vertex arrays.
+  // Minimal: read the vertex from glVertexPointer buffer and push it via glVertex3f/2f.
+  opengl32.register('glArrayElement', 1, () => {
+    const gl = getGL(emu);
+    if (!gl || !vaPtr) return 0;
+    const i = emu.readArg(0);
+    const stride = vaStride || vaSize * 4;
+    const base = vaPtr + i * stride;
+    const v = readFloatPtr(emu, base, vaSize);
+    if (naPtr) {
+      const nStride = naStride || 12;
+      const n = readFloatPtr(emu, naPtr + i * nStride, 3);
+      gl.normal3f(n[0], n[1], n[2]);
+    }
+    if (vaSize >= 3) gl.vertex3f(v[0], v[1], v[2]);
+    else gl.vertex2f(v[0], v[1]);
+    return 0;
+  });
+
+  // glDrawArrays(mode, first, count) — draw count vertices starting from `first`
+  opengl32.register('glDrawArrays', 3, () => {
+    const gl = getGL(emu);
+    if (!gl || !vaPtr) return 0;
+    const mode = emu.readArg(0);
+    const first = emu.readArg(1);
+    const count = emu.readArg(2);
+    const stride = vaStride || vaSize * 4;
+    gl.begin(mode);
+    for (let i = 0; i < count; i++) {
+      const base = vaPtr + (first + i) * stride;
+      const v = readFloatPtr(emu, base, vaSize);
+      if (naPtr) {
+        const nStride = naStride || 12;
+        const n = readFloatPtr(emu, naPtr + (first + i) * nStride, 3);
+        gl.normal3f(n[0], n[1], n[2]);
+      }
+      if (vaSize >= 3) gl.vertex3f(v[0], v[1], v[2]);
+      else gl.vertex2f(v[0], v[1]);
+    }
+    gl.end();
+    return 0;
+  });
+
   opengl32.register('glDrawElements', 4, () => {
     const gl = getGL(emu);
     if (!gl) return 0;

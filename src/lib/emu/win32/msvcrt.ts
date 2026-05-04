@@ -1,9 +1,82 @@
 import type { Emulator } from '../emulator';
 import { formatString, scanString, stackArgReader, vaListArgReader } from '../format';
 import { emuCompleteThunk } from '../emu-exec';
+import { fpuPush } from '../x86/fpu';
 
 export function registerMsvcrt(emu: Emulator): void {
   const msvcrt = emu.registerDll('MSVCRT.DLL');
+
+  const readDoubleArg = (i: number): number => {
+    const lo = emu.readArg(i);
+    const hi = emu.readArg(i + 1);
+    const buf = new DataView(new ArrayBuffer(8));
+    buf.setUint32(0, lo, true);
+    buf.setUint32(4, hi, true);
+    return buf.getFloat64(0, true);
+  };
+  const unary = (fn: (x: number) => number) => () => {
+    fpuPush(emu.cpu, fn(readDoubleArg(0)));
+    return 0;
+  };
+  const binary = (fn: (x: number, y: number) => number) => () => {
+    fpuPush(emu.cpu, fn(readDoubleArg(0), readDoubleArg(2)));
+    return 0;
+  };
+  msvcrt.register('sin',   0, unary(Math.sin));
+  msvcrt.register('cos',   0, unary(Math.cos));
+  msvcrt.register('tan',   0, unary(Math.tan));
+  msvcrt.register('asin',  0, unary(Math.asin));
+  msvcrt.register('acos',  0, unary(Math.acos));
+  msvcrt.register('atan',  0, unary(Math.atan));
+  msvcrt.register('sinh',  0, unary(Math.sinh));
+  msvcrt.register('cosh',  0, unary(Math.cosh));
+  msvcrt.register('tanh',  0, unary(Math.tanh));
+  msvcrt.register('sqrt',  0, unary(Math.sqrt));
+  msvcrt.register('exp',   0, unary(Math.exp));
+  msvcrt.register('log',   0, unary(Math.log));
+  msvcrt.register('log10', 0, unary(Math.log10));
+  msvcrt.register('fabs',  0, unary(Math.abs));
+  msvcrt.register('ceil',  0, unary(Math.ceil));
+  msvcrt.register('floor', 0, unary(Math.floor));
+  msvcrt.register('atan2', 0, binary(Math.atan2));
+  msvcrt.register('pow',   0, binary(Math.pow));
+  msvcrt.register('fmod',  0, binary((x, y) => x - Math.trunc(x / y) * y));
+  msvcrt.register('hypot', 0, binary(Math.hypot));
+  msvcrt.register('_hypot', 0, binary(Math.hypot));
+  msvcrt.register('ldexp', 0, () => {
+    const x = readDoubleArg(0);
+    const n = emu.readArg(2) | 0;
+    fpuPush(emu.cpu, x * Math.pow(2, n));
+    return 0;
+  });
+
+  // int *_errno(void) — returns pointer to thread-local errno
+  const errnoVar = emu.allocHeap(4);
+  emu.memory.writeU32(errnoVar, 0);
+  msvcrt.register('_errno', 0, () => errnoVar);
+
+  // void _fpreset(void) — reset FPU state (no-op; FPU handled by emulator)
+  msvcrt.register('_fpreset', 0, () => 0);
+
+  // int _isnan(double x) — return non-zero if x is NaN
+  msvcrt.register('_isnan', 0, () => {
+    const lo = emu.readArg(0);
+    const hi = emu.readArg(1);
+    const buf = new DataView(new ArrayBuffer(8));
+    buf.setUint32(0, lo, true);
+    buf.setUint32(4, hi, true);
+    return Number.isNaN(buf.getFloat64(0, true)) ? 1 : 0;
+  });
+
+
+  // void _assert(const char *expr, const char *file, unsigned line) — cdecl, [[noreturn]]
+  msvcrt.register('_assert', 0, () => {
+    const expr = emu.memory.readCString(emu.readArg(0));
+    const file = emu.memory.readCString(emu.readArg(1));
+    const line = emu.readArg(2);
+    console.error(`[MSVCRT _assert] ${file}:${line} — assertion failed: ${expr}`);
+    return 0;
+  });
 
   msvcrt.register('_initterm', 0, () => {
     const start = emu.readArg(0);
@@ -714,6 +787,15 @@ export function registerMsvcrt(emu: Emulator): void {
   const stdoutFilePtr = iobBase + 32;  // FILE* for stdout
   const stderrFilePtr = iobBase + 64;  // FILE* for stderr
 
+  // int _fileno(FILE *stream) — return fd associated with stream
+  msvcrt.register('_fileno', 0, () => {
+    const filePtr = emu.readArg(0);
+    if (filePtr === stdinFilePtr) return 0;
+    if (filePtr === stdoutFilePtr) return 1;
+    if (filePtr === stderrFilePtr) return 2;
+    return -1;
+  });
+
   msvcrt.register('fprintf', 0, () => {
     const filePtr = emu.readArg(0);
     const fmtPtr = emu.readArg(1);
@@ -1245,7 +1327,7 @@ export function registerMsvcrt(emu: Emulator): void {
   // When thunk fires: stack is [retAddr, buf, ...]
   // After completeThunk (cdecl nArgs=0): ESP += 4 (pop retAddr), EIP = retAddr
   // Caller then cleans up args. We save the post-completeThunk state.
-  msvcrt.register('_setjmp3', 0, () => {
+  const setjmpImpl = () => {
     const buf = emu.readArg(0);
     const ESP = 4, EBP = 5, EBX = 3, EDI = 7, ESI = 6;
     const retAddr = emu.memory.readU32(emu.cpu.reg[ESP] >>> 0);
@@ -1257,7 +1339,9 @@ export function registerMsvcrt(emu: Emulator): void {
     emu.memory.writeU32(buf + 16, (emu.cpu.reg[ESP] + 4) >>> 0);
     emu.memory.writeU32(buf + 20, retAddr);
     return 0;
-  });
+  };
+  msvcrt.register('_setjmp3', 0, setjmpImpl);
+  msvcrt.register('_setjmp', 0, setjmpImpl);
 
   // longjmp(jmp_buf, value) — restore CPU state and return value to setjmp call site
   msvcrt.register('longjmp', 0, () => {
@@ -1380,10 +1464,182 @@ export function registerMsvcrt(emu: Emulator): void {
     return idx >= 0 ? haystack + idx : 0;
   });
 
+  // void (*signal(int sig, void (*handler)(int)))(int) — install handler, return previous (SIG_DFL=0)
+  msvcrt.register('signal', 0, () => 0);
+
+  // char *_strdup(const char *s) — allocates a copy
+  msvcrt.register('_strdup', 0, () => {
+    const s = emu.memory.readCString(emu.readArg(0));
+    const p = emu.allocHeap(s.length + 1);
+    emu.memory.writeCString(p, s);
+    return p;
+  });
+  msvcrt.register('strdup', 0, () => {
+    const s = emu.memory.readCString(emu.readArg(0));
+    const p = emu.allocHeap(s.length + 1);
+    emu.memory.writeCString(p, s);
+    return p;
+  });
+
+  // char *strtok(char *str, const char *delim) — thread-unsafe, keep state in closure
+  let strtokPtr = 0;
+  msvcrt.register('strtok', 0, () => {
+    const strArg = emu.readArg(0);
+    const delimPtr = emu.readArg(1);
+    const delim = emu.memory.readCString(delimPtr);
+    const set = new Set(delim);
+    let p = strArg !== 0 ? strArg : strtokPtr;
+    if (!p) return 0;
+    // Skip leading delims
+    while (set.has(String.fromCharCode(emu.memory.readU8(p)))) {
+      if (emu.memory.readU8(p) === 0) { strtokPtr = 0; return 0; }
+      p++;
+    }
+    if (emu.memory.readU8(p) === 0) { strtokPtr = 0; return 0; }
+    const start = p;
+    // Advance until delim or NUL
+    while (emu.memory.readU8(p) !== 0 && !set.has(String.fromCharCode(emu.memory.readU8(p)))) p++;
+    if (emu.memory.readU8(p) === 0) {
+      strtokPtr = 0;
+    } else {
+      emu.memory.writeU8(p, 0);
+      strtokPtr = p + 1;
+    }
+    return start;
+  });
+
+  // char *strerror(int errnum) — return pointer to static message
+  const strerrorBuf = emu.allocHeap(64);
+  emu.memory.writeCString(strerrorBuf, 'Unknown error');
+  msvcrt.register('strerror', 0, () => strerrorBuf);
+
+  // size_t strcspn(const char *s, const char *reject)
+  msvcrt.register('strcspn', 0, () => {
+    const s = emu.memory.readCString(emu.readArg(0));
+    const reject = emu.memory.readCString(emu.readArg(1));
+    const set = new Set(reject);
+    for (let i = 0; i < s.length; i++) if (set.has(s[i])) return i;
+    return s.length;
+  });
+
+  // size_t strspn(const char *s, const char *accept)
+  msvcrt.register('strspn', 0, () => {
+    const s = emu.memory.readCString(emu.readArg(0));
+    const accept = emu.memory.readCString(emu.readArg(1));
+    const set = new Set(accept);
+    for (let i = 0; i < s.length; i++) if (!set.has(s[i])) return i;
+    return s.length;
+  });
+
+  // char *strpbrk(const char *s, const char *accept)
+  msvcrt.register('strpbrk', 0, () => {
+    const sPtr = emu.readArg(0);
+    const s = emu.memory.readCString(sPtr);
+    const accept = emu.memory.readCString(emu.readArg(1));
+    const set = new Set(accept);
+    for (let i = 0; i < s.length; i++) if (set.has(s[i])) return sPtr + i;
+    return 0;
+  });
+
+  // void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void*, const void*))
+  msvcrt.register('qsort', 0, () => {
+    const base = emu.readArg(0);
+    const nmemb = emu.readArg(1);
+    const size = emu.readArg(2);
+    const compar = emu.readArg(3);
+    if (!base || nmemb < 2 || !size || !compar) return 0;
+
+    // Copy elements out to JS-owned buffers (so swapping in memory doesn't
+    // invalidate the comparator's view). We keep indices and sort them.
+    const buffers: Uint8Array[] = new Array(nmemb);
+    for (let i = 0; i < nmemb; i++) {
+      const buf = new Uint8Array(size);
+      for (let j = 0; j < size; j++) buf[j] = emu.memory.readU8(base + i * size + j);
+      buffers[i] = buf;
+    }
+
+    // Scratch slots for the comparator to read from — allocate once.
+    const slotA = emu.allocHeap(size);
+    const slotB = emu.allocHeap(size);
+    const writeSlot = (slot: number, buf: Uint8Array) => {
+      for (let j = 0; j < size; j++) emu.memory.writeU8(slot + j, buf[j]);
+    };
+
+    const indices = Array.from({ length: nmemb }, (_, i) => i);
+    indices.sort((a, b) => {
+      writeSlot(slotA, buffers[a]);
+      writeSlot(slotB, buffers[b]);
+      const r = emu.callCallback(compar, [slotA, slotB]) | 0;
+      return r;
+    });
+
+    // Write sorted data back
+    for (let i = 0; i < nmemb; i++) {
+      const src = buffers[indices[i]];
+      for (let j = 0; j < size; j++) emu.memory.writeU8(base + i * size + j, src[j]);
+    }
+    return 0;
+  });
+
+  // void perror(const char *s)
+  msvcrt.register('perror', 0, () => {
+    const s = emu.readArg(0) ? emu.memory.readCString(emu.readArg(0)) : '';
+    console.error(`[MSVCRT perror] ${s}${s ? ': ' : ''}<errno>`);
+    return 0;
+  });
+
+  // void *memchr(const void *s, int c, size_t n)
+  msvcrt.register('memchr', 0, () => {
+    const ptr = emu.readArg(0);
+    const c = emu.readArg(1) & 0xFF;
+    const n = emu.readArg(2);
+    for (let i = 0; i < n; i++) {
+      if (emu.memory.readU8(ptr + i) === c) return ptr + i;
+    }
+    return 0;
+  });
+
+  // char *strchr(const char *s, int c)
+  msvcrt.register('strchr', 0, () => {
+    const ptr = emu.readArg(0);
+    const c = emu.readArg(1) & 0xFF;
+    let p = ptr;
+    for (;;) {
+      const b = emu.memory.readU8(p);
+      if (b === c) return p;
+      if (b === 0) return 0;
+      p++;
+    }
+  });
+
   // atoi
   msvcrt.register('atoi', 0, () => {
     const str = emu.memory.readCString(emu.readArg(0));
     return parseInt(str, 10) || 0;
+  });
+
+  // atof(const char*) — returns double in ST(0)
+  msvcrt.register('atof', 0, () => {
+    const str = emu.memory.readCString(emu.readArg(0));
+    const v = parseFloat(str);
+    fpuPush(emu.cpu, isNaN(v) ? 0 : v);
+    return 0;
+  });
+
+  // strtod(const char *nptr, char **endptr)
+  msvcrt.register('strtod', 0, () => {
+    const nptr = emu.readArg(0);
+    const endptrPtr = emu.readArg(1);
+    const str = emu.memory.readCString(nptr);
+    const trimmed = str.replace(/^\s+/, '');
+    const leadingSpaces = str.length - trimmed.length;
+    const match = trimmed.match(/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/);
+    let consumed = 0;
+    let v = 0;
+    if (match) { consumed = match[0].length; v = parseFloat(match[0]); }
+    if (endptrPtr) emu.memory.writeU32(endptrPtr, nptr + leadingSpaces + consumed);
+    fpuPush(emu.cpu, isNaN(v) ? 0 : v);
+    return 0;
   });
 
   // strtol / strtoul / wcstol

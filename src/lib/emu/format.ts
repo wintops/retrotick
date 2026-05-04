@@ -238,6 +238,41 @@ export function scanString(
         // %n does not count as a matched field
         break;
       }
+      case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
+        let numStr = '';
+        const maxChars = Math.min(width, str.length - si);
+        let j = 0;
+        if (j < maxChars && (str[si + j] === '-' || str[si + j] === '+')) { numStr += str[si + j]; j++; }
+        while (j < maxChars && str[si + j] >= '0' && str[si + j] <= '9') { numStr += str[si + j]; j++; }
+        if (j < maxChars && str[si + j] === '.') {
+          numStr += str[si + j]; j++;
+          while (j < maxChars && str[si + j] >= '0' && str[si + j] <= '9') { numStr += str[si + j]; j++; }
+        }
+        if (j < maxChars && (str[si + j] === 'e' || str[si + j] === 'E')) {
+          numStr += str[si + j]; j++;
+          if (j < maxChars && (str[si + j] === '-' || str[si + j] === '+')) { numStr += str[si + j]; j++; }
+          while (j < maxChars && str[si + j] >= '0' && str[si + j] <= '9') { numStr += str[si + j]; j++; }
+        }
+        const val = parseFloat(numStr);
+        if (numStr === '' || numStr === '-' || numStr === '+' || numStr === '.' || isNaN(val)) break;
+        si += j;
+        if (!suppress) {
+          const ptr = readArg(argIdx++);
+          const isDouble = lengthMod === 'l' || lengthMod === 'L';
+          const buf = new ArrayBuffer(8);
+          const dv = new DataView(buf);
+          if (isDouble) {
+            dv.setFloat64(0, val, true);
+            mem.writeU32(ptr, dv.getUint32(0, true));
+            mem.writeU32(ptr + 4, dv.getUint32(4, true));
+          } else {
+            dv.setFloat32(0, val, true);
+            mem.writeU32(ptr, dv.getUint32(0, true));
+          }
+          matched++;
+        }
+        break;
+      }
       default:
         // Unknown specifier — stop
         return matched;

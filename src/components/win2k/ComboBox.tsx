@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
 import type { ComponentChildren } from 'preact';
 
 /**
@@ -63,19 +64,41 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
   // Interactive mode
   const [open, setOpen] = useState(false);
   const [hoverIdx, setHoverIdx] = useState(-1);
+  const [dropdownRect, setDropdownRect] = useState<{ left: number; top: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on click outside
+  // Close dropdown on click outside (both container and list)
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t)) return;
+      if (listRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener('pointerdown', handler, true);
     return () => document.removeEventListener('pointerdown', handler, true);
+  }, [open]);
+
+  // Track the container's viewport position while open so the portal stays anchored.
+  // Real Windows dropdowns float over everything — use position:fixed to escape
+  // any clipping/stacking context of the hosting window.
+  useEffect(() => {
+    if (!open) { setDropdownRect(null); return; }
+    const update = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setDropdownRect({ left: r.left, top: r.bottom, width: r.width });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
   }, [open]);
 
   // Scroll selected item into view when dropdown opens
@@ -84,7 +107,7 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
       const child = listRef.current.children[selectedIndex] as HTMLElement | undefined;
       if (child) child.scrollIntoView({ block: 'nearest' });
     }
-  }, [open, selectedIndex]);
+  }, [open, selectedIndex, dropdownRect]);
 
   const fontStyle = font || fontCSS || '11px/1 "Tahoma", "MS Sans Serif", sans-serif';
   const selectedText = selectedIndex >= 0 && selectedIndex < items.length
@@ -160,13 +183,15 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
         </div>
       </div>
 
-      {open && items.length > 0 && (
+      {open && items.length > 0 && dropdownRect && createPortal(
         <div
           ref={listRef}
           style={{
-            position: 'absolute', top: '100%', left: 0,
-            width: '100%', maxHeight: 160,
-            overflowY: items.length > 10 ? 'scroll' : 'auto',
+            position: 'fixed',
+            left: dropdownRect.left, top: dropdownRect.top,
+            width: dropdownRect.width,
+            maxHeight: Math.max(40, window.innerHeight - dropdownRect.top - 4),
+            overflowY: 'auto',
             border: '1px solid #000',
             background: '#FFF',
             zIndex: 10000,
@@ -198,7 +223,8 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
               </div>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

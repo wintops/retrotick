@@ -64,6 +64,22 @@ export function registerDialog(emu: Emulator): void {
       : allDialogs.find(d => d.id === templateId);
     if (mainResult) return mainResult.dialog;
 
+    // Fallback: read the main exe's resource directory from emulator memory.
+    // This is needed for UPX-packed executables where the resource data in the
+    // raw file is compressed but has been decompressed in memory at runtime.
+    try {
+      const entry = emu.findResourceEntry(5 /* RT_DIALOG */, templateId);
+      if (entry) {
+        const addr = emu.pe.imageBase + entry.dataRva;
+        const buf = new ArrayBuffer(entry.dataSize);
+        const u8 = new Uint8Array(buf);
+        for (let i = 0; i < entry.dataSize; i++) u8[i] = emu.memory.readU8(addr + i);
+        return parseDialogTemplate(buf, 0, entry.dataSize);
+      }
+    } catch (e: unknown) {
+      console.warn(`[DLG] Failed to parse main-exe dialog template ${templateId} from memory: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // Check loaded DLL modules by hInstance
     for (const [, mod] of emu.loadedModules) {
       if (mod.imageBase !== hInstance && mod.base !== hInstance) continue;
