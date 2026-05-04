@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'preact/hooks';
-import { renameEntry, copyEntry, displayName, isFolder } from '../lib/file-store';
+import { renameEntry, copyEntry, displayName, isFolder, dispatchDesktopFilesChanged } from '../lib/file-store';
 
 export interface ClipboardState {
   mode: 'cut' | 'copy';
@@ -22,6 +22,8 @@ export function useClipboard() {
 
   const paste = useCallback(async (targetPrefix: string) => {
     if (!clipboard || clipboard.items.length === 0) return;
+    const added: string[] = [];
+    const deleted: string[] = [];
     for (const item of clipboard.items) {
       const dName = displayName(item);
       const isDir = isFolder(item);
@@ -31,12 +33,15 @@ export function useClipboard() {
       if (clipboard.mode === 'cut') {
         if (item === destName) continue;
         await renameEntry(item, destName);
+        deleted.push(item);
+        added.push(destName);
       } else {
         await copyEntry(item, destName);
+        added.push(destName);
       }
     }
     if (clipboard.mode === 'cut') setClipboard(null);
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
   }, [clipboard]);
 
   return { clipboard, cut, copy, paste, clear };

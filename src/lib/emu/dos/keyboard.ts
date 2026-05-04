@@ -32,6 +32,11 @@ const EXTENDED_SCANCODES = new Set([
 ]);
 
 function runInt15KeyboardIntercept(cpu: CPU, emu: Emulator, scancode: number): { scancode: number; discard: boolean } {
+  // The INT 15h AH=4Fh keyboard intercept is a real-mode BIOS service.
+  // In protected mode the low-memory IVT at linear 0x54 is stale or zero,
+  // and dispatching through it would push a 16-bit frame and jump to cs=0
+  // via the direct `cpu.cs = ...` below, derailing the PM client.
+  if (!cpu.realMode) return { scancode, discard: false };
   const intNum = 0x15;
   const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
   // Check both _dosIntVectors and IVT memory (programs may write vectors directly)

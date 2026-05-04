@@ -1,6 +1,6 @@
 import type { CPU } from './cpu';
 import type { Memory } from '../memory';
-import { fpuPush, fpuPop, fpuST, fpuSetST } from './fpu';
+import { fpuPush, fpuPop, fpuST, fpuSetST, readExtended80, writeExtended80 } from './fpu';
 
 // Flag bits
 const CF = 0x001;
@@ -130,10 +130,14 @@ export function execFPU_DC(cpu: CPU, mod: number, regField: number, rm: number, 
       case 1: fpuSetST(cpu, rm, fpuST(cpu, rm) * fpuST(cpu, 0)); break;
       case 2: fpuCompare(cpu, fpuST(cpu, 0), fpuST(cpu, rm)); break;
       case 3: fpuCompare(cpu, fpuST(cpu, 0), fpuST(cpu, rm)); fpuPop(cpu); break;
-      case 4: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); break;
-      case 5: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); break;
-      case 6: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); break;
-      case 7: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); break;
+      // DC E0+i (/4) = FSUBR ST(i), ST(0) : ST(i) = ST(0) - ST(i)
+      case 4: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); break;
+      // DC E8+i (/5) = FSUB  ST(i), ST(0) : ST(i) = ST(i) - ST(0)
+      case 5: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); break;
+      // DC F0+i (/6) = FDIVR ST(i), ST(0) : ST(i) = ST(0) / ST(i)
+      case 6: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); break;
+      // DC F8+i (/7) = FDIV  ST(i), ST(0) : ST(i) = ST(i) / ST(0)
+      case 7: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); break;
     }
   }
 }
@@ -173,8 +177,68 @@ export function execFPU_DD(cpu: CPU, mod: number, regField: number, rm: number, 
         }
         break;
       }
-      case 4: break;
-      case 6: break;
+      case 4: {
+        // FRSTOR — restore FPU state from memory (94 bytes / 108 bytes)
+        let stBase: number;
+        if (cpu.use32) {
+          cpu.fpuCW = mem.readU16(addr);
+          cpu.fpuSW = mem.readU16(addr + 4);
+          cpu.fpuTW = mem.readU16(addr + 8);
+          stBase = addr + 28;
+        } else {
+          cpu.fpuCW = mem.readU16(addr);
+          cpu.fpuSW = mem.readU16(addr + 2);
+          cpu.fpuTW = mem.readU16(addr + 4);
+          stBase = addr + 14;
+        }
+        cpu.fpuTop = (cpu.fpuSW >> 11) & 7;
+        // 8 x 80-bit registers stored in physical order R0..R7 (not ST relative).
+        for (let i = 0; i < 8; i++) {
+          const { value, raw } = readExtended80(mem, stBase + i * 10);
+          cpu.fpuStack[i] = value;
+          cpu.fpuRaw80[i] = raw;
+          cpu.fpuRaw64[i] = undefined;
+          cpu.fpuI64[i] = undefined;
+        }
+        break;
+      }
+      case 6: {
+        // FNSAVE — store full FPU state (env + 8x80-bit), then reinitialize.
+        const swOut = (cpu.fpuSW & ~0x3800) | ((cpu.fpuTop & 7) << 11);
+        let stBase: number;
+        if (cpu.use32) {
+          mem.writeU32(addr + 0, cpu.fpuCW);
+          mem.writeU32(addr + 4, swOut);
+          mem.writeU32(addr + 8, cpu.fpuTW);
+          mem.writeU32(addr + 12, 0);
+          mem.writeU32(addr + 16, 0);
+          mem.writeU32(addr + 20, 0);
+          mem.writeU32(addr + 24, 0);
+          stBase = addr + 28;
+        } else {
+          mem.writeU16(addr + 0, cpu.fpuCW);
+          mem.writeU16(addr + 2, swOut);
+          mem.writeU16(addr + 4, cpu.fpuTW);
+          mem.writeU16(addr + 6, 0);
+          mem.writeU16(addr + 8, 0);
+          mem.writeU16(addr + 10, 0);
+          mem.writeU16(addr + 12, 0);
+          stBase = addr + 14;
+        }
+        for (let i = 0; i < 8; i++) {
+          writeExtended80(mem, stBase + i * 10, cpu.fpuStack[i], cpu.fpuRaw80[i]);
+        }
+        cpu.fpuCW = 0x037F;
+        cpu.fpuSW = 0;
+        cpu.fpuTW = 0xFFFF;
+        cpu.fpuTop = 0;
+        for (let i = 0; i < 8; i++) {
+          cpu.fpuRaw80[i] = undefined;
+          cpu.fpuRaw64[i] = undefined;
+          cpu.fpuI64[i] = undefined;
+        }
+        break;
+      }
       case 7: mem.writeU16(addr, cpu.fpuSW | (cpu.fpuTop << 11)); break;
       default:
         console.warn(`FPU DD /${regField} mem unimplemented at EIP=0x${((cpu.eip) >>> 0).toString(16)}`);
@@ -218,10 +282,14 @@ export function execFPU_DE(cpu: CPU, mod: number, regField: number, rm: number, 
           fpuPop(cpu);
         }
         break;
-      case 4: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); fpuPop(cpu); break;
-      case 5: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); fpuPop(cpu); break;
-      case 6: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); fpuPop(cpu); break;
-      case 7: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE E0+i (/4) = FSUBRP ST(i), ST(0) : ST(i) = ST(0) - ST(i); pop
+      case 4: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE E8+i (/5) = FSUBP  ST(i), ST(0) : ST(i) = ST(i) - ST(0); pop
+      case 5: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); fpuPop(cpu); break;
+      // DE F0+i (/6) = FDIVRP ST(i), ST(0) : ST(i) = ST(0) / ST(i); pop
+      case 6: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE F8+i (/7) = FDIVP  ST(i), ST(0) : ST(i) = ST(i) / ST(0); pop
+      case 7: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); fpuPop(cpu); break;
     }
   }
 }

@@ -71,7 +71,7 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
       const freeKB = Math.max(0, emu._xmsTotalKB - usedKB);
       cpu.setReg16(EAX, Math.min(freeKB, 0xFFFF)); // largest free block (KB)
       cpu.setReg16(EDX, Math.min(freeKB, 0xFFFF)); // total free (KB)
-      cpu.setReg8(EBX, 0x00); // BL = no error
+      cpu.setReg8(EBX, freeKB === 0 ? 0xA0 : 0x00); // BL = error if all allocated
       return true;
     }
 
@@ -180,7 +180,12 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
         cpu.setReg8(EBX, 0xA2); // BL = invalid handle
         return true;
       }
-      if (emb.lockCount > 0) emb.lockCount--;
+      if (emb.lockCount === 0) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xAA); // BL = EMB not locked
+        return true;
+      }
+      emb.lockCount--;
       cpu.setReg16(EAX, 1);
       return true;
     }
@@ -408,25 +413,23 @@ function xmsFree(emu: Emulator, base: number, sizeBytes: number): void {
     }
     return;
   }
-  // Insert into free list and merge adjacent
+  // Insert into sorted free list and merge adjacent blocks.
+  // Keep list sorted by base address so a single pass merges all neighbors.
   const freeBlocks = emu._xmsFreeBlocks;
-  const end = base + sizeBytes;
-  // Find blocks that are adjacent
-  let mergedBase = base;
-  let mergedEnd = end;
-  const remaining: typeof freeBlocks = [];
-  for (const b of freeBlocks) {
-    const bEnd = b.base + b.size;
-    if (bEnd === mergedBase) {
-      mergedBase = b.base;
-    } else if (b.base === mergedEnd) {
-      mergedEnd = bEnd;
+  freeBlocks.push({ base, size: sizeBytes });
+  freeBlocks.sort((a, b) => a.base - b.base);
+  // Merge adjacent entries
+  const merged: typeof freeBlocks = [freeBlocks[0]];
+  for (let i = 1; i < freeBlocks.length; i++) {
+    const prev = merged[merged.length - 1];
+    const cur = freeBlocks[i];
+    if (prev.base + prev.size === cur.base) {
+      prev.size += cur.size;
     } else {
-      remaining.push(b);
+      merged.push(cur);
     }
   }
-  remaining.push({ base: mergedBase, size: mergedEnd - mergedBase });
-  emu._xmsFreeBlocks = remaining;
+  emu._xmsFreeBlocks = merged;
 }
 
 /** Free all XMS handles allocated while the given PSP was active (called on program exit). */

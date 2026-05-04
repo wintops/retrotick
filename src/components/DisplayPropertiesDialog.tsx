@@ -5,7 +5,7 @@ import { TabControl } from './win2k/TabControl';
 import { Button } from './win2k/Button';
 import { FileDialog } from './win2k/FileDialog';
 import { t } from '../lib/regional-settings';
-import { getAllFiles, getFile } from '../lib/file-store';
+import { listFileMetadata, getFile } from '../lib/file-store';
 import { DefaultFileManager } from '../lib/emu/file-manager';
 
 // --- Types ---
@@ -184,13 +184,16 @@ export function DisplayPropertiesDialog({ current, onApply, onClose, flashTrigge
 
   useEffect(() => { if (initialPos) setVisible(true); }, [initialPos]);
 
-  // Load image files from virtual FS (for list + FileManager.virtualFiles)
+  // Load image file metadata from virtual FS (for list + FileManager.virtualFiles).
+  // The actual image bytes are fetched lazily in handleSelectImage when the
+  // user picks a wallpaper, so opening the dialog no longer pays the full
+  // structured-clone cost of every stored binary.
   useEffect(() => {
-    getAllFiles().then(files => {
-      fileManager.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
-      const images = files
-        .filter(f => IMAGE_EXTENSIONS.test(f.name))
-        .map(f => ({ name: f.name, displayName: f.name.replace(/\.[^.]+$/, '') }));
+    listFileMetadata().then(metas => {
+      fileManager.virtualFiles = metas.map(m => ({ name: m.name, size: m.size }));
+      const images = metas
+        .filter(m => IMAGE_EXTENSIONS.test(m.name))
+        .map(m => ({ name: m.name, displayName: m.name.replace(/\.[^.]+$/, '') }));
       setImageList(images);
     });
   }, [fileManager]);

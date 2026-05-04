@@ -63,6 +63,7 @@ export interface UiStrings {
   failed: string;
   processExited: string;
   folderEmpty: string;
+  folderLoading: string;
   dropHint: string;
   rightClickHint: string;
   // File dialog
@@ -85,6 +86,8 @@ export interface UiStrings {
   labelRefreshRate: string;
   labelJit: string;
   jitExperimental: string;
+  labelMemory: string;
+  labelAudio: string;
   // Properties dialog
   properties: string;
   propType: string;
@@ -197,6 +200,7 @@ const en: UiStrings = {
   failed: 'failed',
   processExited: 'Process has exited with code {0}.',
   folderEmpty: 'This folder is empty',
+  folderLoading: 'Loading...',
   dropHint: 'Drop EXE / DLL files to run apps or inspect resources',
   rightClickHint: 'Right-click desktop for actions',
   lookIn: 'Look in:',
@@ -217,6 +221,8 @@ const en: UiStrings = {
   labelRefreshRate: 'Refresh rate',
   labelJit: 'WASM JIT Compiler',
   jitExperimental: 'Enable (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Properties',
   propType: 'Type:',
   propLocation: 'Location:',
@@ -314,6 +320,7 @@ const fr: UiStrings = {
   failed: '\u00e9chec',
   processExited: 'Le processus s\u2019est termin\u00e9 avec le code {0}.',
   folderEmpty: 'Ce dossier est vide',
+  folderLoading: 'Chargement en cours\u2026',
   dropHint: 'D\u00e9posez des fichiers EXE / DLL pour lancer des applis ou inspecter les ressources',
   rightClickHint: 'Clic droit sur le bureau pour les actions',
   lookIn: 'Regarder dans :',
@@ -334,6 +341,8 @@ const fr: UiStrings = {
   labelRefreshRate: 'Fr\u00e9quence d\u2019affichage',
   labelJit: 'Compilateur WASM JIT',
   jitExperimental: 'Activer (exp\u00e9rimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propri\u00e9t\u00e9s',
   propType: 'Type\u00a0:',
   propLocation: 'Emplacement\u00a0:',
@@ -431,6 +440,7 @@ const de: UiStrings = {
   failed: 'fehlgeschlagen',
   processExited: 'Der Prozess wurde mit Code {0} beendet.',
   folderEmpty: 'Dieser Ordner ist leer',
+  folderLoading: 'Wird geladen\u2026',
   dropHint: 'EXE-/DLL-Dateien hierher ziehen, um Apps auszuf\u00fchren oder Ressourcen anzuzeigen',
   rightClickHint: 'Rechtsklick auf den Desktop f\u00fcr Aktionen',
   lookIn: 'Suchen in:',
@@ -451,6 +461,8 @@ const de: UiStrings = {
   labelRefreshRate: 'Bildwiederholrate',
   labelJit: 'WASM-JIT-Compiler',
   jitExperimental: 'Aktivieren (experimentell)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Eigenschaften',
   propType: 'Typ:',
   propLocation: 'Ort:',
@@ -548,6 +560,7 @@ const es: UiStrings = {
   failed: 'error',
   processExited: 'El proceso finaliz\u00f3 con el c\u00f3digo {0}.',
   folderEmpty: 'Esta carpeta est\u00e1 vac\u00eda',
+  folderLoading: 'Cargando\u2026',
   dropHint: 'Arrastre archivos EXE / DLL para ejecutar aplicaciones o inspeccionar recursos',
   rightClickHint: 'Clic derecho en el escritorio para acciones',
   lookIn: 'Buscar en:',
@@ -568,6 +581,8 @@ const es: UiStrings = {
   labelRefreshRate: 'Frecuencia de actualizaci\u00f3n',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Activar (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propiedades',
   propType: 'Tipo:',
   propLocation: 'Ubicaci\u00f3n:',
@@ -665,6 +680,7 @@ const ja: UiStrings = {
   failed: '\u5931\u6557',
   processExited: '\u30d7\u30ed\u30bb\u30b9\u306f\u30b3\u30fc\u30c9 {0} \u3067\u7d42\u4e86\u3057\u307e\u3057\u305f\u3002',
   folderEmpty: '\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u30fc\u306f\u7a7a\u3067\u3059',
+  folderLoading: '\u8aad\u307f\u8fbc\u307f\u4e2d\u2026',
   dropHint: 'EXE / DLL \u30d5\u30a1\u30a4\u30eb\u3092\u30c9\u30ed\u30c3\u30d7\u3057\u3066\u30a2\u30d7\u30ea\u3092\u5b9f\u884c\u307e\u305f\u306f\u30ea\u30bd\u30fc\u30b9\u3092\u8868\u793a',
   rightClickHint: '\u53f3\u30af\u30ea\u30c3\u30af\u3067\u64cd\u4f5c\u30e1\u30cb\u30e5\u30fc\u3092\u8868\u793a',
   lookIn: '\u30d5\u30a1\u30a4\u30eb\u306e\u5834\u6240:',
@@ -685,6 +701,8 @@ const ja: UiStrings = {
   labelRefreshRate: '\u30ea\u30d5\u30ec\u30c3\u30b7\u30e5\u30ec\u30fc\u30c8',
   labelJit: 'WASM JIT \u30b3\u30f3\u30d1\u30a4\u30e9',
   jitExperimental: '\u6709\u52b9\u306b\u3059\u308b\uff08\u5b9f\u9a13\u7684\uff09',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\u30d7\u30ed\u30d1\u30c6\u30a3',
   propType: '\u7a2e\u985e:',
   propLocation: '\u5834\u6240:',
@@ -782,6 +800,7 @@ const zhCN: UiStrings = {
   failed: '\u5931\u8d25',
   processExited: '\u8fdb\u7a0b\u5df2\u9000\u51fa\uff0c\u9000\u51fa\u4ee3\u7801\u4e3a {0}\u3002',
   folderEmpty: '\u6b64\u6587\u4ef6\u5939\u4e3a\u7a7a',
+  folderLoading: '\u6b63\u5728\u52a0\u8f7d\u2026',
   dropHint: '\u62d6\u653e EXE / DLL \u6587\u4ef6\u4ee5\u8fd0\u884c\u5e94\u7528\u6216\u67e5\u770b\u8d44\u6e90',
   rightClickHint: '\u53f3\u952e\u5355\u51fb\u684c\u9762\u4ee5\u6267\u884c\u64cd\u4f5c',
   lookIn: '\u67e5\u627e\u8303\u56f4:',
@@ -802,6 +821,8 @@ const zhCN: UiStrings = {
   labelRefreshRate: '\u5237\u65b0\u7387',
   labelJit: 'WASM JIT \u7f16\u8bd1\u5668',
   jitExperimental: '\u542f\u7528\uff08\u5b9e\u9a8c\u6027\uff09',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\u5c5e\u6027',
   propType: '\u7c7b\u578b:',
   propLocation: '\u4f4d\u7f6e:',
@@ -899,6 +920,7 @@ const ptBR: UiStrings = {
   failed: 'falhou',
   processExited: 'O processo foi encerrado com o c\u00f3digo {0}.',
   folderEmpty: 'Esta pasta est\u00e1 vazia',
+  folderLoading: 'A carregar\u2026',
   dropHint: 'Solte arquivos EXE / DLL para executar aplicativos ou inspecionar recursos',
   rightClickHint: 'Clique com o bot\u00e3o direito na \u00e1rea de trabalho para a\u00e7\u00f5es',
   lookIn: 'Examinar:',
@@ -919,6 +941,8 @@ const ptBR: UiStrings = {
   labelRefreshRate: 'Taxa de atualiza\u00e7\u00e3o',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Ativar (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propriedades',
   propType: 'Tipo:',
   propLocation: 'Local:',
@@ -1016,6 +1040,7 @@ const it: UiStrings = {
   failed: 'non riuscito',
   processExited: 'Il processo \u00e8 terminato con codice {0}.',
   folderEmpty: 'Questa cartella \u00e8 vuota',
+  folderLoading: 'Caricamento\u2026',
   dropHint: 'Trascinare file EXE / DLL per eseguire applicazioni o visualizzare risorse',
   rightClickHint: 'Clic destro sul desktop per le azioni',
   lookIn: 'Cerca in:',
@@ -1036,6 +1061,8 @@ const it: UiStrings = {
   labelRefreshRate: 'Frequenza di aggiornamento',
   labelJit: 'Compilatore WASM JIT',
   jitExperimental: 'Attivare (sperimentale)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propriet\u00e0',
   propType: 'Tipo:',
   propLocation: 'Percorso:',
@@ -1133,6 +1160,7 @@ const pl: UiStrings = {
   failed: 'b\u0142\u0105d',
   processExited: 'Proces zako\u0144czy\u0142 si\u0119 z kodem {0}.',
   folderEmpty: 'Ten folder jest pusty',
+  folderLoading: '\u0141adowanie\u2026',
   dropHint: 'Upu\u015b\u0107 pliki EXE / DLL, aby uruchomi\u0107 aplikacje lub przegl\u0105da\u0107 zasoby',
   rightClickHint: 'Kliknij prawym przyciskiem na pulpicie, aby wy\u015bwietli\u0107 akcje',
   lookIn: 'Szukaj w:',
@@ -1153,6 +1181,8 @@ const pl: UiStrings = {
   labelRefreshRate: 'Cz\u0119stotliwo\u015b\u0107 od\u015bwie\u017cania',
   labelJit: 'Kompilator WASM JIT',
   jitExperimental: 'W\u0142\u0105cz (eksperymentalny)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'W\u0142a\u015bciwo\u015bci',
   propType: 'Typ:',
   propLocation: 'Lokalizacja:',
@@ -1250,6 +1280,7 @@ const ko: UiStrings = {
   failed: '\uc2e4\ud328',
   processExited: '\ud504\ub85c\uc138\uc2a4\uac00 \ucf54\ub4dc {0}(\uc73c)\ub85c \uc885\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4.',
   folderEmpty: '\uc774 \ud3f4\ub354\ub294 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4',
+  folderLoading: '\ub85c\ub529 \uc911\u2026',
   dropHint: 'EXE / DLL \ud30c\uc77c\uc744 \ub4dc\ub86d\ud558\uc5ec \uc571\uc744 \uc2e4\ud589\ud558\uac70\ub098 \ub9ac\uc18c\uc2a4\ub97c \ud655\uc778\ud558\uc138\uc694',
   rightClickHint: '\ubc14\ud0d5 \ud654\uba74\uc744 \ub9c8\uc6b0\uc2a4 \uc624\ub978\ucabd \ubc84\ud2bc\uc73c\ub85c \ud074\ub9ad\ud558\uc5ec \uc791\uc5c5 \uc218\ud589',
   lookIn: '\ucc3e\ub294 \uc704\uce58:',
@@ -1270,6 +1301,8 @@ const ko: UiStrings = {
   labelRefreshRate: '\uc8fc\uc0ac\uc728',
   labelJit: 'WASM JIT \ucef4\ud30c\uc77c\ub7ec',
   jitExperimental: '\ud65c\uc131\ud654 (\uc2e4\ud5d8\uc801)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\uc18d\uc131',
   propType: '\uc720\ud615:',
   propLocation: '\uc704\uce58:',

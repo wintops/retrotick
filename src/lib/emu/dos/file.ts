@@ -125,17 +125,14 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
       }
     }
 
-    // Async path: fetch data into cache, then rewind EIP to replay the INT 21h
-    const fileNameForCache = fileInfo.name;
+    // Async path: fetch data into cache, then rewind EIP to replay the INT 21h.
+    // Resume via setTimeout(0) — requestAnimationFrame may not fire reliably
+    // when nothing is painting, and we need the CPU to resume quickly.
     fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
-      // Data is now in virtualFileCache (fetchFileData caches it).
-      // Resume CPU — the INT 21h will re-execute and hit the sync path.
       if (emu._dosFileOpenPending) {
         emu._dosFileOpenPending = false;
         emu.waitingForMessage = false;
-        if (emu.running && !emu.halted) {
-          requestAnimationFrame(emu.tick);
-        }
+        if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
       }
     });
     // Rewind EIP to before the INT 21h instruction (CD 21 = 2 bytes)
@@ -145,6 +142,33 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
     emu.waitingForMessage = true;
     return;
   }
+  // Fallback: strip garbage prefix bytes and try base filename in current directory.
+  // DOS4GW sometimes constructs paths with a corrupt prefix; extract just the base name.
+  const cleanName = name.replace(/^[^\x20-\x7E]+/, ''); // strip non-printable prefix
+  const baseName3 = cleanName.replace(/^.*[\\\/]/, '').toUpperCase();
+  if (baseName3 && baseName3 !== name.toUpperCase()) {
+    const dirResolved = dosResolvePath(emu, baseName3);
+    const dirInfo = fs.findFile(dirResolved, emu.additionalFiles);
+    if (dirInfo) {
+      const dirData = getSyncFileData(fs, dirInfo, emu, dirResolved);
+      if (dirData) {
+        const handle = allocDosHandle(emu);
+        emu._dosFiles.set(handle, { data: dirData, pos: 0, name: cleanName });
+        emu.handles.set(handle, 'file', { path: dirResolved, access: 0x80000000, pos: 0, data: dirData, size: dirData.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+      // Async fallback for base name
+      fs.fetchFileData(dirInfo, emu.additionalFiles, dirResolved).then(() => {
+        if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) setTimeout(emu.tick, 0); }
+      });
+      cpu.eip -= 2;
+      emu._dosFileOpenPending = true;
+      emu.waitingForMessage = true;
+      return;
+    }
+  }
   cpu.setFlag(CF, true);
   cpu.setReg16(EAX, 2); // file not found
 }
@@ -152,12 +176,13 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
 export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
+  if (emu.traceDosInt) console.log(`[OPEN] "${name}"`);
   // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
   const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
-  if (baseName === 'EMMXXXX0') {
+  if (baseName === 'EMMXXXX0' && emu.dosEnableEms) {
     // EMS driver present — return a dummy handle
     const handle = allocDosHandle(emu);
-    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0' });
+    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0', isDevice: true });
     cpu.setReg16(EAX, handle);
     cpu.setFlag(CF, false);
     console.log(`[DOS] Open "${name}" -> CF=0 AX=0x${handle.toString(16)} (EMS device)`);
@@ -184,7 +209,8 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const count = cpu.getReg16(ECX);
   const dsBase = cpu.segBase(cpu.ds);
-  const bufAddr = dsBase + cpu.getReg16(EDX);
+  const dx = cpu.getReg16(EDX);
+  const bufAddr = dsBase + dx;
   if (h <= 2) {
     cpu.setReg16(EAX, 0);
     cpu.setFlag(CF, false);
@@ -192,6 +218,9 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
     const f = emu._dosFiles.get(h);
     if (f) {
       const avail = Math.min(count, f.data.length - f.pos);
+      if (emu.traceDosInt) {
+        console.log(`[READ] h=${h.toString(16)} pos=0x${f.pos.toString(16)} cnt=${count.toString(16)} ds:dx=${cpu.ds.toString(16)}:${dx.toString(16)} lin=0x${bufAddr.toString(16)} rm=${cpu.realMode} name="${f.name ?? '?'}" avail=${avail.toString(16)}`);
+      }
       for (let i = 0; i < avail; i++) {
         cpu.mem.writeU8(bufAddr + i, f.data[f.pos + i]);
       }
@@ -199,8 +228,12 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
       cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
     } else {
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 6); // invalid handle
+      // Unknown handle: some DOS apps (DOOM shareware under DOS/4GW) get
+      // confused about handle values and enter infinite retry loops on the
+      // DOS "invalid handle" error. Returning a clean EOF (AX=0, CF=0) lets
+      // Watcom's read() loop exit naturally; the app falls back to defaults.
+      cpu.setReg16(EAX, 0);
+      cpu.setFlag(CF, false);
     }
   }
 }
@@ -259,6 +292,11 @@ export function dosDeleteFile(cpu: CPU, emu: Emulator): void {
 export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const origin = cpu.reg[EAX] & 0xFF;
+  // CX:DX is a 32-bit offset. For SEEK_CUR/SEEK_END DOS interprets it as
+  // signed (allowing negative seeks relative to current/end). JS `|` yields
+  // a signed 32-bit which is exactly what we want — don't force unsigned
+  // with `>>> 0`, that would turn -4 into 0xFFFFFFFC and break end-relative
+  // seeks (e.g. Second Reality reads the last 4 bytes of its own EXE).
   const offset = (cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX);
   const f = emu._dosFiles.get(h);
   if (f) {
@@ -268,6 +306,9 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
+    if (emu.traceDosInt) {
+      console.log(`[SEEK] h=${h.toString(16)} origin=${origin} offset=0x${offset.toString(16)} → pos=0x${f.pos.toString(16)} name="${f.name ?? '?'}"`);
+    }
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
     cpu.setReg16(EAX, f.pos & 0xFFFF);
     cpu.setFlag(CF, false);
@@ -308,14 +349,28 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
       cpu.setReg16(EDX, 0x80D3); // character device
       cpu.setFlag(CF, false);
     } else if (emu._dosFiles.has(handle) || emu.handles.getType(handle) === 'file') {
-      const f = emu._dosFiles.get(handle);
-      cpu.setReg16(EDX, f?.name === 'EMMXXXX0' ? 0x80C0 : 0x0000);
+      const df = emu._dosFiles.get(handle);
+      cpu.setReg16(EDX, df?.isDevice ? 0x80D3 : 0x0000); // device or disk file
       cpu.setFlag(CF, false);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6);
     }
   } else if (subFunc === 0x01) {
+    cpu.setFlag(CF, false);
+  } else if (subFunc === 0x06 || subFunc === 0x07) {
+    // Get input (06) / output (07) status.
+    // Character device ready: AL=0xFF. Not ready / EOF: AL=0x00.
+    // EOS-based demos probe "EMMXXXX0" with AL=07 to detect the EMS driver;
+    // returning 0xFF is required for them to proceed to the VCPI check.
+    const h = cpu.getReg16(EBX);
+    const df = emu._dosFiles.get(h);
+    let ready = 0xFF;
+    if (df && !df.isDevice) {
+      // Regular file: AL=0xFF unless EOF (for input status only).
+      if (subFunc === 0x06 && df.pos >= df.data.length) ready = 0x00;
+    }
+    cpu.setReg16(EAX, ready);
     cpu.setFlag(CF, false);
   } else if (subFunc === 0x08) {
     // Check if block device is removable: AX=0 removable, AX=1 fixed

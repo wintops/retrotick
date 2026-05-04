@@ -55,14 +55,20 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
   // Save raw EA before segment base (for LEA)
   const rawEA = addr >>> 0;
 
-  // Apply segment base
+  // Apply segment base. Historically the 32-bit (use32) branch skipped the
+  // default-segment base on the assumption that DPMI apps run with flat
+  // descriptors (DS.base=0), so skipping was a no-op. That breaks VCPI
+  // extenders (EOS demos ISAY/HMMM/KLPTT) whose GDT puts cs/ds at the same
+  // non-zero base — in their model `MOV [disp32], reg` is meant to hit the
+  // same linear bytes as the instruction at CS:[disp32-delta]. Always
+  // applying the base makes both cases work because flat DPMI descriptors
+  // still add zero here.
   if (cpu._segOverride === 0x64) {
     addr = (addr + cpu.fsBase) | 0;
   } else if (cpu._segOverride) {
     const segSel = getSegOverrideSel(cpu);
     addr = (addr + cpu.segBase(segSel)) | 0;
-  } else if (!cpu.use32) {
-    // Real mode with 67 prefix: apply default segment (DS, or SS for BP/ESP-based)
+  } else {
     const segSel = useSSeg ? cpu.ss : cpu.ds;
     addr = (addr + cpu.segBase(segSel)) | 0;
   }

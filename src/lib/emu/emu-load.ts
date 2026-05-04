@@ -38,7 +38,9 @@ import { registerNetapi32 } from './win32/netapi32';
 import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
-import { setupEmsDeviceHeader, EMS_DEVICE_SEG } from './dos/ems';
+import { setupDpmiStub } from './dos/dpmi';
+import { setupEmsDeviceHeader, EMS_DEVICE_SEG, setupVcpiPrivateArea, VCPI_PRIVATE_AREA } from './dos/ems';
+import { setupBiosRom } from './dos/bios-rom';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { VGA_FONT_8X16_ROM, ROM_FONT_8X16_ADDR, ROM_FONT_8X16_SEG, ROM_FONT_8X16_OFF } from './dos/vga-font-16';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
@@ -219,7 +221,9 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     emu.initConsoleBuffer();
     emu.memory.a20Mask = 0xFFFFF; // A20 off for DOS programs
 
-    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
+    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     emu.flatMemory = new FlatMemory();
     emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
@@ -243,11 +247,42 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       emu.additionalFiles.set(exeName, arrayBuffer);
     }
 
-    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
+    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     // Enable flat memory for DOS — shares buffer with WASM JIT (zero-copy)
     emu.flatMemory = new FlatMemory();
     emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
+
+    // Pseudo-V86: start the DOS program with PE=1 + EFLAGS.VM=1 but keep
+    // realMode=true (segment addressing is sel*16 like RM). DOS/4GW(/Pro)
+    // detects V86-under-monitor and takes the VCPI client path — bypassing
+    // the raw PM switch code that currently halts at 442K steps for DOOM.
+    //
+    // We intentionally leave _vcpiSavedIVT unset here — HW IRQ dispatch in
+    // emu-exec.ts filters out "PM-modified" IVT entries using that snapshot,
+    // which would erroneously skip RM DOS programs' own timer/keyboard/sound
+    // handlers if installed after V86 init. The VCPI DE00 handler populates
+    // _vcpiSavedIVT lazily only when DOS/4GW actually calls INT 67h DE00,
+    // which is strictly AFTER such handlers are installed.
+    if (emu.dosEnableV86) {
+      setupVcpiPrivateArea(emu.memory);
+      emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
+      emu._gdtBase = VCPI_PRIVATE_AREA;
+      emu._gdtLimit = 0xFF;
+      emu._idtBase = VCPI_PRIVATE_AREA + 0x2000;
+      emu._idtLimit = 0x7FF;
+      emu._ldtr = 0x08;
+      emu._tr = 0x10;
+      // PE bit is NOT stored in _cr0 — it is shadowed at CR0-read sites
+      // (SMSW / MOV r,CR0) when _vm86 is true. Keeping _cr0.PE=0 lets guest
+      // programs that do their own real→PM switch (e.g. TESTEXT) see a clean
+      // RM→PM transition when they write CR0 with PE=1 and exit pseudo-V86.
+      emu.cpu._vm86 = true;             // getFlags() ORs in bit 17
+      console.log(`[EMU] Pseudo-V86 enabled: CR0=${emu._cr0.toString(16)} EFLAGS.VM=1 GDT=${emu._gdtBase.toString(16)} IDT=${emu._idtBase.toString(16)}`);
+    }
+
     console.log(`[EMU] MZ loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
     return;
   }
@@ -1058,7 +1093,12 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.cpu.ss = mz.entrySS;
   emu.cpu.eip = (emu.cpu.segBase(mz.entryCS)) + mz.entryIP;
   emu.cpu.reg[4] = mz.entrySP; // SP
-  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200); // IF=1: enable hardware interrupts
+  // IF=1: enable hardware interrupts. Real-mode programs start with IOPL=0 —
+  // the previous IOPL=3 hack made DOS4GW's V86-detection trick (sub_82A4 in
+  // dos4gw.exe) believe we were already in V86, leading to the wrong code path.
+  // IOPL=0 + the matching DOSBox-style "DE00 fails from real mode" lets DOS4GW
+  // take its raw mode-switch path (sub_8087) which works without VCPI.
+  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200);
 
   // Set up video memory area (B800:0000)
   for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
@@ -1068,6 +1108,13 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
 
   // Enable Mode X (unchained VGA) detection
   emu.initVgaModeXHook();
+
+  // Minimal ROM BIOS signatures at F0000-FFFFF: date, machine ID, copyright,
+  // reset JMP, default IRET/IRQ0 stubs, 1.44MB floppy parameter table. Runs
+  // before the per-interrupt stubs and BIOS config table below; any overlap
+  // with subsequent writes is intentional (the later, more-specific writes
+  // win).
+  setupBiosRom(emu.memory);
 
   // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
   const IRET_SEG = 0xF000;
@@ -1080,8 +1127,34 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu.memory.writeU8(BIOS_BASE + off + 3, 0x02);
     emu.memory.writeU8(BIOS_BASE + off + 4, 0x00);
   }
+
+  // Shared default IRET stub at F000:0500 — a single IRET (0xCF).
+  // Unused high-numbered interrupts all point here so DOS extenders like
+  // DOS/4GW can find duplicate IVT entries (their way of detecting which
+  // vectors are unhooked). Without this, every vector is unique and DOS4GW's
+  // IVT scan loops forever.
+  const SHARED_IRET_OFF = 0x0500;
+  emu.memory.writeU8(BIOS_BASE + SHARED_IRET_OFF, 0xCF); // IRET
+  const sharedVec = (IRET_SEG << 16) | SHARED_IRET_OFF;
+
+  // Interrupts that MUST keep unique stubs (actively handled by JS or hooked by programs):
+  const activeInts = new Set([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x06, // CPU exceptions
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, // IRQ 0-7
+    0x10, 0x12, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1B, 0x1C, 0x1F, // BIOS services
+    0x20, 0x21, 0x25, 0x26, 0x27, 0x2A, 0x2F, 0x31, 0x33, // DOS
+    0x43, 0x67, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, // IRQ 8-15 + EMS
+    0x79, 0x7F, // Custom
+  ]);
+
   const defaultVec = new Map<number, number>();
-  for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
+  for (let i = 0; i < 256; i++) {
+    if (activeInts.has(i)) {
+      defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
+    } else {
+      defaultVec.set(i, sharedVec);
+    }
+  }
 
   // DOS-originated interrupts get stubs in a "DOS kernel" segment (0x0050)
   // instead of F000 BIOS ROM. Programs with anti-tamper code (e.g. KeyMaker)
@@ -1129,6 +1202,18 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu._dosIntVectors.set(i, vec);
   }
 
+  // EMS device name signature at INT 67h handler + 0x0A.
+  // Programs detect EMS by checking for "EMMXXXX0" at the handler segment:000A.
+  if (emu.dosEnableEms) {
+    const int67vec = defaultVec.get(0x67)!;
+    const int67seg = (int67vec >>> 16) & 0xFFFF;
+    const int67lin = int67seg * 16;
+    const sig = 'EMMXXXX0';
+    for (let i = 0; i < sig.length; i++) {
+      emu.memory.writeU8(int67lin + 0x0A + i, sig.charCodeAt(i));
+    }
+  }
+
   // BDA (BIOS Data Area) at 0040:0000
   emu.memory.writeU8(0x0449, 0x03);
   emu.memory.writeU16(0x044A, 80);
@@ -1153,6 +1238,10 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(0x0417, 0x00);
   emu.memory.writeU8(0x0418, 0x00);
   emu.memory.writeU8(0x0496, 0x10);
+  // BDA 40:7B — feature byte 2. Bit 5 (0x20) = Virtual DMA Services (VDS)
+  // available. FT2 / Triton-bound programs check this before calling INT 4Bh
+  // AX=81xx. We implement a minimal VDS that maps physical=linear (flat mem).
+  emu.memory.writeU8(0x047B, 0x20);
   // BIOS configuration table at F000:0600
   const biosCfg = 0xF0000 + 0x0600;
   emu.memory.writeU8(biosCfg + 0, 0x08);
@@ -1183,17 +1272,20 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(sftBase + 0x0E, 0x00);
   emu.memory.writeU8(sftBase + 0x0F, 0x00);
 
-  setupXmsStub(emu.memory);
+  if (emu.dosEnableXms) setupXmsStub(emu.memory);
+  if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
 
-  // EMS device driver header at E000:0000 so programs can detect EMS
-  // by checking the device name "EMMXXXX0" at INT 67h segment:000Ah.
-  setupEmsDeviceHeader(emu.memory);
-  // Override INT 67h vector to point to E000 segment (after the IVT loop)
-  const emsVec = (EMS_DEVICE_SEG << 16) | 0x0000;
-  emu.memory.writeU16(0x67 * 4, 0x0000);
-  emu.memory.writeU16(0x67 * 4 + 2, EMS_DEVICE_SEG);
-  emu._dosBiosDefaultVectors.set(0x67, emsVec);
-  emu._dosIntVectors.set(0x67, emsVec);
+  if (emu.dosEnableEms) {
+    // EMS device driver header at E000:0000 so programs can detect EMS
+    // by checking the device name "EMMXXXX0" at INT 67h segment:000Ah.
+    setupEmsDeviceHeader(emu.memory);
+    // Override INT 67h vector to point to E000 segment (after the IVT loop)
+    const emsVec = (EMS_DEVICE_SEG << 16) | 0x0000;
+    emu.memory.writeU16(0x67 * 4, 0x0000);
+    emu.memory.writeU16(0x67 * 4 + 2, EMS_DEVICE_SEG);
+    emu._dosBiosDefaultVectors.set(0x67, emsVec);
+    emu._dosIntVectors.set(0x67, emsVec);
+  }
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {
@@ -1246,8 +1338,19 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu._dosBiosDefaultVectors.set(0x79, ucdosVec);
 
   // Equipment list and memory size
-  emu.memory.writeU16(0x0410, 0x0021);
+  // Bit 1 = FPU present (required: DOS/4GW checks INT 75h handler's first byte
+  // for 0x9B/FWAIT to detect FPU; programs also read this via INT 11h)
+  emu.memory.writeU16(0x0410, 0x0023);
   emu.memory.writeU16(0x0413, 640);
+
+  // INT 75h (FPU exception / IRQ 13) stub: DOS/4GW reads the first byte of the
+  // INT 75h handler and checks for 0x9B (FWAIT opcode) to detect FPU presence.
+  // Write FWAIT+IRET at the handler address so the check passes.
+  {
+    const int75off = 0x75 * 5;
+    emu.memory.writeU8(BIOS_BASE + int75off, 0x9B); // FWAIT
+    emu.memory.writeU8(BIOS_BASE + int75off + 1, 0xCF); // IRET
+  }
 
   // Heap/virtual allocator
   const imageEnd = mz.loadSegment * 16 + mz.imageSize + 0x100;
@@ -1257,7 +1360,11 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.virtualPtr = emu.virtualBase;
 
   // Wire Sound Blaster DMA
-  emu.dosAudio.readMemory = (addr: number) => emu.memory.readU8(addr);
+  // DMA reads are physical-address reads: real DMA controllers bypass the
+  // CPU's MMU. Under paging (VCPI / DPMI clients), readU8 would walk page
+  // tables and return wrong data whenever the DMA source sits in a non-
+  // identity-mapped page.
+  emu.dosAudio.readMemory = (addr: number) => emu.memory.readPhysicalU8(addr);
   emu.dosAudio.writeMemory = (addr: number, val: number) => emu.memory.writeU8(addr, val);
   emu.dosAudio.onSBIRQ = () => {
     const intNum = emu._picMasterBase + 7; // IRQ 7
@@ -1270,7 +1377,7 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     if (!(emu._picMasterMask & 0x20) && !emu._pendingHwInts.includes(intNum))
       emu._pendingHwInts.push(intNum);
   };
-  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
+  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readPhysicalU8(addr);
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

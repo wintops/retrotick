@@ -73,6 +73,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   switch (ah) {
     case 0x00: // Old-style terminate (same as INT 20h)
       if (dosExecReturn(cpu, emu, 0)) break;
+      cpu.haltReason = 'terminated with code 0';
       emu.halted = true;
       cpu.halted = true;
       break;
@@ -475,6 +476,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         mcbSeg += size + 1;
       }
       if (!allocated) {
+        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h`);
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
         cpu.setReg16(EBX, largestFree);
@@ -484,6 +486,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x49: { // Free memory (ES=segment of block)
       const blockSeg = cpu.es;
+      // (debug log removed)
       const mcbLin = (blockSeg - 1) * 16;
       const type = cpu.mem.readU8(mcbLin);
       if (type === 0x4D || type === 0x5A) {
@@ -498,48 +501,80 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       const newParas = cpu.getReg16(EBX);
       const topOfMem = 0xA000;
 
-      // Update MCB at blockSeg - 1
-      const mcbLinear = (blockSeg - 1) * 16;
+      // Find the MCB at blockSeg - 1
+      const mcbSeg = blockSeg - 1;
+      const mcbLinear = mcbSeg * 16;
       const mcbType = cpu.mem.readU8(mcbLinear);
-      if (mcbType === 0x4D || mcbType === 0x5A) {
-        const oldParas = cpu.mem.readU16(mcbLinear + 3);
-        if (blockSeg + newParas > topOfMem) {
-          // Not enough memory
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 8); // insufficient memory
-          cpu.setReg16(EBX, topOfMem - blockSeg); // max available
-          break;
-        }
-        // Update this MCB's size
-        cpu.mem.writeU16(mcbLinear + 3, newParas);
+      if (mcbType !== 0x4D && mcbType !== 0x5A) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 7); // memory control block destroyed
+        break;
+      }
+      const oldParas = cpu.mem.readU16(mcbLinear + 3);
 
-        // Update or create the free MCB after the resized block
+      // Compute the maximum size we can grow to: walk forward absorbing
+      // adjacent FREE blocks (real DOS merges contiguous free space).
+      // Track whether the chain we absorbed ends at the very last MCB:
+      // if so, our resized block (or its trailing free remainder) inherits 'Z'.
+      let maxParas = oldParas;
+      let chainEndedAtLast = mcbType === 0x5A;
+      if (mcbType === 0x4D) {
+        let scanSeg = blockSeg + oldParas;
+        for (let it = 0; it < 1000; it++) {
+          if (scanSeg >= topOfMem) break;
+          const sl = scanSeg * 16;
+          const st = cpu.mem.readU8(sl);
+          const so = cpu.mem.readU16(sl + 1);
+          const ss = cpu.mem.readU16(sl + 3);
+          if (st !== 0x4D && st !== 0x5A) break;
+          if (so !== 0) break; // next block is owned — can't grow into it
+          maxParas += ss + 1; // absorb this free block + its MCB header
+          if (st === 0x5A) { chainEndedAtLast = true; break; }
+          scanSeg += ss + 1;
+        }
+      }
+
+      if (newParas > maxParas) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 8); // insufficient memory
+        cpu.setReg16(EBX, maxParas);
+        break;
+      }
+
+      cpu.mem.writeU16(mcbLinear + 3, newParas);
+
+      if (newParas < maxParas) {
+        // Shrunk (or absorbed less than the max) — create a free MCB after.
+        // The new free block inherits 'Z' if the absorbed chain ended with 'Z'.
         const freeSeg = blockSeg + newParas;
         const freeLinear = freeSeg * 16;
-        const freeParas = topOfMem - freeSeg - 1;
-        if (freeParas > 0) {
-          cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          cpu.mem.writeU8(freeLinear, 0x5A); // last block
-          cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
-          cpu.mem.writeU16(freeLinear + 3, freeParas);
-        } else {
-          cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
-        }
+        const freeParas = maxParas - newParas - 1;
+        cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow our resized block
+        cpu.mem.writeU8(freeLinear, chainEndedAtLast ? 0x5A : 0x4D);
+        cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
+        cpu.mem.writeU16(freeLinear + 3, freeParas);
+      } else {
+        // Block exactly fills the absorbed chain.
+        cpu.mem.writeU8(mcbLinear, chainEndedAtLast ? 0x5A : 0x4D);
       }
 
-      // Update heap pointers
-      const blockEnd = (blockSeg + newParas) * 16;
-      if (blockEnd > emu.heapBase) {
-        emu.heapBase = ((blockEnd + 0xF) & ~0xF);
-        emu.heapPtr = emu.heapBase;
-      }
       cpu.setFlag(CF, false);
       break;
     }
 
     case 0x4C: { // Terminate with return code
       const retCode = al;
-      if (retCode !== 0) console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)}`);
+      if (retCode !== 0) {
+        const cs = cpu.cs;
+        const ip = (cpu.eip - cpu.segBase(cs)) >>> 0;
+        // Dump stack around the exit-caller to help locate which routine asked
+        // to quit (DOOM exit(-23) = 233, DOS/4GW exit_2002 = 210, etc.)
+        const ssBase = cpu.segBase(cpu.ss);
+        const esp = cpu.reg[4] >>> 0;
+        const stk: string[] = [];
+        for (let i = 0; i < 8; i++) stk.push('0x' + cpu.mem.readU32((ssBase + esp + i * 4) >>> 0).toString(16));
+        console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)} cs=${cs.toString(16)}:${ip.toString(16)} ss:esp=${cpu.ss.toString(16)}:${esp.toString(16)} stack=[${stk.join(' ')}]`);
+      }
       xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
       dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
       if (dosExecReturn(cpu, emu, retCode)) break;
@@ -581,7 +616,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           // PSP termination vector is always a real-mode seg:off.
           // If a DOS extender (PMODEW) entered protected mode, reset to real mode now.
           if (!cpu.realMode && cpu.emu) {
-            cpu.emu._cr0 = 0;
+            cpu.emu._cr0 = 0x12;
             cpu.realMode = true;
             cpu.segBases.clear();
           }
@@ -920,6 +955,31 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x4B: { // EXEC — Load and Execute Program
+      // Ensure the env program path is present. Watcom C runtime reallocates
+      // the env block without the DOS 3.0+ program path suffix. DOS4GW reads
+      // this path to find the host EXE for LE loading.
+      if (emu.exePath) {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const envSeg = cpu.mem.readU16(pspLin + 0x2C);
+        const envLin = envSeg * 16;
+        const envMcbSz = cpu.mem.readU16((envSeg - 1) * 16 + 3) * 16;
+        let ep = 0;
+        while (ep < envMcbSz - 4) {
+          if (cpu.mem.readU8(envLin + ep) === 0 && cpu.mem.readU8(envLin + ep + 1) === 0) break;
+          ep++;
+        }
+        ep += 2;
+        const cnt = cpu.mem.readU16(envLin + ep);
+        const pathLen = emu.exePath.length + 1;
+        if (cnt === 0 && ep + 2 + pathLen <= envMcbSz) {
+          cpu.mem.writeU16(envLin + ep, 1);
+          ep += 2;
+          for (let ci = 0; ci < emu.exePath.length; ci++) {
+            cpu.mem.writeU8(envLin + ep + ci, emu.exePath.charCodeAt(ci));
+          }
+          cpu.mem.writeU8(envLin + ep + emu.exePath.length, 0);
+        }
+      }
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
       // DS:DX → ASCIZ program name, ES:BX → parameter block
       const dsBase = cpu.segBase(cpu.ds);
@@ -972,7 +1032,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           // Async fallback
           if (ovlInfo) {
             emu.fs.fetchFileData(ovlInfo, emu.additionalFiles, ovlResolved).then(() => {
-              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) setTimeout(emu.tick, 0); }
             });
             cpu.eip -= 2; emu._dosFileOpenPending = true; emu.waitingForMessage = true;
             break;
@@ -1048,9 +1108,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           if (emu._dosFileOpenPending) {
             emu._dosFileOpenPending = false;
             emu.waitingForMessage = false;
-            if (emu.running && !emu.halted) {
-              requestAnimationFrame(emu.tick);
-            }
+            if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
           }
         });
         cpu.eip -= 2; // rewind to INT 21h
@@ -1117,6 +1175,20 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
         }
         imgSize = Math.min(imgSize, execData.length - headerSize);
+        // DOS extenders (DOS/4GW, DOS/16M, etc.) put their LE/LX/NE header
+        // past the MZ image. The MZ stub then jumps to that header, so it
+        // must be loaded into memory. Detect a valid e_lfanew with a known
+        // new-format signature and extend imgSize to cover the whole file.
+        if (execData.length >= 0x40) {
+          const e_lfanew = mzDv.getUint32(0x3C, true);
+          if (e_lfanew >= headerSize && e_lfanew + 4 <= execData.length) {
+            const sig = (execData[e_lfanew] << 8) | execData[e_lfanew + 1];
+            // 'LE', 'LX', 'NE', 'PE' magic numbers
+            if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+              imgSize = execData.length - headerSize;
+            }
+          }
+        }
         neededParas = 0x10 + Math.ceil(imgSize / 16) + e_minalloc;
       }
 
@@ -1198,6 +1270,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
         }
         imgSize = Math.min(imgSize, execData.length - headerSize);
+        // Match the size-calculation path: extend imgSize to cover the full
+        // file when a LE/LX/NE/PE header sits past the MZ image so DOS
+        // extenders can find their new-format header in memory.
+        if (execData.length >= 0x40) {
+          const e_lfanew = mzDv.getUint32(0x3C, true);
+          if (e_lfanew >= headerSize && e_lfanew + 4 <= execData.length) {
+            const sig = (execData[e_lfanew] << 8) | execData[e_lfanew + 1];
+            if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+              imgSize = execData.length - headerSize;
+            }
+          }
+        }
 
         // Copy image
         for (let i = 0; i < imgSize; i++) {
@@ -1335,10 +1419,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       dosExtendedOpen(cpu, emu);
       break;
 
+
     default:
-      console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 1); // invalid function
+      if (ah < 0x6D) console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
+      // DOSBox behavior: for unknown functions, set AL=0 and don't set CF.
+      // Functions >= 0x6D are simply skipped. This prevents DOS extenders
+      // (like DOS4GW with AH=FFh) from seeing errors for their internal calls.
+      cpu.setReg8(EAX, 0x00);
       break;
   }
   return true;

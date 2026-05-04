@@ -232,6 +232,14 @@ if (!globalThis._oplRegistered) {
       return this.sbDsp.readStatus();
     }
     if (port === 0x22C) return 0x00;
+    // SB Pro/SB16 mixer data register — return the value stored for the
+    // currently-selected register. Writes are remembered in mixerRegs[];
+    // reads of reg 0x82 synthesize SB16 IRQ-status bits from live hardware.
+    // DOOM's I_StartupSound polls mixer reg 0x82 to decide whether the DMX
+    // mixer tick should run; returning 0xFF (default for unhandled ports)
+    // mis-sets bit 0 ("8-bit DMA IRQ pending") and triggers an unbounded
+    // mixer loop. Returning the live state works for any SB Pro/SB16 game.
+    if (port === 0x225) return this.sbDsp.readMixerData();
 
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);
@@ -282,6 +290,7 @@ if (!globalThis._oplRegistered) {
     // SB Pro mixer ports
     if (port === 0x224) { this.sbDsp.mixerAddr = value; return true; }
     if (port === 0x225) {
+      this.sbDsp.mixerRegs[this.sbDsp.mixerAddr] = value & 0xFF;
       if (this.sbDsp.mixerAddr === 0x0E) {
         // Stereo/mono select: bit 1 = stereo, bit 5 = filter
         this.sbDsp.stereoMode = !!(value & 0x02);
@@ -304,7 +313,7 @@ if (!globalThis._oplRegistered) {
     if (port === 0x0B) { this.dma.writeMode(value); return true; }
     if (port === 0x0C) { this.dma.clearFlipFlop(); return true; }
     if (port === 0x0D) { this.dma.masterClear(); return true; }
-    if (port === 0x0E) { this.dma.mask = 0; return true; } // clear all masks
+    if (port === 0x0E) { this.dma.writeAllMask(0); return true; } // clear all masks
     if (port === 0x0F) { this.dma.writeAllMask(value); return true; }
 
     // DMA page registers
@@ -320,6 +329,25 @@ if (!globalThis._oplRegistered) {
     }
 
     return false; // Not an audio port
+  }
+
+  /** Atomic 16-bit port write (OUT DX,AX / OUTSW). Returns true if the port
+   *  has device-specific word semantics (GUS register-data trigger). */
+  portOutWord(port: number, value: number): boolean {
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      this.gus.portWrite16(port, value);
+      return true;
+    }
+    return false;
+  }
+
+  /** Atomic 16-bit port read (IN AX,DX / INSW). Returns -1 if the port has
+   *  no device-specific word semantics. */
+  portInWord(port: number): number {
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      return this.gus.portRead16(port);
+    }
+    return -1;
   }
 
   /**

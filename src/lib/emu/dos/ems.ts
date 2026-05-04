@@ -6,7 +6,72 @@ import type { Emulator } from '../emulator';
 import { handleGetSetPageMap, handleMapMultiple, handleHandleName, handleMoveExchange } from './ems-ops';
 
 // Register indices — exported for ems-ops.ts
-export const EAX = 0, EBX = 3, ECX = 1, EDX = 2;
+export const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
+
+// INT number for VCPI PM service trap (called from PM via stub at VCPI entry point)
+export const VCPI_PM_INT = 0xFA;
+
+// VCPI private area — host PM environment loaded during PM→V86 switch.
+// Layout matches DOSBox's EMM386 implementation.
+export const VCPI_PRIVATE_AREA = 0x3E0000; // 16KB area in extended memory
+
+// VCPI page allocator range — 4KB pages between 1.0625 MB and 16 MB.
+// Stays below `_emsNextAddr` (18 MB) so VCPI pages cannot collide with EMS storage.
+const VCPI_FIRST_PAGE = 0x110;  // 1.0625 MB
+const VCPI_LAST_PAGE = 0xFFF;   // 16 MB - 1 page
+
+/** Set up the VCPI private area (GDT, LDT, IDT, TSS) like DOSBox. */
+export function setupVcpiPrivateArea(mem: { writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): void {
+  const P = VCPI_PRIVATE_AREA;
+
+  // === GDT at P+0x0000 (limit=0xFF = 32 entries) ===
+  // [0] null
+  mem.writeU32(P + 0x0000, 0x00000000);
+  mem.writeU32(P + 0x0004, 0x00000000);
+  // [1] LDT descriptor: base=P+0x1000, limit=0xFF, type=0x82 (LDT)
+  const ldtAddr = P + 0x1000;
+  mem.writeU32(P + 0x0008, ((ldtAddr & 0xFFFF) << 16) | 0xFF);
+  mem.writeU32(P + 0x000C, ((ldtAddr & 0xFF0000) >> 16) | (ldtAddr & 0xFF000000) | 0x8200);
+  // [2] TSS descriptor: base=P+0x3000, limit=0x268, type=0x89 (available 32-bit TSS)
+  const tssAddr = P + 0x3000;
+  mem.writeU32(P + 0x0010, ((tssAddr & 0xFFFF) << 16) | (0x0068 + 0x200));
+  mem.writeU32(P + 0x0014, ((tssAddr & 0xFF0000) >> 16) | (tssAddr & 0xFF000000) | 0x8900);
+  // [3..31] zeros (free entries for DOS4GW passup stacks)
+  for (let i = 0x18; i < 0x100; i += 4) mem.writeU32(P + i, 0);
+
+  // === LDT at P+0x1000 ===
+  mem.writeU32(P + 0x1000, 0x00000000);
+  mem.writeU32(P + 0x1004, 0x00000000);
+  // [1] sel=0x0C: Code segment (base=P, limit=0xFFFF, 16-bit, execute/read)
+  mem.writeU32(P + 0x1008, ((P & 0xFFFF) << 16) | 0xFFFF);
+  mem.writeU32(P + 0x100C, ((P & 0xFF0000) >> 16) | (P & 0xFF000000) | 0x9A00);
+  // [2] sel=0x14: Data segment (base=P, limit=0xFFFF, 16-bit, read/write)
+  mem.writeU32(P + 0x1010, ((P & 0xFFFF) << 16) | 0xFFFF);
+  mem.writeU32(P + 0x1014, ((P & 0xFF0000) >> 16) | (P & 0xFF000000) | 0x9200);
+
+  // === IDT at P+0x2000 (256 interrupt gates) ===
+  for (let i = 0; i < 256; i++) {
+    const stubOff = 0x2800 + i * 4;
+    mem.writeU32(P + 0x2000 + i * 8, 0x000C0000 | stubOff);
+    mem.writeU32(P + 0x2000 + i * 8 + 4, 0x0000EE00);
+  }
+
+  // === INT stubs at P+0x2800 (256 × 4 bytes) ===
+  for (let i = 0; i < 256; i++) {
+    const stubAddr = P + 0x2800 + i * 4;
+    mem.writeU8(stubAddr, 0xCF); // IRET
+    mem.writeU8(stubAddr + 1, 0x90);
+    mem.writeU8(stubAddr + 2, 0x90);
+    mem.writeU8(stubAddr + 3, 0x90);
+  }
+
+  // === TSS at P+0x3000 ===
+  for (let i = 0; i < 0x68 + 0x200; i++) mem.writeU8(P + 0x3000 + i, 0);
+  // Ring 0 stack: SS=0x14 (LDT data seg), ESP=0x2000
+  mem.writeU32(P + 0x3004, 0x00002000); // ESP0
+  mem.writeU32(P + 0x3008, 0x00000014); // SS0
+  mem.writeU32(P + 0x3066, 0x0068);     // IO permission bitmap offset
+}
 
 // EMS page frame at segment D000 (linear D0000-DFFFF = 64KB = 4 pages)
 export const EMS_PAGE_FRAME_SEG = 0xD000;
@@ -94,6 +159,11 @@ function restorePageMap(cpu: CPU, emu: Emulator, saved: number[]): void {
 }
 
 export function handleInt67(cpu: CPU, emu: Emulator): boolean {
+  if (!emu.dosEnableEms) {
+    cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8400; // AH=84 function not supported
+    return true;
+  }
+
   const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
   initEms(emu);
 
@@ -393,6 +463,234 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
+    case 0xDE: { // VCPI functions
+      const al = cpu.reg[EAX] & 0xFF;
+      switch (al) {
+        case 0x00: { // VCPI Installation Check
+          // Return "VCPI present" unconditionally. In DOSBox, DE00 requires
+          // cpu.pmode && FLAG_VM (i.e. V86 mode) — DOSBox always runs RM as V86
+          // under an EMM386 monitor. We don't emulate a real V86 monitor, so we
+          // present VCPI as available whenever EMS is enabled. DOS extenders
+          // (DOS4GW, DPMI hosts) can then use the VCPI services we emulate.
+          // Set up private area and save IVT on first successful call so HW
+          // interrupts during extender activation see the right vectors.
+          if (!emu._vcpiPrivateArea) {
+            setupVcpiPrivateArea(cpu.mem);
+            emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
+            emu._gdtBase = VCPI_PRIVATE_AREA;
+            emu._gdtLimit = 0xFF;
+            emu._vcpiSavedIVT = new Uint16Array(256);
+            for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = cpu.mem.readU16(i * 4 + 2);
+          }
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000; // AH=0 success
+          cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0100; // BX=version 1.0
+          break;
+        }
+        case 0x01: { // VCPI Get Protected Mode Interface
+          // ES:DI → page table buffer (256 entries × 4 bytes = 1024 bytes)
+          const esBase = cpu.segBase(cpu.es);
+          const di = cpu.getReg16(7);
+          // Fill page table: identity map first 1MB (256 × 4KB pages)
+          // Match DOSBox: pages 0x00-0xFE identity-mapped, page 0xFF → program area
+          for (let pg = 0; pg < 0xFF; pg++) {
+            cpu.mem.writeU8(esBase + di + pg * 4 + 0, 0x67);
+            cpu.mem.writeU16(esBase + di + pg * 4 + 1, pg * 0x10);
+            cpu.mem.writeU8(esBase + di + pg * 4 + 3, 0x00);
+          }
+          // Page 0xFF maps to program area (0x1100) like DOSBox
+          cpu.mem.writeU8(esBase + di + 0xFF * 4 + 0, 0x67);
+          cpu.mem.writeU16(esBase + di + 0xFF * 4 + 1, 0x1100);
+          cpu.mem.writeU8(esBase + di + 0xFF * 4 + 3, 0x00);
+          // VCPI spec: advance DI past the page table on return
+          cpu.reg[EDI] = (cpu.reg[EDI] & 0xFFFF0000) | ((di + 0x400) & 0xFFFF);
+          // DS:SI → 3 GDT descriptors (8 bytes each = 24 bytes)
+          // Match DOSBox: 16-bit segments (D=0, G=0, limit=64KB)
+          const dsBase = cpu.segBase(cpu.ds);
+          const si = cpu.getReg16(6);
+          const VCPI_PM_OFF = 0x0B00;
+          const vcpiCodeBase = 0xF0000; // ROM area where the PM entry stub lives
+          const cbseg_low = (vcpiCodeBase & 0xFFFF) << 16; // base[15:0] in descriptor lo
+          const cbseg_high = (vcpiCodeBase >>> 16) & 0xFF;  // base[23:16] in descriptor hi
+          // Descriptor 1: code segment (base=vcpiCodeBase, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 0, 0x0000FFFF | cbseg_low);
+          cpu.mem.writeU32(dsBase + si + 4, 0x00009A00 | cbseg_high);
+          // Descriptor 2: data segment (base=0, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 8, 0x0000FFFF);
+          cpu.mem.writeU32(dsBase + si + 12, 0x00009200);
+          // Descriptor 3: data segment (base=0, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 16, 0x0000FFFF);
+          cpu.mem.writeU32(dsBase + si + 20, 0x00009200);
+          // PM entry stub at F000:0B00 — traps into our VCPI PM service handler
+          const vcpiPmLinear = vcpiCodeBase + VCPI_PM_OFF;
+          cpu.mem.writeU8(vcpiPmLinear, 0xCD);
+          cpu.mem.writeU8(vcpiPmLinear + 1, VCPI_PM_INT);
+          cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF
+          // BX = offset within the VCPI code segment (16-bit), preserve upper EBX
+          cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | (VCPI_PM_OFF & 0xFFFF);
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x02: // VCPI Maximum Physical Address
+          cpu.reg[EDX] = 0x00FFFFFF; // 16MB
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x03: { // VCPI Get Number of Free Pages
+          const next = emu._vcpiNextPage ?? VCPI_FIRST_PAGE;
+          const free = next > VCPI_LAST_PAGE ? 0 : (VCPI_LAST_PAGE + 1 - next);
+          cpu.reg[EDX] = free >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x04: { // VCPI Allocate one Page
+          if (!emu._vcpiNextPage) emu._vcpiNextPage = VCPI_FIRST_PAGE;
+          if (emu._vcpiNextPage > VCPI_LAST_PAGE) {
+            cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8800; // no free pages
+            break;
+          }
+          const page = emu._vcpiNextPage++;
+          cpu.reg[EDX] = (page << 12) >>> 0; // physical address
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x05: // VCPI Free Page
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x06: { // VCPI Get Physical Address of Page in 1st MB
+          // Identity map: physical = linear for first 1MB. The spec restricts
+          // CX to page numbers 0x00..0xFF; reject anything outside that range.
+          const cxPage = cpu.getReg16(ECX);
+          if (cxPage >= 0x100) {
+            cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8B00; // invalid page
+            break;
+          }
+          cpu.reg[EDX] = (cxPage << 12) >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x07: // VCPI Read CR0 → EBX = current CR0
+          cpu.reg[EBX] = (emu._cr0 ?? 0) >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x08: { // VCPI Read Debug Registers → ES:DI gets 8 DWORDs (DR0-3, DR6, DR7, 0, 0)
+          const esBase = cpu.segBase(cpu.es);
+          const di = cpu.getReg16(EDI);
+          const drs = emu._vcpiDebugRegs ?? [0, 0, 0, 0, 0, 0, 0, 0];
+          for (let i = 0; i < 8; i++) cpu.mem.writeU32(esBase + di + i * 4, drs[i] >>> 0);
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x09: { // VCPI Set Debug Registers → ES:DI provides 8 DWORDs
+          const esBase = cpu.segBase(cpu.es);
+          const di = cpu.getReg16(EDI);
+          if (!emu._vcpiDebugRegs) emu._vcpiDebugRegs = [0, 0, 0, 0, 0, 0, 0, 0];
+          for (let i = 0; i < 8; i++) emu._vcpiDebugRegs[i] = cpu.mem.readU32(esBase + di + i * 4) >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x0A: // VCPI Get PIC Vector Mappings
+          cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x08; // primary PIC base
+          cpu.reg[ECX] = (cpu.reg[ECX] & 0xFFFF0000) | 0x70; // secondary PIC base
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x0B: // VCPI Set PIC Vector Mappings
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x0C: { // VCPI Switch from V86/RM to Protected Mode
+          // Enable A20 first — PM needs full address space for GDT/IDT/LDT
+          emu.memory.a20Mask = 0xFFFFFFFF;
+          // IVT already saved during DE00 (before DOS4GW modifies it)
+          // ESI = linear address of data structure
+          const esi = cpu.reg[ESI] >>> 0;
+          const newCR3 = cpu.mem.readU32(esi);
+          const newLDTR = cpu.mem.readU16(esi + 0x0C);
+          const newTR = cpu.mem.readU16(esi + 0x0E);
+          const newEIP = cpu.mem.readU32(esi + 0x10);
+          const newCS = cpu.mem.readU16(esi + 0x14);
+          // Load GDT/IDT: On the first switch, read from the client's GDTR/IDTR.
+          // On subsequent switches, reuse the emulator's current GDT/IDT — the PM
+          // code may have modified them (via LGDT/LIDT or direct writes), and the
+          // client's V86 save code may have overwritten the GDTR pseudo-descriptor
+          // in the data structure with unrelated PM state data.
+          // Read client's GDTR/IDTR on every switch. DOS4GW modifies its GDT
+          // directly via DS:[offset] in V86 mode (treating the GDT as data in
+          // its own DS), so we must always use the client's own GDT — never a
+          // relocated copy — to see the live entries.
+          {
+            const gdtrAddr = cpu.mem.readU32(esi + 4);
+            const idtrAddr = cpu.mem.readU32(esi + 8);
+            const newGdtBase = cpu.mem.readU32(gdtrAddr + 2);
+            const newGdtLimit = cpu.mem.readU16(gdtrAddr);
+            // Paging is only a partial fix: if the client relocates its GDT
+            // into a virtual address whose page is unmapped (PDE/PTE=0), our
+            // translate() returns -1 and the descriptor read yields all zeros.
+            // On real hardware this would #PF and the client's handler would
+            // populate the missing mapping before retrying the access; we
+            // don't yet dispatch #PF through the IDT, so detect the all-zero
+            // "selector 0x18" case and fall back to the last known good GDT
+            // base instead of swallowing the bogus pointer. Only apply when
+            // paging is actually active — otherwise the probe spuriously
+            // triggers whenever a legitimate small GDT has no descriptor at
+            // slot 0x18 (see VCPI test 10).
+            const pagingActive = newCR3 !== 0;
+            const probeLo = pagingActive ? cpu.mem.readU32(newGdtBase + 0x18) : 1;
+            const probeHi = pagingActive ? cpu.mem.readU32(newGdtBase + 0x18 + 4) : 0;
+            if (pagingActive && probeLo === 0 && probeHi === 0 && emu._vcpiLastClientGdtBase) {
+              emu._gdtBase = emu._vcpiLastClientGdtBase;
+              emu._gdtLimit = emu._vcpiLastClientGdtLimit ?? 0xFFFF;
+            } else {
+              emu._gdtBase = newGdtBase;
+              emu._gdtLimit = newGdtLimit;
+              emu._vcpiLastClientGdtBase = newGdtBase;
+              emu._vcpiLastClientGdtLimit = newGdtLimit;
+            }
+            emu._idtBase = cpu.mem.readU32(idtrAddr + 2);
+            emu._idtLimit = cpu.mem.readU16(idtrAddr);
+            emu._vcpiPmGdtBase = emu._gdtBase;
+            emu._vcpiPmGdtLimit = emu._gdtLimit;
+            emu._vcpiPmIdtBase = emu._idtBase;
+            emu._vcpiPmIdtLimit = emu._idtLimit;
+          }
+          // Store LDTR/TR
+          emu._ldtr = newLDTR;
+          emu._tr = newTR;
+          // Set CR0 PE bit + paging if CR3 is non-zero (matching DOSBox)
+          let newCR0 = (emu._cr0 | 1) >>> 0;
+          if (newCR3 !== 0) newCR0 = (newCR0 | 0x80000000) >>> 0;
+          emu._cr0 = newCR0;
+          emu._cr3 = newCR3 >>> 0;
+          // Activate paging for the Memory layer: VCPI clients expect
+          // virtual↔physical translation via the client-supplied CR3 page
+          // directory while in PM.
+          cpu.mem.setPaging(newCR3 !== 0, newCR3 & ~0xFFF);
+          // Clear TSS busy bit before loading TR (required for LTR)
+          if (newTR && emu._gdtBase) {
+            const trDescAddr = emu._gdtBase + (newTR & 0xFFF8) + 5;
+            const trByte = cpu.mem.readU8(trDescAddr);
+            cpu.mem.writeU8(trDescAddr, trByte & 0xFD);
+          }
+          // Switch to protected mode (matching DOSBox: zero segment regs, set IOPL=3)
+          cpu.realMode = false;
+          cpu._vm86 = false; // leaving pseudo-V86 for real PM
+          cpu.loadCS(newCS);
+          cpu.ss = 0;
+          cpu.ds = 0;
+          cpu.es = 0;
+          cpu.loadFS(0);
+          cpu.gs = 0;
+          cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
+          // Clear IF, VM, NT; set IOPL=3
+          const flags = cpu.getFlags();
+          cpu.setFlags((flags & ~(0x200 | 0x20000 | 0x4000)) | 0x3000);
+          break;
+        }
+        default:
+          console.warn(`[EMS] VCPI function 0xDE${al.toString(16).padStart(2, '0')} not supported`);
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8400;
+          break;
+      }
+      break;
+    }
+
     default:
       console.warn(`[EMS] Unhandled INT 67h AH=0x${ah.toString(16).padStart(2, '0')}`);
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8400; // function not supported
@@ -400,4 +698,143 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
   }
 
   return true;
+}
+
+/**
+ * Handle VCPI services called from Protected Mode (via INT FAh trap).
+ * DOS4GW calls the VCPI PM entry point (CALL FAR vcpiCS:offset) with AX=function.
+ * The stub does INT FAh which traps here. After handling, the stub does RETF
+ * back to the caller.
+ */
+export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
+  const ax = cpu.getReg16(EAX);
+  const fn = ax & 0xFF;
+
+  // Control transfer after handling: the INT FAh dispatch leaves EIP pointing at
+  // the RETF in the PM entry stub. The stub's segment D bit matches the CS the
+  // client installed for the VCPI entry, so its RETF naturally pops the same
+  // frame size the caller's CALL FAR pushed (4 bytes for a 16-bit client, 8 for
+  // a 32-bit client). Cases 0x04/0x05 therefore just set results and return —
+  // no manual stack walk needed.
+
+  switch (fn) {
+    case 0x02: // Maximum Physical Address — same as V86 side
+      cpu.reg[EDX] = 0x00FFFFFF; // 16 MB
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x03: { // Number of Free Pages
+      const next = emu._vcpiNextPage ?? 0x110;
+      const free = next > 0xFFF ? 0 : (0xFFF + 1 - next);
+      cpu.reg[EDX] = free >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
+    case 0x04: { // Allocate 4KB Page
+      if (!emu._vcpiNextPage) emu._vcpiNextPage = 0x110;
+      const page = emu._vcpiNextPage++;
+      cpu.reg[EDX] = page << 12;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+    case 0x05: // Free 4KB Page
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x06: { // Get Physical Address of Page in 1st MB
+      const cxPage = cpu.getReg16(ECX);
+      if (cxPage >= 0x100) {
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8B00;
+        return true;
+      }
+      cpu.reg[EDX] = (cxPage << 12) >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
+    case 0x07: // Read CR0
+      cpu.reg[EBX] = (emu._cr0 ?? 0) >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0A: // Get PIC Vector Mappings
+      cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x08;
+      cpu.reg[ECX] = (cpu.reg[ECX] & 0xFFFF0000) | 0x70;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0B: // Set PIC Vector Mappings — accept silently
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0C: { // Switch from PM to V86 mode
+      // The client pushes a V86 return frame on the stack before CALL FAR to the
+      // entry point:
+      //   PUSH GS, PUSH FS, PUSH DS, PUSH ES, PUSH SS
+      //   PUSH ESP, PUSH EFLAGS, PUSH CS, PUSH EIP
+      // Then CALL FAR pushes its own return CS:EIP (4 bytes for a 16-bit client,
+      // 8 bytes for a 32-bit client). dispatchException does not push anything
+      // extra for JS-handled traps, so we only need to skip past the CALL FAR
+      // frame. The frame size matches the D bit of the stub segment the client
+      // installed, which is exactly what cpu.use32 reflects at trap time.
+      const ssBase = cpu.segBase(cpu.ss);
+      const esp = cpu.reg[ESP] >>> 0;
+      const callFarFrameBytes = cpu.use32 ? 8 : 4;
+      const frameBase = ssBase + esp + callFarFrameBytes;
+      const newEIP = cpu.mem.readU32(frameBase + 0);
+      const newCS = cpu.mem.readU32(frameBase + 4) & 0xFFFF;
+      const newEFLAGS = cpu.mem.readU32(frameBase + 8);
+      const newESP = cpu.mem.readU32(frameBase + 12);
+      const newSS = cpu.mem.readU32(frameBase + 16) & 0xFFFF;
+      const newES = cpu.mem.readU32(frameBase + 20) & 0xFFFF;
+      const newDS = cpu.mem.readU32(frameBase + 24) & 0xFFFF;
+      const newFS = cpu.mem.readU32(frameBase + 28) & 0xFFFF;
+      const newGS = cpu.mem.readU32(frameBase + 32) & 0xFFFF;
+
+      // Load host private GDT/IDT before switching to V86 (matching DOSBox).
+      // This makes SGDT return 32 entries so DOS4GW allocates enough GDT space.
+      if (emu._vcpiPrivateArea) {
+        const P = emu._vcpiPrivateArea;
+        emu._gdtBase = P;
+        emu._gdtLimit = 0xFF; // 32 entries
+        emu._idtBase = P + 0x2000;
+        emu._idtLimit = 0x7FF; // 256 entries
+        emu._ldtr = 0x08; // GDT[1] = LDT
+        emu._tr = 0x10;   // GDT[2] = TSS
+        // Clear TSS busy bit
+        const tssDescAddr = P + 0x0010 + 5;
+        const tb = cpu.mem.readU8(tssDescAddr);
+        cpu.mem.writeU8(tssDescAddr, tb & 0xFD);
+      }
+      // Switch to V86/real mode. V86 addressing is seg*16 (not flat),
+      // so EIP must be stored as linear = segBase + offset.
+      console.log(`[VCPI-DE0C] PM→V86 cs=${newCS.toString(16)} eip=${newEIP.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
+      // In V86 mode, linear addresses (seg*16 + offset) STILL go through
+      // paging when CR0.PG=1. VCPI clients keep paging on across V86↔PM
+      // transitions; only a PM→RM (clear CR0.PE) turns it off. Leave
+      // mem.setPaging alone here — if the client hasn't cleared PG, we
+      // keep translating.
+      cpu.realMode = true;
+      cpu._vm86 = true; // back in pseudo-V86
+      cpu.use32 = false;
+      cpu._addrSize16 = true;
+      cpu.cs = newCS;
+      cpu.ds = newDS;
+      cpu.es = newES;
+      cpu.ss = newSS;
+      cpu.loadFS(newFS);
+      cpu.gs = newGS;
+      cpu.reg[ESP] = newESP;
+      cpu.eip = ((newCS * 16) + (newEIP & 0xFFFF)) >>> 0;
+      cpu.setFlags(newEFLAGS);
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
+    default:
+      console.warn(`[VCPI-PM] Unhandled function AX=0x${ax.toString(16)}`);
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8F00;
+      return true;
+  }
 }

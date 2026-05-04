@@ -16,6 +16,11 @@ export class DMAController {
   flipFlop = false;                // byte pointer flip-flop (low/high)
   status = 0;                      // status register (bit 0-3: TC reached for ch 0-3)
 
+  /** Fires for channel ch when its mask bit transitions from 1 → 0 (DOSBox
+   *  DmaEvent::IsUnmasked). Devices (GUS) use this to resume a DMA transfer
+   *  that was requested while the channel was still masked. */
+  onUnmask: ((ch: number) => void) | null = null;
+
   /** Clear the byte pointer flip-flop. */
   clearFlipFlop(): void { this.flipFlop = false; }
 
@@ -60,11 +65,21 @@ export class DMAController {
   /** Write single channel mask register. */
   writeSingleMask(val: number): void {
     const ch = val & 3;
-    if (val & 4) this.mask |= (1 << ch); else this.mask &= ~(1 << ch);
+    const bit = 1 << ch;
+    const wasMasked = !!(this.mask & bit);
+    if (val & 4) this.mask |= bit; else this.mask &= ~bit;
+    if (wasMasked && !(this.mask & bit)) this.onUnmask?.(ch);
   }
 
   /** Write all-channel mask register. */
-  writeAllMask(val: number): void { this.mask = val & 0x0F; }
+  writeAllMask(val: number): void {
+    const prev = this.mask;
+    this.mask = val & 0x0F;
+    for (let ch = 0; ch < 4; ch++) {
+      const bit = 1 << ch;
+      if ((prev & bit) && !(this.mask & bit)) this.onUnmask?.(ch);
+    }
+  }
 
   /** Write mode register. */
   writeMode(val: number): void {

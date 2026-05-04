@@ -1,12 +1,13 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import { XMS_STUB_SEG, XMS_STUB_OFF, xmsFreeAllForPsp } from './xms';
+import { DPMI_ENTRY_SEG, DPMI_ENTRY_OFF } from './dpmi';
 
-const EAX = 0, ECX = 1, EDX = 2, EBX = 3, EDI = 7;
+const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
 
 // --- INT 15h: System Services ---
-export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
+export function handleInt15(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   switch (ah) {
     case 0xC0: { // Get system configuration table
@@ -24,6 +25,40 @@ export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
       cpu.setFlag(CF, false);
       break;
     }
+    case 0x87: { // Block Move (extended memory copy via 286+ protected mode)
+      // CX = number of WORDS to move
+      // ES:SI -> GDT with 6 descriptors (8 bytes each):
+      //   [0..7]   dummy (zeros)
+      //   [8..15]  dummy (zeros, used as GDT entry for itself)
+      //   [16..23] source descriptor
+      //   [24..31] destination descriptor
+      //   [32..39] BIOS code segment (dummy)
+      //   [40..47] BIOS stack segment (dummy)
+      // Each descriptor (8 bytes):
+      //   +0  WORD  segment limit (low 16 bits)
+      //   +2  3 bytes  base address (24 bits)
+      //   +5  BYTE  access rights
+      //   +6  BYTE  reserved (286) / attr+limit high (386)
+      //   +7  BYTE  base address [31:24] (386 only)
+      const esBase = cpu.segBase(cpu.es);
+      const si = cpu.getReg16(ESI);
+      const gdt = esBase + si;
+      const readDescBase = (off: number): number => {
+        const low24 = cpu.mem.readU8(gdt + off + 2)
+                    | (cpu.mem.readU8(gdt + off + 3) << 8)
+                    | (cpu.mem.readU8(gdt + off + 4) << 16);
+        const high8 = cpu.mem.readU8(gdt + off + 7);
+        return (low24 | (high8 << 24)) >>> 0;
+      };
+      const srcBase = readDescBase(0x10); // src descriptor at offset 0x10
+      const dstBase = readDescBase(0x18); // dst descriptor at offset 0x18
+      const words = cpu.getReg16(ECX);
+      const bytes = words * 2;
+      cpu.mem.copyBlock(dstBase, srcBase, bytes);
+      cpu.setReg8(EAX + 4, 0x00); // AH = 0 (success)
+      cpu.setFlag(CF, false);
+      break;
+    }
     case 0x88: { // Get extended memory size (in KB above 1MB)
       // Return AX = KB of extended memory (report 15MB = 15360 KB)
       cpu.setReg16(EAX, 15360);
@@ -34,6 +69,14 @@ export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
       // Not installed
       cpu.setFlag(CF, true);
       cpu.setReg8(EAX + 4, 0x04); // AH = error: interface error
+      break;
+    }
+    case 0xBF: { // Phar Lap DOS/16M Background DOS Run-Time API
+      // AL=02 → install check; AL=DC → similar variant.
+      // Not installed → return CF=1 (caller ignores, falls back to its own loader).
+      // DX is preserved 0 by caller (`xor dx, dx` before the call), so default
+      // CF=1 + DX=0 is what we return.
+      cpu.setFlag(CF, true);
       break;
     }
     default:
@@ -120,7 +163,7 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
     emu._dosPSP = parentPSP;
     // PSP termination vector is always a real-mode seg:off — reset to real mode
     if (!cpu.realMode && cpu.emu) {
-      cpu.emu._cr0 = 0;
+      cpu.emu._cr0 = 0x12;
       cpu.realMode = true;
       cpu.segBases.clear();
     }
@@ -200,11 +243,13 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
   }
 
   if (ax === 0x4300) {
+    if (!emu.dosEnableXms) { cpu.setReg8(EAX, 0x00); return true; } // XMS not installed
     cpu.setReg8(EAX, 0x80); // XMS driver installed
     return true;
   }
 
   if (ax === 0x4310) {
+    if (!emu.dosEnableXms) { cpu.setFlag(CF, true); return true; }
     // Get XMS driver entry point → ES:BX
     cpu.es = XMS_STUB_SEG;
     cpu.setReg16(EBX, XMS_STUB_OFF);
@@ -217,14 +262,35 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
     return true;
   }
 
-  if (ax === 0x1687) {
-    // DPMI host detection — AX=0 means present, AX nonzero means not present
-    cpu.setReg16(EAX, 0x0001); // DPMI not present
+  if (ax === 0x1600) {
+    // Windows Enhanced Mode Installation Check
+    // AL=0x00: not running (DOS4GW checks this)
+    cpu.setReg8(EAX, 0x00);
     return true;
   }
 
-  if (ax === 0x0500) {
-    cpu.setReg8(EAX, 0xFF); // DPMI not present (alternate check)
+  if (ax === 0x1686) {
+    // DPMI - GET CPU MODE. Returns AX=0 if caller is already in protected
+    // mode, AX!=0 (typically AX=1, the input value preserved) if real mode.
+    // We never invoke this from PM in our current setup, so always answer
+    // "real mode" here. DOS4GW uses this to decide whether to call AX=1687.
+    cpu.setReg16(EAX, 0x0001);
+    return true;
+  }
+
+  if (ax === 0x1687) {
+    if (!emu.dosEnableDpmi) {
+      cpu.setReg16(EAX, 0x0001); // DPMI not present (disabled in settings)
+      return true;
+    }
+    // DPMI host detection — present
+    cpu.setReg16(EAX, 0x0000); // AX=0 means DPMI present
+    cpu.setReg16(EBX, 0x0001); // BX=1: 32-bit programs supported
+    cpu.setReg8(ECX, 0x03);    // CL=3: processor type (386)
+    cpu.setReg16(EDX, 0x005A); // DX=version 0.90
+    cpu.setReg16(ESI, 0x0000); // SI=0: no private data needed
+    cpu.es = DPMI_ENTRY_SEG;   // ES:DI = DPMI entry point
+    cpu.setReg16(EDI, DPMI_ENTRY_OFF);
     return true;
   }
 

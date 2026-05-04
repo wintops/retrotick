@@ -300,7 +300,7 @@ export function exec0FExt(
 
     // POP FS (0F A1)
     case 0xA1:
-      cpu.fs = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
+      cpu.loadFS(opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF);
       return true;
 
     // PUSH GS (0F A8)

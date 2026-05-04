@@ -35,7 +35,7 @@ interface DosSettingsWindowProps {
 
 export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focused, minimized }: DosSettingsWindowProps) {
   const [settings, setSettings] = useState<DosSettings>(loadDosSettings);
-  const initialPos = useRef({ x: Math.max(0, (window.innerWidth - 300) / 2), y: Math.max(0, (window.innerHeight - 200) / 2) });
+  const initialPos = useRef({ x: Math.max(0, (window.innerWidth - 300) / 2), y: Math.max(0, (window.innerHeight - 340) / 2) });
 
   const handleOK = () => {
     saveDosSettings(settings);
@@ -78,6 +78,36 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
               </label>
             </div>
 
+            {/* Memory & PM */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelMemory}</div>
+              {(['xms', 'ems', 'v86', 'dpmi'] as const).map(key => (
+                <label key={key} style={radioStyle}>
+                  <input
+                    type="checkbox"
+                    checked={settings[key]}
+                    onChange={() => setSettings(s => ({ ...s, [key]: !s[key] }))}
+                  />
+                  {{ xms: 'XMS (Extended Memory)', ems: 'EMS / VCPI (EMM386)', v86: 'V86 mode (EMM386-like)', dpmi: 'DPMI 0.9 (experimental)' }[key]}
+                </label>
+              ))}
+            </div>
+
+            {/* Audio */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelAudio}</div>
+              {(['soundBlaster', 'adlib', 'gus'] as const).map(key => (
+                <label key={key} style={radioStyle}>
+                  <input
+                    type="checkbox"
+                    checked={settings[key]}
+                    onChange={() => setSettings(s => ({ ...s, [key]: !s[key] }))}
+                  />
+                  {{ soundBlaster: 'Sound Blaster', adlib: 'AdLib (OPL2)', gus: 'Gravis UltraSound' }[key]}
+                </label>
+              ))}
+            </div>
+
             {/* Speed */}
             <div style={{ marginBottom: '10px' }}>
               <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelSpeed}</div>
@@ -116,6 +146,19 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
                   onChange={() => setSettings(s => ({ ...s, jitEnabled: !s.jitEnabled }))}
                 />
                 {t().jitExperimental}
+              </label>
+            </div>
+
+            {/* Debug */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>Debug</div>
+              <label style={{ ...radioStyle, marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.traceApi}
+                  onChange={() => setSettings(s => ({ ...s, traceApi: !s.traceApi }))}
+                />
+                Trace INT calls (console)
               </label>
             </div>
 

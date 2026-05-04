@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
-import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles, readDroppedItems } from '../lib/file-store';
+import { getRootItems, addFile, renameEntry, isFolder, displayName, getFile, listFileMetadata, readDroppedItems, dispatchDesktopFilesChanged } from '../lib/file-store';
 import type { Emulator } from '../lib/emu/emulator';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
@@ -138,16 +138,20 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     if (raw) {
       let paths: string[];
       try { paths = JSON.parse(raw); } catch { paths = [raw]; }
+      const added: string[] = [];
+      const deleted: string[] = [];
       for (const internalPath of paths) {
         const dName = displayName(internalPath);
         const isDir = isFolder(internalPath);
         const newName = isDir ? dName + '/' : dName;
         if (internalPath !== newName) {
           await renameEntry(internalPath, newName);
+          added.push(newName);
+          deleted.push(internalPath);
         }
       }
       await fm.loadItems();
-      window.dispatchEvent(new Event('desktop-files-changed'));
+      dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
       return;
     }
 
@@ -158,17 +162,26 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
   }
 
   async function runExeWithArgs(name: string, commandLine?: string) {
-    const stored = await getAllFiles();
-    const f = stored.find(s => s.name === name);
-    if (!f) return;
-    const result = isExeFile(f.data, name);
+    const data = await getFile(name);
+    if (!data) return;
+    const result = isExeFile(data, name);
     if (result.ok && result.peInfo) {
+      // Only pre-load sibling DLLs (not all files) — everything else is lazy-loaded via onFileRequest
+      const metas = await listFileMetadata();
+      const dllExts = new Set(['dll', 'ocx', 'drv', 'vxd', 'cpl']);
+      const siblingDlls = metas.filter(m =>
+        m.name !== name && !m.name.includes('/') &&
+        dllExts.has((m.name.split('.').pop() ?? '').toLowerCase()));
       const additional = new Map<string, ArrayBuffer>();
-      for (const s of stored) if (s.name !== name && !s.name.includes('/')) additional.set(s.name, s.data);
-      onRunExe(f.data, result.peInfo, additional, name, commandLine);
+      await Promise.all(siblingDlls.map(async m => {
+        const buf = await getFile(m.name);
+        if (buf) additional.set(m.name, buf);
+      }));
+      onRunExe(data, result.peInfo, additional.size > 0 ? additional : undefined, name, commandLine);
     } else {
-      const opened = await openWithDefaultApp(name, stored, onRunExe);
-      if (!opened) onViewResources(f.data, name);
+      const metas = await listFileMetadata();
+      const opened = await openWithDefaultApp(name, metas, onRunExe, getFile);
+      if (!opened) onViewResources(data, name);
     }
   }
 
@@ -180,9 +193,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
 
   async function handleViewResources(name: string) {
     fm.setContextMenu(null);
-    const stored = await getAllFiles();
-    const f = stored.find(s => s.name === name);
-    if (f) onViewResources(f.data, name);
+    const data = await getFile(name);
+    if (data) onViewResources(data, name);
   }
 
   const isCutSource = clipboard?.mode === 'cut' && clipboard.sourcePrefix === '';

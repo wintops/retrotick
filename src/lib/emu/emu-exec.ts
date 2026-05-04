@@ -3,11 +3,12 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { dispatchMouseCallback } from './dos/mouse';
+import { dispatchException } from './x86/dispatch';
 import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
 import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
 import { materializeFlags } from './x86/flags';
-import { AccessViolationError } from './memory';
+import { AccessViolationError, PageFaultError } from './memory';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -57,6 +58,41 @@ function raiseAccessViolation(emu: Emulator, faultAddr: number): void {
 
   emu._sehState = { excRecAddr: excRec, ctxAddr: ctx, currentReg: firstReg, dispCtxAddr: dispCtx };
   emu.dispatchToSehHandler(firstReg);
+}
+
+/** Handle a `PageFaultError` thrown from `cpu.step()`. Rewinds EIP to the
+ *  faulting instruction, sets CR2, drops the negative TLB entry so the retry
+ *  re-walks, and dispatches INT 0x0E through the client's IDT. The PM `#PF`
+ *  handler is responsible for populating the PDE/PTE and IRETing back; the
+ *  CPU then re-executes the faulting instruction.
+ *  Returns true on success, false when the IDT has no usable entry and the
+ *  emulator should halt. */
+function handlePageFault(emu: Emulator, e: PageFaultError): boolean {
+  const cpu = emu.cpu;
+  cpu.eip = cpu._lastInstrEip;
+  emu._cr2 = e.vaddr;
+  cpu.mem.invalidatePage(e.vaddr);
+  // Error code: P=0 (page not present is our only case) + W/R bit + U/S=0 + RSVD=0 + I/D=0
+  const errCode = e.isWrite ? 2 : 0;
+  if (!dispatchException(cpu, 0x0E, 'exception')) {
+    cpu.halted = true;
+    cpu.haltReason = `unhandled #PF vaddr=0x${e.vaddr.toString(16)} write=${e.isWrite}`;
+    return false;
+  }
+  // Error-code push can itself PF if the new stack page is unmapped — bail
+  // cleanly so we don't re-enter dispatch recursively.
+  try {
+    if (cpu._lastDispatchIs32) cpu.push32(errCode);
+    else cpu.push16(errCode);
+  } catch (err) {
+    if (err instanceof PageFaultError) {
+      cpu.halted = true;
+      cpu.haltReason = `unhandled #PF (recursive): vaddr=0x${e.vaddr.toString(16)}`;
+      return false;
+    }
+    throw err;
+  }
+  return true;
 }
 
 // Fast zero-delay scheduler using MessageChannel (avoids setTimeout's 4ms clamping
@@ -184,6 +220,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         if (ci > 0) { steps += ci; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
     }
@@ -208,6 +245,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = csHitC = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
       csHitA = csHitB = csHitC = 0;
@@ -265,6 +303,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         emu.cpu.step();
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+        if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
         throw e;
       }
     }
@@ -621,13 +660,42 @@ export function emuTick(emu: Emulator): void {
     const now = performance.now();
     const pitReload = emu._pitCounters[0] || 0x10000;
     const timerIntervalMs = (pitReload / 1193182) * 1000;
-    if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+    // Gate PIT on emulated cycles too: real hardware fires IRQ0 once every
+    // pitReload PIT ticks, which for a ~20 MIPS 386 is pitReload * 16.76 insns.
+    // Without a cycle gate, a slow JS emulator overfires IRQ0 during boot
+    // (each hit permanently consumes a DOS/4GW exception-stack frame at
+    // cs=1569:0x580, eventually starving the guard at SI<=0x4840 and firing
+    // DOS/4GW's exit(2002)).
+    // PIT cycle gate — only applied when DPMI is active. DOS/4GW's PM IRQ
+    // dispatch + user handler takes many emulator steps, so a wall-clock-only
+    // timer would overfire IRQ0 during boot and starve the exception-stack
+    // frame. For pure real-mode DOS games the wall-clock rate alone is
+    // sufficient and adding a cycle gate starves music/animations (PoP, SR,
+    // Monkey Island all slow down ~40x because they reprogram the PIT for
+    // fast audio callbacks).
+    const minStepsPerPitTick = emu._dpmiState ? pitReload * 200 : 0;
+    const stepsSince = emu.cpuSteps - emu._dosLastTimerTickSteps;
+    // Headless tests advance cpuSteps much faster than wall-clock, so the
+    // wall-clock gate practically never triggers. emu._pitCycleOnly bypasses
+    // the wall-clock check and fires PIT purely on emulated cycles — useful
+    // for headless integration tests that need the timer to advance.
+    const wallOk = emu._pitCycleOnly || (now - emu._dosLastTimerTick >= timerIntervalMs);
+    if (wallOk && stepsSince >= minStepsPerPitTick) {
       emu._dosLastTimerTick += timerIntervalMs;
+      emu._dosLastTimerTickSteps = emu.cpuSteps;
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
       if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
       const timerInt = emu._picMasterBase; // IRQ 0
-      if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt))
-        emu._pendingHwInts.push(timerInt);
+      // Count already-queued IRQ0s: with the IF=0 gate, the guest can sit in a
+      // CLI section for multiple PIT intervals and each interval needs to be
+      // accounted for so music / timer callbacks don't lose time. Cap the
+      // queue at 4 pending IRQ0s to avoid unbounded growth if the guest has
+      // masked the PIC (also checked via _picMasterMask below).
+      if (!(emu._picMasterMask & 0x01)) {
+        let pendingCount = 0;
+        for (const v of emu._pendingHwInts) if (v === timerInt) pendingCount++;
+        if (pendingCount < 4) emu._pendingHwInts.push(timerInt);
+      }
       emu._dosHalted = false;
     }
     // Also wake on pending keyboard interrupt
@@ -685,8 +753,18 @@ export function emuTick(emu: Emulator): void {
     }
     // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
     // or IF flag restoration (PM IDT dispatch).
-    if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
+    // SS must also match: DOS/4GW's PM ISR pops up to 18 bytes from the caller's
+    // stack (handoff between outer and inner frames) before it switches SS:ESP
+    // onto the allocated exception stack. During that window SP transiently
+    // rises above _hwIntSavedSP on the OUTER stack — without an SS check, we
+    // would clear the guard and dispatch another HW IRQ on top of the handler.
+    if (
+      emu._hwIntSavedSP >= 0 &&
+      (emu._hwIntSavedSS < 0 || emu.cpu.ss === emu._hwIntSavedSS) &&
+      (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP
+    ) {
       emu._hwIntSavedSP = -1;
+      emu._hwIntSavedSS = -1;
       // Restore PM state if we switched to RM for the interrupt handler
       if (emu._hwIntPMState) {
         emu._cr0 = emu._hwIntPMState.cr0;
@@ -721,16 +799,31 @@ export function emuTick(emu: Emulator): void {
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
 
-      // DOS timer interrupt — frequency derived from PIT channel 0
+      // DOS timer interrupt — frequency derived from PIT channel 0.
+      // Gate on emulated cycles too (see matching comment in the HLT branch)
+      // so a slow JS emulator does not overfire IRQ0 during boot.
       if (emu.isDOS) {
         const pitReload = emu._pitCounters[0] || 0x10000;
         const timerIntervalMs = (pitReload / 1193182) * 1000;
-        if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+        // PIT cycle gate — only applied when DPMI is active (see HLT branch
+        // comment). Pure real-mode games need IRQ0 at wall-clock rate for
+        // music and animations to run correctly.
+        const minStepsPerPitTick = emu._dpmiState ? pitReload * 200 : 0;
+        const stepsSince = (emu.cpuSteps + stepCount) - emu._dosLastTimerTickSteps;
+        const wallOk = emu._pitCycleOnly || (now - emu._dosLastTimerTick >= timerIntervalMs);
+        if (wallOk && stepsSince >= minStepsPerPitTick) {
           const timerInt = emu._picMasterBase; // IRQ 0
-          if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt)) {
-            emu._dosLastTimerTick += timerIntervalMs;
-            if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-            emu._pendingHwInts.push(timerInt);
+          if (!(emu._picMasterMask & 0x01)) {
+            // Allow stacking up to 4 pending IRQ0s so CLI sections do not
+            // silently drop PIT ticks (see HLT-branch comment above).
+            let pendingCount = 0;
+            for (const v of emu._pendingHwInts) if (v === timerInt) pendingCount++;
+            if (pendingCount < 4) {
+              emu._dosLastTimerTick += timerIntervalMs;
+              emu._dosLastTimerTickSteps = emu.cpuSteps + stepCount;
+              if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+              emu._pendingHwInts.push(timerInt);
+            }
           }
           emu._dosHalted = false;
         }
@@ -796,11 +889,20 @@ export function emuTick(emu: Emulator): void {
     if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
       dispatchMouseCallback(emu);
     }
-    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
+    if (
+      emu._pendingHwInts.length > 0 &&
+      emu._hwIntSavedSP < 0 &&
+      !emu.cpu._inhibitIRQ &&
+      // Only gate on IF when DPMI is active. DPMI clients (DOOM via DOS/4GW)
+      // need strict IF=0 blocking so IRQs do not dispatch nested on top of a
+      // PM ISR. Real-mode / VCPI guests (Second Reality's pmodew, Prince of
+      // Persia, Monkey Island) do their own timing with CLI/STI around
+      // critical sections and rely on the emulator to honor PIT ticks
+      // back-to-back — blocking IRQ dispatch on IF=0 causes lost ticks and
+      // stalls animations / title-card code.
+      (!emu._dpmiState || (emu.cpu.getFlags() & 0x0200) !== 0)
+    ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
-      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
-      // loops with CLI and rely on timer interrupts firing regardless. This is
-      // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;
@@ -810,6 +912,20 @@ export function emuTick(emu: Emulator): void {
       } else if (intNum >= slaveBase && intNum < slaveBase + 8) {
         emu._picSlaveISR |= (1 << (intNum - slaveBase));
       }
+
+      // In PM with DPMI active, dispatch HW interrupts through dispatchException
+      // so PM handlers installed via INT 31h AX=0205 are used.
+      if (!emu.cpu.realMode && emu._dpmiState) {
+        const prevSS = emu.cpu.ss;
+        dispatchException(emu.cpu, intNum, 'interrupt', true);
+        // Mark handler active so the batch loop does not dispatch another HW
+        // interrupt on top of this one. Cleared in the IRETD detection above
+        // when SS matches the saved value AND SP rises back to this level.
+        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+        emu._hwIntSavedSS = prevSS;
+        continue;
+      }
+
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
       // by writing directly to IVT (e.g. PoP chains timer→animation→sound)
@@ -817,7 +933,17 @@ export function emuTick(emu: Emulator): void {
       const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
       const ivtVec = (ivtSeg << 16) | ivtOff;
       let vec: number | undefined;
-      if (ivtVec !== biosDefault && ivtSeg !== 0xF000) {
+      // Skip PM-modified IVT entries in V86 mode (VCPI PM code rewrites vectors
+      // with PM selectors; dispatching them as RM segments crashes)
+      // In V86 (RM) with VCPI: skip IVT entries modified by PM code (PM selectors
+      // interpreted as RM segments → wrong addresses). In PM: dispatch normally
+      // (PM selectors ARE valid in PM).
+      let pmModifiedHW = false;
+      if (emu.cpu.realMode && emu._vcpiSavedIVT && ivtSeg !== 0xF000) {
+        const origSeg = emu._vcpiSavedIVT[intNum];
+        if (origSeg !== undefined && ivtSeg !== origSeg) pmModifiedHW = true;
+      }
+      if (ivtVec !== biosDefault && ivtSeg !== 0xF000 && !pmModifiedHW) {
         vec = ivtVec;
       } else {
         vec = emu._dosIntVectors.get(intNum);
@@ -842,7 +968,7 @@ export function emuTick(emu: Emulator): void {
             use32: emu.cpu.use32,
             segBases: new Map(emu.cpu.segBases),
           };
-          emu._cr0 = 0;
+          emu._cr0 = 0x12; // keep MP+ET on PM→RM transition
           emu.cpu.realMode = true;
           emu.cpu.use32 = false;       // RM handlers are 16-bit code
           emu.cpu._addrSize16 = true;
@@ -968,6 +1094,7 @@ export function emuTick(emu: Emulator): void {
           if (ci > 0) { stepCount += ci; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
           throw e;
         }
       }
@@ -988,6 +1115,7 @@ export function emuTick(emu: Emulator): void {
           if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+          if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
           throw e;
         }
         // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
@@ -1077,10 +1205,15 @@ export function emuTick(emu: Emulator): void {
     if (!emu._eipHistory) { emu._eipHistory = new Uint32Array(64); emu._eipHistIdx = 0; }
     emu._eipHistory[emu._eipHistIdx & 63] = eip;
     emu._eipHistIdx++;
+    // (Tight-loop detector removed — produced false positives on legitimate
+    // demo scroll loops (Second Reality) and VBL waits. The original DOOM
+    // mixer corruption it was designed to catch is now prevented upstream
+    // by the proper SB Pro mixer register implementation.)
     try {
       emu.cpu.step();
     } catch (e) {
       if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
+      if (e instanceof PageFaultError) { if (!handlePageFault(emu, e)) break; continue; }
       throw e;
     }
     emu._pitInsnCount++;
@@ -1103,7 +1236,20 @@ export function emuTick(emu: Emulator): void {
     if (emu.cpu.halted) {
       const hBytes: string[] = [];
       for (let j = 0; j < 8; j++) hBytes.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
-      console.warn(`[CPU-HALT] at EIP=0x${prevEip.toString(16)} bytes: ${hBytes.join(' ')} ESP=0x${(emu.cpu.reg[4]>>>0).toString(16)}`);
+      console.warn(`[CPU-HALT] at EIP=0x${prevEip.toString(16)} bytes: ${hBytes.join(' ')} ESP=0x${(emu.cpu.reg[4]>>>0).toString(16)} reason="${emu.cpu.haltReason}" cs=${emu.cpu.cs.toString(16)} ds=${emu.cpu.ds.toString(16)} ss=${emu.cpu.ss.toString(16)} RM=${emu.cpu.realMode}`);
+      // Dump the per-instruction ring buffer so we can see how we reached the halt.
+      if (emu._eipHistory) {
+        const idx = emu._eipHistIdx || 0;
+        const arr = emu._eipHistory;
+        const lines: string[] = [];
+        for (let h = Math.max(0, idx - 32); h < idx; h++) {
+          const addr = arr[h & 63] >>> 0;
+          const bytes: string[] = [];
+          for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8((addr + b) >>> 0).toString(16).padStart(2, '0'));
+          lines.push(`    0x${addr.toString(16).padStart(8, '0')}: ${bytes.join(' ')}`);
+        }
+        console.warn(`[CPU-HALT] EIP history (last 32):\n${lines.join('\n')}`);
+      }
       emu.haltReason = emu.cpu.haltReason || 'illegal instruction';
       emu.halted = true;
       break;
@@ -1123,8 +1269,13 @@ export function emuTick(emu: Emulator): void {
           inImage = true;
         }
       } else if (emu.isDOS) {
-        // DOS mode: any address in conventional memory (0-0xFFFFF) or heap is valid
-        inImage = newEip < 0x100000 || (newEip >= emu.heapBase && newEip < emu.virtualPtr + 0x100000);
+        // DOS mode: any address in conventional memory (0-0xFFFFF) or heap is valid.
+        // In protected mode (DOS extender code), allow any address — DOS extenders
+        // run code at high linear addresses via VCPI/DPMI page tables, and the
+        // conventional-memory bound doesn't apply once we're past the V86 layer.
+        inImage = !emu.cpu.realMode
+          || newEip < 0x100000
+          || (newEip >= emu.heapBase && newEip < emu.virtualPtr + 0x100000);
       } else {
         inImage = emu.pe && newEip >= emu.pe.imageBase && newEip < emu.pe.imageBase + emu.pe.sizeOfImage;
         if (!inImage) {
@@ -1208,6 +1359,44 @@ export function emuTick(emu: Emulator): void {
   }
   emu.cpuSteps += stepCount;
   emu._pitInsnCount += stepCount;
+  // DOS heartbeat: log CS:IP + key regs once per ~500ms of wall clock so we
+  // can tell a compute-bound infinite loop from genuine work (IP moving).
+  if (emu.isDOS) {
+    const nowHB = performance.now();
+    const lastHB = (emu as any)._dbgHeartbeatMs ?? 0;
+    if (nowHB - lastHB > 500) {
+      (emu as any)._dbgHeartbeatMs = nowHB;
+      const cs = emu.cpu.cs;
+      const csBase = emu.cpu.realMode ? (cs * 16) >>> 0 : emu.cpu.segBase(cs);
+      const ip = (emu.cpu.eip - csBase) >>> 0;
+      const eax = emu.cpu.reg[0] >>> 0;
+      const ebx = emu.cpu.reg[3] >>> 0;
+      const ecx = emu.cpu.reg[1] >>> 0;
+      const edx = emu.cpu.reg[2] >>> 0;
+      const ds = emu.cpu.ds;
+      const es = emu.cpu.es;
+      const ss = emu.cpu.ss;
+      const esp = emu.cpu.reg[4] >>> 0;
+      const rm = emu.cpu.realMode ? 'RM' : 'PM';
+      let bytes = '';
+      for (let k = 0; k < 8; k++) bytes += emu.memory.readU8((emu.cpu.eip + k) >>> 0).toString(16).padStart(2, '0') + ' ';
+      console.log(`[HB] ${rm} steps=${emu.cpuSteps} ${cs.toString(16)}:${ip.toString(16)} eax=${eax.toString(16)} ebx=${ebx.toString(16)} ecx=${ecx.toString(16)} edx=${edx.toString(16)} ds=${ds.toString(16)} es=${es.toString(16)} ss=${ss.toString(16)} esp=${esp.toString(16)} bytes=[${bytes.trim()}]`);
+      // On the first RM heartbeat AFTER we've seen a DPMI entry (= post-V86
+      // transition), dump 512 bytes around current EIP so we can disassemble
+      // the looping code.
+      if (emu.cpu.realMode && (emu as any)._dbgSawDpmiEntry && !(emu as any)._dbgDumpedLoopCode) {
+        (emu as any)._dbgDumpedLoopCode = true;
+        const dumpStart = (emu.cpu.eip - 0x100) >>> 0;
+        let hex = '';
+        for (let k = 0; k < 512; k++) {
+          hex += emu.memory.readU8((dumpStart + k) >>> 0).toString(16).padStart(2, '0');
+          if ((k & 15) === 15) hex += '\n';
+          else hex += ' ';
+        }
+        console.log(`[LOOPDUMP] 512 bytes starting at linear 0x${dumpStart.toString(16)} (eip-0x100..+0x100):\n${hex}`);
+      }
+    }
+  }
   } catch (err) {
     console.error(`[EMU] tick() error at EIP=0x${(emu.cpu.eip >>> 0).toString(16)}:`, err);
     emu.haltReason = 'internal emulator error';
@@ -1223,9 +1412,9 @@ export function emuTick(emu: Emulator): void {
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
       const now = performance.now();
-      // Sync on VBlank (normal path), or every ~15ms as fallback for games
-      // that don't poll 0x3DA (ensures display still updates at ~60Hz).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 15) {
+      // Sync on VBlank (normal path), or every ~14ms as fallback for games
+      // that don't poll 0x3DA (aligns with 70 Hz ≈ 14.28 ms frame time).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 14) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);

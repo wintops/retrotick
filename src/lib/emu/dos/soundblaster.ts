@@ -9,8 +9,12 @@
 import type { DMAController } from './dma';
 
 const SB_DSP_READY = 0xAA;
-const SB_DSP_VERSION_HI = 2;
-const SB_DSP_VERSION_LO = 1;
+// Report SB16 DSP v4.05. DOOM's I_StartupSound stores (major<<8|minor) as the
+// DMA threshold at [0x56d226]; when >= 0x400 it takes the port-0x82 check path
+// in 0x51fe14 (which returns 0 for our DMA page=0, skipping the mixer) instead
+// of forcing the mixer to run with uninit'd DMX globals (which loops forever).
+const SB_DSP_VERSION_HI = 4;
+const SB_DSP_VERSION_LO = 5;
 
 export const SB_IRQ = 7; // IRQ 7 → INT 0x0F
 
@@ -42,9 +46,24 @@ export class SoundBlasterDSP {
   irqPending = false;    // true when transfer complete, waiting for ACK
   private highSpeed = false;
 
-  // SB Pro mixer state
+  // SB Pro/SB16 mixer state. Most registers simply store the written value
+  // and return it on read; a few (e.g. 0x82 = IRQ status) are synthesized
+  // from live hardware state.
   mixerAddr = 0;
   stereoMode = false;
+  mixerRegs = new Uint8Array(256);
+
+  /** Return mixer data register value for current mixerAddr (port 0x225 read). */
+  readMixerData(): number {
+    const reg = this.mixerAddr;
+    // 0x82 = SB16 IRQ status: bit 0 = 8-bit DMA IRQ pending, bit 1 = 16-bit
+    // DMA IRQ, bit 2 = MPU-401 IRQ. Live status — not from mixerRegs.
+    if (reg === 0x82) return this.irqPending ? 0x01 : 0x00;
+    // 0x0E = Stereo/filter config — reflect the live stereoMode flag
+    if (reg === 0x0E) return this.stereoMode ? 0x02 : 0x00;
+    // All other registers: return what was written (0 if never written).
+    return this.mixerRegs[reg];
+  }
 
   // PCM output buffer for AudioWorklet consumption
   pcmRing = new Float32Array(65536);

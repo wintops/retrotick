@@ -1,7 +1,7 @@
 import { useState, useRef } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX } from './win2k/Window';
 import { Button } from './win2k/Button';
-import { addFile } from '../lib/file-store';
+import { addFile, dispatchDesktopFilesChanged } from '../lib/file-store';
 import { t } from '../lib/regional-settings';
 
 const FONT = '11px "Tahoma", sans-serif';
@@ -65,7 +65,7 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
       if (!resp.ok) throw new Error(resp.statusText);
       const data = await resp.arrayBuffer();
       await addFile(name, data);
-      window.dispatchEvent(new CustomEvent('desktop-files-changed'));
+      dispatchDesktopFilesChanged({ source: 'ui', added: [name] });
       setStatus(prev => new Map(prev).set(name, 'done'));
     } catch {
       setStatus(prev => new Map(prev).set(name, 'error'));

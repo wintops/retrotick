@@ -1,0 +1,16 @@
+import { readFileSync } from 'fs';
+const u = new Uint8Array(readFileSync('C:/Users/Olivier/Documents/0_Perso/dosbox_d/emul5/EMUL5.EXE'));
+const dv = new DataView(u.buffer);
+const e_cblp = dv.getUint16(0x02, true);
+const e_cp = dv.getUint16(0x04, true);
+const e_cparhdr = dv.getUint16(0x08, true);
+const e_minalloc = dv.getUint16(0x0A, true);
+const e_lfanew = dv.getUint32(0x3C, true);
+const headerSize = e_cparhdr * 16;
+const imgSize = e_cp === 0 ? u.length - headerSize : (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
+console.log(`EMUL5.EXE size=${u.length}`);
+console.log(`MZ: e_cblp=0x${e_cblp.toString(16)} e_cp=0x${e_cp.toString(16)} e_cparhdr=0x${e_cparhdr.toString(16)} e_minalloc=0x${e_minalloc.toString(16)}`);
+console.log(`headerSize=${headerSize} imgSize=${imgSize} (loaded portion ends at 0x${(headerSize + imgSize).toString(16)})`);
+console.log(`e_lfanew=0x${e_lfanew.toString(16)} (new-format header offset)`);
+console.log(`Header at e_lfanew: ${[...u.slice(e_lfanew, e_lfanew + 4)].map(b => b.toString(16).padStart(2,'0')).join(' ')} (=${String.fromCharCode(u[e_lfanew], u[e_lfanew+1])})`);
+console.log(`Gap (uncovered): ${headerSize + imgSize} → ${e_lfanew} = ${e_lfanew - (headerSize + imgSize)} bytes missing`);

@@ -741,8 +741,25 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
           cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | (currentPage << 8) | pageMode;
           break;
         }
-        case 0x1b: // Gray-scale summing — stub (ignore)
+        case 0x1b: { // Gray-scale summing: BX=first DAC index, CX=count
+          const firstIdx = cpu.getReg16(EBX);
+          const count = cpu.getReg16(ECX);
+          const pal = vga.palette;
+          for (let i = 0; i < count; i++) {
+            const idx = (firstIdx + i) & 0xFF;
+            const r = pal[idx * 3];
+            const g = pal[idx * 3 + 1];
+            const b = pal[idx * 3 + 2];
+            // Standard NTSC luma: gray = (30*R + 59*G + 11*B) / 100
+            let gray = (30 * r + 59 * g + 11 * b + 50) / 100 | 0;
+            if (gray > 63) gray = 63;
+            pal[idx * 3] = gray;
+            pal[idx * 3 + 1] = gray;
+            pal[idx * 3 + 2] = gray;
+          }
+          vga.dirty = true;
           break;
+        }
       }
       break;
     }

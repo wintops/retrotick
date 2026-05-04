@@ -16,7 +16,7 @@ import { EmulatorDialog } from './EmulatorDialog';
 import { EXE_ICON_16 } from './DesktopIcon';
 import { FindDialog, FindReplaceDialog } from './FindDialog';
 import { FileDialog } from './win2k/FileDialog';
-import { getAllFiles, getFile, addFile, deleteFile } from '../lib/file-store';
+import { listFileMetadata, getFile, addFile, deleteFile, dispatchDesktopFilesChanged, type DesktopFilesChangedDetail } from '../lib/file-store';
 import { RegistryStore } from '../lib/registry-store';
 import { loadRegistry, saveRegistry } from '../lib/registry-db';
 import { ProfileStore } from '../lib/profile-store';
@@ -447,31 +447,64 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const emu = new Emulator();
     emu.configuredLcid = loadSettings().localeId;
 
-    // Sync virtual filesystem from IndexedDB into the emulator's FileManager
+    // Populate the emulator's virtualFiles metadata list from IndexedDB.
+    // Only names + sizes are read — the data cache fills lazily via
+    // FileManager.fetchFileData on first access, so launching an EXE no longer
+    // pays the structured-clone cost of every other stored binary.
     const syncVirtualFiles = async (e: Emulator) => {
-      const files = await getAllFiles();
-      e.fs.virtualFiles = files.map(f => ({ name: f.name, size: f.data.byteLength }));
-      const cache = (e.fs as { virtualFileCache?: Map<string, ArrayBuffer> }).virtualFileCache;
-      if (cache) {
-        cache.clear();
-        for (const f of files) cache.set(f.name.toUpperCase(), f.data);
+      const metas = await listFileMetadata();
+      e.fs.virtualFiles = metas.map(m => ({ name: m.name, size: m.size }));
+    };
+    // Targeted update of virtualFiles + virtualFileCache from a
+    // `desktop-files-changed` event. Guest-originated saves have already
+    // refreshed both structures synchronously inside saveVirtualFile, so we
+    // must not invalidate those cache entries. UI-originated adds may replace
+    // the content of an existing cached entry, so their cache slots are
+    // invalidated and will be lazily refetched on the next access.
+    const applyChange = async (detail: DesktopFilesChangedDetail | null) => {
+      if (!detail) {
+        await syncVirtualFiles(emu);
+        return;
+      }
+      const fs = emu.fs as typeof emu.fs & { virtualFileCache?: Map<string, ArrayBuffer> };
+      const cache = fs.virtualFileCache;
+      for (const name of detail.deleted ?? []) {
+        fs.virtualFiles = fs.virtualFiles.filter(f => f.name !== name);
+        cache?.delete(name.toUpperCase());
+      }
+      if ((detail.added?.length ?? 0) > 0) {
+        const metas = await listFileMetadata();
+        const byName = new Map(metas.map(m => [m.name, m]));
+        for (const name of detail.added ?? []) {
+          const m = byName.get(name);
+          if (!m) continue;
+          const existing = fs.virtualFiles.find(f => f.name === name);
+          if (existing) existing.size = m.size;
+          else fs.virtualFiles.push({ name: m.name, size: m.size });
+          if (detail.source === 'ui') cache?.delete(name.toUpperCase());
+        }
       }
     };
-    const onDesktopChanged = () => { syncVirtualFiles(emu); };
+    const onDesktopChanged = (ev: Event) => {
+      const detail = (ev as CustomEvent<DesktopFilesChangedDetail>).detail ?? null;
+      applyChange(detail);
+    };
     window.addEventListener('desktop-files-changed', onDesktopChanged);
 
     // Async init for registry + profiles, then start emulator
     let regFlushTimer: ReturnType<typeof setTimeout> | null = null;
     let profFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const initAndRun = async () => {
+      // Load registry, profiles, and virtual filesystem in parallel (independent IndexedDB reads)
+      const [regData, profData] = await Promise.all([
+        loadRegistry().catch(e => { console.warn('[REG] Failed to load registry from IndexedDB:', e); return null; }),
+        loadProfiles().catch(e => { console.warn('[PROF] Failed to load profiles from IndexedDB:', e); return null; }),
+        syncVirtualFiles(emu),
+      ]);
+
       // Set up registry store with IndexedDB persistence
       const regStore = new RegistryStore();
-      try {
-        const saved = await loadRegistry();
-        if (saved) regStore.deserialize(saved);
-      } catch (e) {
-        console.warn('[REG] Failed to load registry from IndexedDB:', e);
-      }
+      if (regData) regStore.deserialize(regData);
       regStore.onChange = () => {
         if (regFlushTimer !== null) clearTimeout(regFlushTimer);
         regFlushTimer = setTimeout(() => {
@@ -484,12 +517,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Set up profile store with IndexedDB persistence
       const profStore = new ProfileStore();
-      try {
-        const saved = await loadProfiles();
-        if (saved) profStore.deserialize(saved);
-      } catch (e) {
-        console.warn('[PROF] Failed to load profiles from IndexedDB:', e);
-      }
+      if (profData) profStore.deserialize(profData);
       profStore.onChange = () => {
         if (profFlushTimer !== null) clearTimeout(profFlushTimer);
         profFlushTimer = setTimeout(() => {
@@ -500,8 +528,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       };
       emu.profileStore = profStore;
 
-      // Populate virtual filesystem before load() so NE DLL PATH search can find files
-      await syncVirtualFiles(emu);
+      // Apply DOS settings BEFORE load() so setupDosEnvironment sees the correct flags
+      // (EMS device header, XMS/DPMI stubs, etc. are set up during load for MZ files).
+      const dsPre = loadDosSettings();
+      emu.wasmJitEnabled = dsPre.jitEnabled;
+      emu.dosEnableDpmi = dsPre.dpmi;
+      emu.dosEnableV86 = dsPre.v86;
+      emu.dosEnableXms = dsPre.xms;
+      emu.dosEnableEms = dsPre.ems;
+      emu.dosEnableSoundBlaster = dsPre.soundBlaster;
+      emu.dosEnableAdlib = dsPre.adlib;
+      emu.dosEnableGus = dsPre.gus;
+      emu.dosSpeedFactor = dsPre.speed;
+      emu.traceApi = dsPre.traceApi;
 
       await emu.load(arrayBuffer, peInfo, canvas);
     };
@@ -541,10 +580,14 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // NE DLL loading can fetch DLLs from PATH directories in IndexedDB)
       emu.fs.onFileRequest = (fileName: string) => getFile(fileName);
       emu.fs.onFileSave = (fileName: string, data: ArrayBuffer) => {
-        addFile(fileName, data).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
+        addFile(fileName, data).then(() =>
+          dispatchDesktopFilesChanged({ source: 'guest', added: [fileName] })
+        );
       };
       emu.fs.onFileDelete = (fileName: string) => {
-        deleteFile(fileName).then(() => window.dispatchEvent(new Event('desktop-files-changed')));
+        deleteFile(fileName).then(() =>
+          dispatchDesktopFilesChanged({ source: 'guest', deleted: [fileName] })
+        );
       };
 
       // Wire up browser download for Z:\ file save
@@ -561,6 +604,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       onSetupEmulator?.(emu);
 
       emuRef.current = emu;
+      (globalThis as typeof globalThis & { __emu?: unknown }).__emu = emu;
       onRegisterCloseHandler?.(() => {
         if (emu.mainWindow) {
           emu.postMessage(emu.mainWindow, WM_SYSCOMMAND, SC_CLOSE, 0);
@@ -696,13 +740,24 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           procData.childExitCode = 0;
         }
 
+        // Apply DOS settings BEFORE load() — setupDosEnvironment in load() reads these flags
+        {
+          const ds = loadDosSettings();
+          childEmu.wasmJitEnabled = ds.jitEnabled;
+          childEmu.dosEnableDpmi = ds.dpmi;
+          childEmu.dosEnableXms = ds.xms;
+          childEmu.dosEnableEms = ds.ems;
+          childEmu.dosEnableSoundBlaster = ds.soundBlaster;
+          childEmu.dosEnableAdlib = ds.adlib;
+          childEmu.dosEnableGus = ds.gus;
+          childEmu.dosSpeedFactor = ds.speed;
+          childEmu.traceApi = ds.traceApi;
+        }
+
         // Load child (this creates its own consoleBuffer via initConsoleBuffer)
         await childEmu.load(childData, childPeInfo, canvas);
         if (childEmu.isDOS) {
-          const ds = loadDosSettings();
-          childEmu.wasmJitEnabled = ds.jitEnabled;
-          childEmu.dosSpeedFactor = ds.speed;
-          childEmu.vga.refreshHz = ds.refreshRate;
+          childEmu.vga.refreshHz = loadDosSettings().refreshRate;
         }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
@@ -762,11 +817,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Load registry from IndexedDB then start
       initAndRun().then(() => {
-        // Apply DOS Settings
+        // Apply post-load DOS settings that depend on objects created during load()
         if (emu.isDOS) {
           const ds = loadDosSettings();
-          emu.wasmJitEnabled = ds.jitEnabled;
-          emu.dosSpeedFactor = ds.speed;
           emu.vga.refreshHz = ds.refreshRate;
         }
 

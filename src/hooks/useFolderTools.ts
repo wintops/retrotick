@@ -1,10 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import {
   addFolder, deleteFolder, deleteFile, renameEntry,
-  isFolder, displayName, addFile, getAllFiles, readDroppedItems,
+  isFolder, displayName, addFile, listFileMetadata, readDroppedItems,
+  dispatchDesktopFilesChanged,
   type StoredFile,
 } from '../lib/file-store';
-import { extractFirstIconUrl, isExeFile } from '../lib/file-utils';
+import { extractFirstIconUrlFromParsed, classifyExe } from '../lib/file-utils';
+import { parsePE, parseCOM } from '../lib/pe';
 import { t } from '../lib/regional-settings';
 
 export interface FileItem {
@@ -19,6 +21,7 @@ export interface FileItem {
 
 export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredFile[]>) {
   const [items, setItems] = useState<FileItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
@@ -96,6 +99,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   }
 
   const loadItems = useCallback(async () => {
+    setIsLoading(true);
     for (const u of iconUrls.current) URL.revokeObjectURL(u);
     iconUrls.current = [];
 
@@ -105,9 +109,26 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       let iconUrl: string | null = null;
       let isExe = false;
       if (!isFolderEntry) {
-        iconUrl = extractFirstIconUrl(f.data);
-        if (iconUrl) iconUrls.current.push(iconUrl);
-        isExe = isExeFile(f.data, f.name).ok;
+        // Parse the PE once and reuse the result for both the "is executable"
+        // classification and the icon extraction. The previous call chain
+        // parsed each file twice (extractFirstIconUrl + isExeFile), which
+        // doubled the PE-walk cost for every entry in the folder.
+        const lname = f.name.toLowerCase();
+        let peInfo;
+        try {
+          peInfo = lname.endsWith('.com') ? parseCOM(f.data) : parsePE(f.data);
+        } catch {
+          peInfo = undefined;
+        }
+        if (peInfo) {
+          if (lname.endsWith('.com')) {
+            isExe = true;
+          } else {
+            isExe = classifyExe(peInfo, f.name).ok;
+          }
+          iconUrl = extractFirstIconUrlFromParsed(peInfo, f.data);
+          if (iconUrl) iconUrls.current.push(iconUrl);
+        }
       }
       return { name: f.name, displayName: displayName(f.name), isFolder: isFolderEntry, iconUrl, isExe, size: f.data.byteLength, addedAt: f.addedAt };
     });
@@ -116,6 +137,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       return a.displayName.localeCompare(b.displayName);
     });
     setItems(mapped);
+    setIsLoading(false);
   }, [fetchItems]);
 
   // Refresh on mount + listen for changes
@@ -130,11 +152,11 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   useEffect(() => {
     if (Array.isArray(propertiesItem) || !propertiesItem?.isFolder) { setFolderContents(null); return; }
     const folderPrefix = propertiesItem.name.endsWith('/') ? propertiesItem.name : propertiesItem.name + '/';
-    getAllFiles().then(all => {
+    listFileMetadata().then(all => {
       let files = 0, folders = 0, totalSize = 0;
       for (const f of all) {
         if (!f.name.startsWith(folderPrefix)) continue;
-        if (isFolder(f.name)) folders++; else { files++; totalSize += f.data.byteLength; }
+        if (isFolder(f.name)) folders++; else { files++; totalSize += f.size; }
       }
       setFolderContents({ files, folders, totalSize });
     });
@@ -148,7 +170,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     setContextMenu(null);
     clearSelection();
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', deleted: names });
   }
 
   async function handleRename(oldName: string, newDisplayName: string) {
@@ -158,7 +180,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     const newName = prefix + newDisplayName + (isFolder(oldName) ? '/' : '');
     await renameEntry(oldName, newName);
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', added: [newName], deleted: [oldName] });
   }
 
   async function handleNewFolder() {
@@ -176,6 +198,8 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   async function handleDropOnFolder(folderName: string, draggedPaths: string[]) {
     const folderPrefix = folderName.endsWith('/') ? folderName : folderName + '/';
+    const added: string[] = [];
+    const deleted: string[] = [];
     for (const draggedPath of draggedPaths) {
       if (draggedPath === folderName) continue;
       if (draggedPath.startsWith(folderPrefix)) continue;
@@ -183,9 +207,11 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       const isDir = isFolder(draggedPath);
       const newName = folderPrefix + dName + (isDir ? '/' : '');
       await renameEntry(draggedPath, newName);
+      added.push(newName);
+      deleted.push(draggedPath);
     }
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
   }
 
   async function handleExternalDropOnFolder(folderName: string, e: DragEvent) {
@@ -198,6 +224,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   return {
     items, setItems,
+    isLoading,
     selected, setSelection, selectOne, selectToggle, selectRange, selectAll, clearSelection,
     anchor, setAnchor,
     focus,

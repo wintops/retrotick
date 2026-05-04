@@ -5,6 +5,7 @@ import { doShift } from './shift';
 import { doMovs, doStos, doLods, doCmps, doScas } from './string';
 import { handleDosInt } from '../dos/index';
 import { LazyOp } from './lazy-op';
+import { PageFaultError } from '../memory';
 
 // Register indices
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
@@ -16,16 +17,236 @@ const IF = 0x200;
 const DF = 0x400;
 const OF = 0x800;
 
-/** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
-function dispatchException(cpu: CPU, intNum: number): boolean {
+/** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode).
+ *
+ *  `source` selects which DPMI handler table to consult in PM:
+ *    - 'exception': CPU-generated fault/trap (DE, UD, DF, GP, PF, …). Looks up
+ *      the exception namespace set via INT 31h AX=0203 only.
+ *    - 'interrupt': hardware IRQ or software INT imm8. Looks up the interrupt
+ *      namespace set via INT 31h AX=0205 only. Vectors 0..31 that collide
+ *      with CPU exception numbers (e.g. IRQ0 at vec 0x08 with the default DPMI
+ *      PIC base) must NOT see the exception handler, otherwise DOOM's #DF
+ *      handler gets invoked on every timer tick and leaks stack.
+ */
+/** Return true if the given selector's GDT descriptor has a code-segment
+ *  access byte (bit 3 = 1). Used to filter AH=25h handler registrations —
+ *  DOOM's DMX also issues AH=25h with DS pointing at data (e.g., a lookup
+ *  table), which we should not treat as a real vector install. */
+function isCodeSelector(cpu: CPU, sel: number): boolean {
+  if (cpu.realMode || !cpu.emu?._gdtBase) return true; // fall back to permissive in RM
+  const idx = (sel & 0xFFF8) >>> 3;
+  if (idx === 0) return false;
+  const access = cpu.mem.readU8(cpu.emu._gdtBase + idx * 8 + 5);
+  return (access & 0x18) === 0x18; // bit 4 = system/code-data, bit 3 = code
+}
+
+export function dispatchException(
+  cpu: CPU,
+  intNum: number,
+  source: 'exception' | 'interrupt' = 'interrupt',
+  hwIrq = false,
+): boolean {
+  // In PM with DPMI active, check if the client installed a PM interrupt handler.
+  // Route hardware/software interrupts to it instead of our JS handler.
+  // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
+  if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
+    const dpmi = cpu.emu._dpmiState;
+    // DOS clients like DOOM install their timer/IRQ handlers via INT 21h AH=25h
+    // rather than DPMI AX=0205h. DOS/4GW's PM INT 21h handler processes the call
+    // internally, but may skip registering IRQ-range vectors (e.g., vec 8) in
+    // the PM handler chain — so HW IRQ0 later finds only DOS/4GW's default
+    // dispatcher and DOOM's timer handler never runs, leaving DOOM stuck in
+    // tick-wait loops (e.g., cs=168:0x51fc6f). Intercept INT 21h AH=25h up
+    // front and register the handler in pmExcHandlers so our HW IRQ dispatch
+    // (below) finds the client's handler directly. DOS/4GW's INT 21h handler
+    // still runs afterwards for any additional bookkeeping.
+    if (intNum === 0x21) {
+      const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+      const al = cpu.reg[EAX] & 0xFF;
+      // DOS/4GW extension AX=0x2502: Set Protected-Mode Interrupt Vector
+      // and return the OLD handler in ES:EBX. DOOM's chain-to-old-handler
+      // wrapper at cs=168:0x547777 uses this. Convention (confirmed by
+      // Watcom-compiled DOOM.EXE disassembly):
+      //   in : CL = vec, EBX = new_off, DS = new_sel
+      //   out: ES = old_sel, EBX = old_off
+      // Without this, DOS/4GW's PM INT 21h handler processes AX=0x2502
+      // internally and returns a garbage ES:EBX pair (e.g. 0x170:0x3508)
+      // pointing into the DPMI client's data (DOOM's WAD lump directory
+      // region). DOOM later chain-longjmp's to that address, decodes a
+      // BOUND opcode in WAD data, and loops forever on INT 5. Short-circuit
+      // AX=0x2502 here and service it in JS so the client gets a valid
+      // "old handler" that IRETs cleanly.
+      if (ah === 0x25 && al === 0x02 && cpu.use32 && !cpu.realMode) {
+        const vec = cpu.reg[ECX] & 0xFF;
+        const newOff = cpu.reg[EBX] >>> 0;
+        const newSel = cpu.ds;
+        const old = dpmi.pmExcHandlers.get(vec + 256);
+        const memA = cpu.mem as any;
+        const oldSel = old?.sel ?? (memA._dpmiTerminatorSel || 0x38);
+        const oldOff = old?.off ?? (memA._dpmiTerminatorOff || 0x700);
+        cpu.reg[EBX] = oldOff;
+        cpu.es = oldSel;
+        if (newSel !== 0) dpmi.pmExcHandlers.set(vec + 256, { sel: newSel, off: newOff });
+        cpu.setFlag(CF, false);
+        return true;
+      }
+      // Intercept AH=4Ch (Terminate with Return Code) in 32-bit PM. DOS/4GW's
+      // PM INT 21h handler at cs=1569:0x84 appears to NOT propagate the
+      // terminate semantics back to our RM AH=4C handler (execution resumes
+      // after INT 21h and the caller's RET pops bogus stack data → derail).
+      // Intercept the exit in PM directly so we halt cleanly with the
+      // client's exit code. Match the RM AH=4C behaviour from int21.ts.
+      if (ah === 0x4C && cpu.use32 && !cpu.realMode) {
+        const retCode = al;
+        if (cpu.emu) {
+          cpu.emu._dosExitCode = retCode;
+          cpu.emu.exitedNormally = true;
+          cpu.emu.halted = true;
+        }
+        cpu.halted = true;
+        cpu.haltReason = `terminated with code ${retCode}`;
+        console.warn(`[AH=4C-PM] exit=0x${retCode.toString(16)} cs=${cpu.cs.toString(16)}:${((cpu.eip-cpu.segBase(cpu.cs))>>>0).toString(16)} step=${(cpu.emu as any)?.cpuSteps}`);
+        return true;
+      }
+      // Intercept AH=35h (Get Interrupt Vector) in 32-bit PM for IRQ-range
+      // vectors. DOS/4GW's own PM INT 21h handler returns a bogus
+      // "0x170:0x3500+vec" value for these — those linear addresses are
+      // DOOM's WAD data in our flat memory model, since we map selectors
+      // 0x168 (CS) and 0x170 (DS) to the same base=0 (both flat 4GB).
+      // Real DOS/4GW would put reflector trampolines at 0x170:0x3500+vec
+      // with DIFFERENT linear base. Returning the DPMI reflector stubs
+      // at 0x38:(vec*stride) gives DOOM a valid safe handler that
+      // properly IRETs when chained into.
+      if (ah === 0x35 && cpu.use32 && !cpu.realMode) {
+        const vec = al;
+        // Only intercept IRQ-range vectors that DOOM chains to. Leave other
+        // AH=35h calls to DOS/4GW's PM handler (GetEnv, file-related, etc.).
+        const isIrqRange = (vec >= 0x08 && vec <= 0x0F) || (vec >= 0x70 && vec <= 0x77);
+        if (isIrqRange) {
+          const memA = cpu.mem as any;
+          const existing = dpmi.pmExcHandlers.get(vec + 256);
+          const stride = (cpu.emu as any)?._dpmiReflectorStride || 5;
+          const retSel = existing?.sel ?? (memA._dpmiTerminatorSel || 0x38);
+          const retOff = existing?.off ?? (vec * stride);
+          cpu.setReg16(EBX, retOff & 0xFFFF);
+          cpu.es = retSel;
+          cpu.setFlag(CF, false);
+          return true;
+        }
+      }
+      if (ah === 0x25) {
+        const vec = al;
+        const ds = cpu.ds;
+        const off = cpu.use32 ? (cpu.reg[EDX] >>> 0) : (cpu.reg[EDX] & 0xFFFF);
+        // Only install if DS is a *code* selector. DOOM's DMX library also
+        // issues AH=25h calls with DS pointing at its data segment (e.g.,
+        // 170:0x350f is an FM-volume lookup table, not code) — likely saving
+        // state rather than registering a real vector. Skip those so we keep
+        // the previously-registered code handler.
+        // Additionally, only intercept when the CALLER runs in 32-bit code
+        // (i.e., the DPMI client). DOS/4GW's own 16-bit PM code also issues
+        // AH=25h internally to mirror vectors into its own tables; intercepting
+        // those registers DOS/4GW's private PM handler as our HW-IRQ/exception
+        // handler, which corrupts its chain-integrity checks (error 1001 at
+        // ST_Init).
+        if (ds !== 0 && isCodeSelector(cpu, ds) && cpu.use32) {
+          dpmi.pmExcHandlers.set(vec + 256, { sel: ds, off });
+        }
+      }
+    }
+    // DPMI keeps two handler tables: AX=0203 stores in the exception namespace
+    // (key=vec, vec 0..31), AX=0205 stores in the interrupt namespace
+    // (key=vec+256). Pick the table that matches the source of the dispatch —
+    // never fall back across namespaces, or a HW IRQ0 (vec 8) would hit the
+    // client's #DF exception handler and corrupt its stack.
+    const handler = source === 'exception'
+      ? dpmi.pmExcHandlers.get(intNum)
+      : dpmi.pmExcHandlers.get(intNum + 256);
+    // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
+    // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
+    // Only route to PM handlers for interrupts the PM client actually needs
+    // (hardware interrupts, exceptions, and high INT 21h subfunctions).
+    // Recursion guard: track which INT handlers are currently active.
+    // When a PM handler for INT N calls INT N again (e.g. DOS4GW's PM
+    // INT 21h handler reflecting to DOS), reflect to JS/RM instead.
+    const shouldDispatchToPM = handler && handler.sel !== 0
+      && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
+      && intNum !== 0xFE // DPMI reflector trap
+      && intNum !== 0xFA // VCPI PM service trap
+      && intNum !== 0x20; // INT 20h = terminate, always handle in JS
+
+    if (shouldDispatchToPM) {
+      // Recursion guard (software INT only): if caller's CS matches the
+      // handler's selector or the initial code segment (0x08), this is the
+      // handler calling INT N to reflect to RM — don't re-enter. Hardware
+      // IRQs are excluded because they fire asynchronously while the client
+      // is running its normal code (cs == handler.sel in DOOM's flat model),
+      // and blocking them there makes DOOM's PIT/SB handlers never run.
+      const callerCS = cpu.cs;
+      if (!hwIrq && (callerCS === handler.sel || callerCS === 0x08)) {
+        // Handler is reflecting to RM — fall through to JS handler
+      } else {
+        // Push interrupt frame. Size depends on the DPMI CLIENT mode, not the
+        // caller's CS: a 32-bit client's handler terminates with IRETD (`66 cf`)
+        // regardless of what CS was when the interrupt fired, so we must push
+        // 12 bytes to match. DOOM runs 32-bit but its 16-bit shadow segments
+        // (cs=0x202 etc) would otherwise make us push only 6 bytes, which then
+        // leaks 6 bytes of garbage on every IRET cycle and eventually derails
+        // execution to a random CS:EIP.
+        const clientIs32 = !!cpu.emu._dpmiState.is32bit;
+        const returnIP = cpu.eip - cpu.segBase(callerCS);
+
+        // For HW IRQs: save full client state so the ISR's IRETD can restore
+        // it. Real DPMI hosts do this via ring transitions; we emulate it by
+        // intercepting IRETD. Only save for HW IRQs — software INTs don't need
+        // this because their handlers typically don't switch stacks, and their
+        // internal IRETs would incorrectly consume the saved state.
+        if (hwIrq) {
+          dpmi.irqReturnStack.push({
+            ss: cpu.ss,
+            esp: cpu.reg[ESP] >>> 0,
+            cs: callerCS,
+            eip: returnIP >>> 0,
+            eflags: cpu.getFlags(),
+          });
+        }
+
+        if (clientIs32) {
+          cpu.push32(cpu.getFlags());
+          cpu.push32(callerCS);
+          cpu.push32(returnIP >>> 0);
+        } else {
+          cpu.push16(cpu.getFlags() & 0xFFFF);
+          cpu.push16(callerCS);
+          cpu.push16(returnIP & 0xFFFF);
+        }
+        cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
+        cpu.loadCS(handler.sel);
+        cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+        cpu._lastDispatchIs32 = clientIs32;
+        return true;
+      }
+    }
+  }
   // Try JS-handled DOS/BIOS interrupts first
   if (cpu.emu && handleDosInt(cpu, intNum, cpu.emu)) return true;
   // Protected mode: dispatch through IDT
   if (!cpu.realMode && cpu.emu && cpu.emu._idtBase) {
     const idtEntry = cpu.emu._idtBase + intNum * 8;
     if (intNum * 8 + 7 <= cpu.emu._idtLimit) {
-      const lo = cpu.mem.readU32(idtEntry);
-      const hi = cpu.mem.readU32(idtEntry + 4);
+      // The IDT may sit on a virtual page the guest hasn't mapped (e.g.,
+      // EMUL5 entering PM with paging on before its loader maps the IDT
+      // region). A PageFaultError here would propagate out of cpu.step()
+      // and crash the tick. Treat an unmapped IDT entry as "no handler"
+      // and let the caller halt cleanly.
+      let lo: number, hi: number;
+      try {
+        lo = cpu.mem.readU32(idtEntry);
+        hi = cpu.mem.readU32(idtEntry + 4);
+      } catch (e) {
+        if (e instanceof PageFaultError) return false;
+        throw e;
+      }
       const offsetLo = lo & 0xFFFF;
       const selector = (lo >>> 16) & 0xFFFF;
       const typeAttr = (hi >>> 8) & 0xFF;
@@ -36,14 +257,22 @@ function dispatchException(cpu: CPU, intNum: number): boolean {
         const is32 = (gateType === 0x0E || gateType === 0x0F);
         const offset = is32 ? ((offsetHi << 16) | offsetLo) >>> 0 : offsetLo;
         const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & (is32 ? 0xFFFFFFFF : 0xFFFF);
-        if (is32) {
-          cpu.push32(cpu.getFlags());
-          cpu.push32(cpu.cs);
-          cpu.push32(returnIP);
-        } else {
-          cpu.push16(cpu.getFlags() & 0xFFFF);
-          cpu.push16(cpu.cs);
-          cpu.push16(returnIP & 0xFFFF);
+        // Stack pushes can themselves PF if the new SS:ESP page is unmapped.
+        // Treat that as "no usable handler" so the caller can fall back to
+        // halt rather than re-entering PF dispatch infinitely.
+        try {
+          if (is32) {
+            cpu.push32(cpu.getFlags());
+            cpu.push32(cpu.cs);
+            cpu.push32(returnIP);
+          } else {
+            cpu.push16(cpu.getFlags() & 0xFFFF);
+            cpu.push16(cpu.cs);
+            cpu.push16(returnIP & 0xFFFF);
+          }
+        } catch (e) {
+          if (e instanceof PageFaultError) return false;
+          throw e;
         }
         if (gateType === 0x06 || gateType === 0x0E) {
           cpu.setFlags(cpu.getFlags() & ~0x0200); // clear IF
@@ -51,6 +280,7 @@ function dispatchException(cpu: CPU, intNum: number): boolean {
         cpu.setFlags(cpu.getFlags() & ~0x0100); // clear TF
         cpu.loadCS(selector);
         cpu.eip = cpu.segBase(selector) + offset;
+        cpu._lastDispatchIs32 = is32;
         return true;
       }
     }
@@ -66,7 +296,7 @@ function raiseDivideError(cpu: CPU, instrEip: number): void {
   for (let i = 0; i < 8; i++) bytes.push(cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0'));
   console.warn(`[DIV ERROR] bytes: ${bytes.join(' ')}`);
   cpu.eip = instrEip; // rewind to faulting instruction
-  if (dispatchException(cpu, 0)) return;
+  if (dispatchException(cpu, 0, 'exception')) return;
   cpu.haltReason = 'integer divide by zero';
   cpu.halted = true;
 }
@@ -77,7 +307,143 @@ let _instrRingIdx = 0;
 let _instrRingDumped = false;
 
 export function cpuStep(cpu: CPU): void {
+  // Wrap IP within the current 16-bit code segment (real mode + 16-bit PM segments).
+  // Sequential fetches (and many opcodes) update EIP without wrapping; without this
+  // step, a long linear code stretch in 16-bit mode walks past the segment limit
+  // and starts executing whatever is at the next paragraph.
+  if (!cpu.use32) {
+    const csBase16 = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
+    cpu.eip = (csBase16 + ((cpu.eip - csBase16) & 0xFFFF)) >>> 0;
+  }
+  // Per-instruction debug hook (set by test harnesses to catch exact derail point)
+  if ((cpu.emu as any)?._stepHook) (cpu.emu as any)._stepHook(cpu);
+  // Lazily populate DOS/4GW handler-table offset/selector fields once control
+  // first reaches a 32-bit client code segment (cpu.use32 = D=1). DOS/4GW's
+  // own code runs in 16-bit (D=0) LE-shadow segments; the client (e.g. DOOM)
+  // uses a flat D=1 selector. Waiting for the first D=1 fetch guarantees
+  // DOS/4GW's init has finished so we don't clobber LE-load scratch in the
+  // table region.
+  {
+    const mem = cpu.mem as any;
+    if (mem._dos4gwTableAnchored && !mem._dos4gwTableFieldsPopulated && cpu.use32 && !cpu.realMode) {
+      mem._dos4gwTableFieldsPopulated = true;
+      const base = mem._dos4gwTableBase;
+      if (base >= 0) {
+        for (let i = 1; i <= 31; i++) {
+          const e = base + i * 8;
+          cpu.mem.writeU32(e + 2, mem._dpmiTerminatorOff); // offset → RETF stub
+          cpu.mem.writeU16(e + 6, mem._dpmiTerminatorSel); // selector
+        }
+      }
+    }
+    // DOS/4GW chain walker diagnostic + pre-0xf68 EIP ring buffer. Logs
+    // walker entries, handler returns, and a 128-deep EIP ring for cs=1569
+    // so when the 1001-error thunk at 0xf68 fires we see the exact path.
+    if (cpu.cs === 0x1569 && !cpu.realMode) {
+      const memX = cpu.mem as any;
+      const cs1569Base = cpu.segBase(0x1569);
+      if (cs1569Base > 0) {
+        if (!memX._walkerRing) {
+          memX._walkerRing = new Array(64).fill(null);
+          memX._walkerRingIdx = 0;
+          memX._eip1569Ring = new Uint32Array(128);
+          memX._eip1569RingIdx = 0;
+        }
+        const off = cpu.eip - cs1569Base;
+        // Record EVERY cs=1569 EIP in a fast ring
+        memX._eip1569Ring[memX._eip1569RingIdx & 127] = off;
+        memX._eip1569RingIdx++;
+        if (off === 0x0ba4) {
+          const bp = cpu.reg[5] >>> 0;
+          const ssBase = cpu.segBase(cpu.ss);
+          const bpLin = (ssBase + (bp & 0xFFFF)) >>> 0;
+          const esp = cpu.reg[4] >>> 0;
+          const retAddr = cpu.mem.readU32((ssBase + (esp & 0xFFFF)) >>> 0);
+          memX._walkerRing[memX._walkerRingIdx & 63] = `entry DI=[BP+6]=0x${cpu.mem.readU16(bpLin + 6).toString(16)} ret=0x${retAddr.toString(16)}`;
+          memX._walkerRingIdx++;
+        } else if (off === 0x0bb8) {
+          // Re-entry (via JMP from 0x0c4d) — track this too
+          memX._walkerRing[memX._walkerRingIdx & 63] = `RE-ENTRY at 0x0bb8 EDI=0x${(cpu.reg[7]>>>0).toString(16)}`;
+          memX._walkerRingIdx++;
+        } else if (off === 0x0c38) {
+          // About to RETFD into handler — capture target
+          const edx = cpu.reg[2] >>> 0;
+          const eax = cpu.reg[0] >>> 0;
+          memX._walkerRing[memX._walkerRingIdx & 63] = `  DISPATCH sel:off = ${edx.toString(16)}:${eax.toString(16)} (from DI=0x${(cpu.reg[7]>>>0).toString(16)})`;
+          memX._walkerRingIdx++;
+          // MITIGATION — walker about to RETFD into the 1001-error thunk
+          // (entry[0] of DOS/4GW's chain table). That means we arrived here
+          // with DI=0, because the caller at cs=1569:0x0d77 reads a chain
+          // head byte from the ISR frame ([SI+0x38]) which is the high word
+          // of EFLAGS popped at cs=1569:0x5f5 — always 0 in normal PM. On a
+          // real machine this produces the same DI=0, yet DOOM works; there
+          // must be a subtler state-init difference we haven't isolated.
+          // Workaround: patch the stack (not the registers) so RETFD jumps
+          // to our safe terminator stub (XOR EAX,EAX; RETF). The walker at
+          // 0x0c34/0x0c36 already did PUSH EDX / PUSH EAX (32-bit via 66h),
+          // so modifying reg[2]/reg[0] now has no effect — RETFD pops IP
+          // from [ESP] and CS from [ESP+4]. We overwrite those instead.
+          if (edx === 0x1569 && eax === 0x0f68) {
+            const termSel = memX._dpmiTerminatorSel || 0x38;
+            const termOff = memX._dpmiTerminatorOff || 0x700;
+            const esp = cpu.reg[4] >>> 0;
+            const ssBase = cpu.segBase(cpu.ss);
+            const stackLin = (ssBase + (esp & 0xFFFF)) >>> 0;
+            cpu.mem.writeU32(stackLin, termOff);
+            cpu.mem.writeU32((stackLin + 4) >>> 0, termSel);
+            if (!memX._1001AvoidLogged) {
+              memX._1001AvoidLogged = true;
+              console.log(`[1001-AVOID] chain walker would dispatch cs=1569:0x0f68 (1001-error thunk). Patched stack at SS:SP=${cpu.ss.toString(16)}:${(esp&0xFFFF).toString(16)} (lin 0x${stackLin.toString(16)}) to redirect RETFD to safe terminator ${termSel.toString(16)}:${termOff.toString(16)} at step ${(cpu.emu as any).cpuSteps}. Further redirects (if any) will not log.`);
+            }
+          }
+        } else if (off === 0x0c45) {
+          const eax = cpu.reg[0] >>> 0;
+          const edi = cpu.reg[7] >>> 0;
+          memX._walkerRing[memX._walkerRingIdx & 63] = `  testEAX=0x${eax.toString(16)} EDI=0x${edi.toString(16)}`;
+          memX._walkerRingIdx++;
+        } else if (off === 0x0f68 && !memX._1001Logged) {
+          memX._1001Logged = true;
+          // Build ONE big string and emit it with a single console.log call so
+          // the browser only attaches ONE stack trace. Emitting N warn calls
+          // gives N stack traces — the user reported 140k+ lines of noise.
+          const out: string[] = [];
+          out.push(`[1001-ERROR] DOS/4GW 1001-error thunk entered at cs=1569:0x0f68, step ${(cpu.emu as any).cpuSteps}`);
+          out.push(`  Last 128 cs=1569 EIPs before 0xf68:`);
+          const ringN = Math.min(128, memX._eip1569RingIdx);
+          let line = '    ';
+          for (let h = 0; h < ringN; h++) {
+            const idx = (memX._eip1569RingIdx - ringN + h) & 127;
+            line += memX._eip1569Ring[idx].toString(16).padStart(4, '0') + ' ';
+            if ((h + 1) % 16 === 0) { out.push(line); line = '    '; }
+          }
+          if (line.trim()) out.push(line);
+          out.push(`  Walker dispatch history (last ${Math.min(64, memX._walkerRingIdx)} events):`);
+          const n = Math.min(64, memX._walkerRingIdx);
+          for (let h = 0; h < n; h++) {
+            const idx = (memX._walkerRingIdx - n + h) & 63;
+            out.push(`    ${memX._walkerRing[idx] || '(empty)'}`);
+          }
+          const esp = cpu.reg[4] >>> 0;
+          const ssBase = cpu.segBase(cpu.ss);
+          out.push(`  SS:ESP = ${cpu.ss.toString(16)}:${esp.toString(16)} (lin 0x${((ssBase + (esp & 0xFFFF)) >>> 0).toString(16)}):`);
+          let sline = '    ';
+          for (let s = 0; s < 16; s++) {
+            const addr = (ssBase + ((esp + s * 2) & 0xFFFF)) >>> 0;
+            sline += `[+${(s*2).toString(16)}]=${cpu.mem.readU16(addr).toString(16).padStart(4,'0')} `;
+            if ((s+1) % 8 === 0) { out.push(sline); sline = '    '; }
+          }
+          out.push(`  Chain table entries [0..4]:`);
+          for (let i = 0; i < 5; i++) {
+            const a = 0x2eef0 + i * 8;
+            out.push(`    entry[${i}] type=${cpu.mem.readU8(a)} next=${cpu.mem.readU8(a+1)} off=0x${cpu.mem.readU32(a+2).toString(16)} sel=0x${cpu.mem.readU16(a+6).toString(16)}`);
+          }
+          console.log(out.join('\n'));
+        }
+      }
+    }
+  }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
+  cpu._lastInstrEip = instrEip; // exposed to fault catch in emu-exec.ts (PageFaultError rewind)
   // Per-instruction trace ring buffer (disabled for perf)
   if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
     const csBase_t = (cpu.cs << 4) >>> 0;
@@ -454,7 +820,9 @@ export function cpuStep(cpu: CPU): void {
       const rep = prefixF3 || prefixF2;
       const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
       const doOne = () => {
-        const val = cpu.emu?.portIn(port) ?? (unitSize === 2 ? 0xFFFF : 0xFFFFFFFF);
+        const val = unitSize === 2
+          ? (cpu.emu?.portInWord(port) ?? 0xFFFF)
+          : (cpu.emu?.portIn(port) ?? 0xFFFFFFFF);
         let addr: number;
         if (cpu._addrSize16) {
           addr = (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0;
@@ -542,7 +910,8 @@ export function cpuStep(cpu: CPU): void {
           else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
         }
         const val = unitSize === 2 ? cpu.mem.readU16(addr) : cpu.mem.readU32(addr);
-        cpu.emu?.portOut(port, val);
+        if (unitSize === 2) cpu.emu?.portOutWord(port, val);
+        else cpu.emu?.portOut(port, val);
         if (cpu._addrSize16) {
           cpu.reg[ESI] = (cpu.reg[ESI] & ~0xFFFF) | (((cpu.reg[ESI] & 0xFFFF) + delta) & 0xFFFF);
         } else {
@@ -735,13 +1104,14 @@ export function cpuStep(cpu: CPU): void {
     // MOV Sreg, r/m16
     case 0x8E: {
       const d = cpu.decodeModRM(16);
+      const sel = d.val & 0xFFFF;
       switch (d.regField) {
-        case 0: cpu.es = d.val & 0xFFFF; break;
-        case 1: cpu.loadCS(d.val & 0xFFFF); break;
-        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
-        case 3: cpu.ds = d.val & 0xFFFF; break;
-        case 4: cpu.fs = d.val & 0xFFFF; break;
-        case 5: cpu.gs = d.val & 0xFFFF; break;
+        case 0: cpu.es = sel; break;
+        case 1: cpu.loadCS(sel); break;
+        case 2: cpu.ss = sel; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
+        case 3: cpu.ds = sel; break;
+        case 4: cpu.loadFS(sel); break;
+        case 5: cpu.gs = sel; break;
       }
       break;
     }
@@ -793,15 +1163,16 @@ export function cpuStep(cpu: CPU): void {
 
     // CALL FAR ptr16:16/32
     case 0x9A: {
-      if (!cpu.use32) {
+      if (opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
+        const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
         cpu.push16(cpu.cs);
-        cpu.push16((cpu.eip - (cpu.segBase(cpu.cs))) & 0xFFFF);
+        cpu.push16(returnIP);
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
-        const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
+        const offset = cpu.fetch32();
         const selector = cpu.fetch16();
         const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
         cpu.push32(cpu.cs);
@@ -819,6 +1190,11 @@ export function cpuStep(cpu: CPU): void {
       break;
 
     // POPF/POPFD
+    // Real-mode POPF allows IOPL to be modified (only V86 prevents it). The
+    // earlier "preserve IOPL in real mode" hack was added to fool DOS4GW into
+    // taking its VCPI path, but that's the wrong fix — the right fix is to
+    // mirror DOSBox's INT 67h DE00 handler (only succeed from V86), which lets
+    // DOS4GW take its raw mode-switch path (sub_8087) instead.
     case 0x9D:
       if (opSize === 16) cpu.setFlags(cpu.pop16() | 0x0002);
       else cpu.setFlags(cpu.pop32() | 0x0002);
@@ -849,8 +1225,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       cpu.setReg8(EAX, cpu.mem.readU8(maddr));
       break;
@@ -867,8 +1242,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       if (opSize === 16) cpu.setReg16(EAX, cpu.mem.readU16(maddr));
       else cpu.reg[EAX] = cpu.mem.readU32(maddr) | 0;
@@ -886,8 +1260,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       cpu.mem.writeU8(maddr, cpu.getReg8(EAX));
       break;
@@ -904,8 +1277,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       if (opSize === 16) cpu.mem.writeU16(maddr, cpu.getReg16(EAX));
       else cpu.mem.writeU32(maddr, cpu.reg[EAX] >>> 0);
@@ -1037,10 +1409,10 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // RETF imm16
+    // RETF imm16 — in PM use opSize (0x66 prefix matters), in RM use D bit
     case 0xCA: {
       const imm = cpu.fetch16();
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1057,9 +1429,9 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // RETF
-    case 0xCB:
-      if (!cpu.use32) {
+    // RETF — in PM use opSize, in RM use D bit
+    case 0xCB: {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1071,6 +1443,7 @@ export function cpuStep(cpu: CPU): void {
         cpu.eip = (cpu.segBase(cs) + eip2) >>> 0;
       }
       break;
+    }
 
     // LES (0xC4) / LDS (0xC5) — load far pointer
     case 0xC4: case 0xC5: {
@@ -1181,23 +1554,98 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // IRET (0xCF) — return from interrupt
+    // IRET (0xCF) — operand size selects IRET vs IRETD in both real and protected mode.
+    // The 66h prefix on real-mode/16-bit IRET turns it into IRETD (DOS extenders rely on this).
     case 0xCF: {
       cpu._inhibitTF = true; // IRET suppresses TF trap
-      if (!cpu.use32) {
+      if (opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
-        cpu.loadCS(cs);
-        cpu.eip = cpu.segBase(cs) + ip;
-        cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+        if (cpu.emu?._dpmiState?.irqReturnStack.length) {
+          const stk = cpu.emu._dpmiState.irqReturnStack;
+          const top = stk[stk.length - 1];
+          const isMatchedReturn = (cs === top.cs && ip === top.eip);
+          const isReflectorReturn = (cs === 0x38);
+          if (isMatchedReturn || isReflectorReturn) {
+            stk.pop();
+            cpu.loadCS(top.cs);
+            cpu.eip = (cpu.segBase(top.cs) + top.eip) >>> 0;
+            cpu.ss = top.ss;
+            cpu.reg[ESP] = top.esp;
+            cpu.setFlags(top.eflags);
+          } else {
+            cpu.loadCS(cs);
+            cpu.eip = cpu.segBase(cs) + ip;
+            cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+          }
+        } else {
+          cpu.loadCS(cs);
+          cpu.eip = cpu.segBase(cs) + ip;
+          cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+        }
       } else {
-        const eip2 = cpu.pop32() >>> 0;
+        let eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
         const eflags = cpu.pop32() >>> 0;
-        cpu.loadCS(cs2);
-        cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
-        cpu.setFlags(eflags);
+        // Per Intel: real-mode IRETD requires EIP[31:16]==0 (otherwise #GP).
+        // Some DOS extenders push 16-bit IRET frames and execute IRETD with the
+        // 66 prefix; the high 16 bits of the popped EIP are then garbage from
+        // adjacent stack data. Mask to 16 bits in real mode to recover the IP.
+        if (cpu.realMode) eip2 = eip2 & 0xFFFF;
+        // VM bit (bit 17) in EFLAGS: IRET to V86 mode
+        if (!cpu.realMode && (eflags & (1 << 17))) {
+          // Switch to V86/real mode — pop additional SS:ESP + segment registers
+          const newESP = cpu.pop32() >>> 0;
+          const newSS = cpu.pop32() & 0xFFFF;
+          const newES = cpu.pop32() & 0xFFFF;
+          const newDS = cpu.pop32() & 0xFFFF;
+          const newFS = cpu.pop32() & 0xFFFF;
+          const newGS = cpu.pop32() & 0xFFFF;
+          console.log(`[IRETD-V86] cs=${cs2.toString(16)} eip=${eip2.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
+          cpu.realMode = true;
+          cpu.use32 = false;
+          cpu._addrSize16 = true;
+          cpu._unrealMode = true; // PM→V86: cache flat base for data segments
+          cpu.cs = cs2;
+          cpu.ds = newDS;
+          cpu.es = newES;
+          cpu.ss = newSS;
+          cpu.loadFS(newFS);
+          cpu.gs = newGS;
+          cpu.reg[ESP] = newESP;
+          cpu.eip = (cs2 * 16 + eip2) >>> 0;
+          cpu.setFlags(eflags & ~(1 << 17)); // clear VM for our RM mode
+        } else {
+          // DPMI HW interrupt return detection. Two cases:
+          // 1. ISR didn't switch stacks → popped CS:EIP matches saved return
+          // 2. ISR switched stacks → popped from wrong stack, stale values.
+          //    Detected by IRETD to cs=reflector_sel (0x38) — the ISR's IRETD
+          //    popped stale data that decoded as the reflector address.
+          // In both cases, restore the saved client state.
+          if (cpu.emu?._dpmiState?.irqReturnStack.length) {
+            const stk = cpu.emu._dpmiState.irqReturnStack;
+            const top = stk[stk.length - 1];
+            const isMatchedReturn = (cs2 === top.cs && eip2 === top.eip);
+            const isReflectorReturn = (cs2 === 0x38); // DPMI_REFLECTOR_SEL
+            if (isMatchedReturn || isReflectorReturn) {
+              stk.pop();
+              cpu.loadCS(top.cs);
+              cpu.eip = (cpu.segBase(top.cs) + top.eip) >>> 0;
+              cpu.ss = top.ss;
+              cpu.reg[ESP] = top.esp;
+              cpu.setFlags(top.eflags);
+            } else {
+              cpu.loadCS(cs2);
+              cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+              cpu.setFlags(eflags);
+            }
+          } else {
+            cpu.loadCS(cs2);
+            cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+            cpu.setFlags(eflags);
+          }
+        }
       }
       break;
     }
@@ -1269,15 +1717,15 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // JMP FAR ptr16:16/32
+    // JMP FAR ptr16:16/32 — in PM use opSize, in RM use D bit
     case 0xEA: {
-      if (!cpu.use32) {
+      if (opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
-        const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
+        const offset = cpu.fetch32();
         const selector = cpu.fetch16();
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
@@ -1305,9 +1753,11 @@ export function cpuStep(cpu: CPU): void {
     }
     case 0xE5: {
       const port = cpu.fetch8();
-      const val = cpu.emu?.portIn(port) ?? 0xFFFF;
-      if (opSize === 16) cpu.setReg16(EAX, val & 0xFFFF);
-      else cpu.reg[EAX] = val >>> 0;
+      if (opSize === 16) {
+        cpu.setReg16(EAX, cpu.emu?.portInWord(port) ?? 0xFFFF);
+      } else {
+        cpu.reg[EAX] = (cpu.emu?.portIn(port) ?? 0xFFFFFFFF) >>> 0;
+      }
       break;
     }
 
@@ -1320,10 +1770,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xE7: {
       const port = cpu.fetch8();
       if (opSize === 16) {
-        // 16-bit OUT: write low byte to port, high byte to port+1
-        const val16 = cpu.getReg16(EAX);
-        cpu.emu?.portOut(port, val16 & 0xFF);
-        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+        cpu.emu?.portOutWord(port, cpu.getReg16(EAX));
       } else {
         cpu.emu?.portOut(port, cpu.reg[EAX]);
       }
@@ -1337,10 +1784,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xED: {
       const port = cpu.getReg16(EDX);
       if (opSize === 16) {
-        // 16-bit IN: read low byte from port, high byte from port+1
-        const lo = cpu.emu?.portIn(port) ?? 0xFF;
-        const hi = cpu.emu?.portIn(port + 1) ?? 0xFF;
-        cpu.setReg16(EAX, (hi << 8) | lo);
+        cpu.setReg16(EAX, cpu.emu?.portInWord(port) ?? 0xFFFF);
       } else {
         cpu.reg[EAX] = (cpu.emu?.portIn(port) ?? 0xFFFFFFFF) >>> 0;
       }
@@ -1354,10 +1798,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xEF: {
       const port = cpu.getReg16(EDX);
       if (opSize === 16) {
-        // 16-bit OUT: write low byte to port, high byte to port+1
-        const val16 = cpu.getReg16(EAX);
-        cpu.emu?.portOut(port, val16 & 0xFF);
-        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+        cpu.emu?.portOutWord(port, cpu.getReg16(EAX));
       } else {
         cpu.emu?.portOut(port, cpu.reg[EAX]);
       }
@@ -1646,12 +2087,20 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 3: // CALL FAR m16:16/32 (FF /3)
-          if (!cpu.use32) {
+        case 3: { // CALL FAR m16:16/32 (FF /3)
+          if (d.isReg) {
+            // Register-mode operand is INVALID for CALL FAR m. Some DOS
+            // extenders (Triton) emit this pattern as a no-op / padding
+            // rather than to trigger #UD. Raising #UD and IRETing to the
+            // same instruction just spins forever; treat as NOP.
+            break;
+          }
+          if (opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
+            const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
             cpu.push16(cpu.cs);
-            cpu.push16((cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF);
+            cpu.push16(returnIP);
             cpu.loadCS(farSel);
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           } else {
@@ -1664,6 +2113,7 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;
+        }
         case 4: // JMP r/m16/32
           if (!cpu.use32 && opSize === 16) {
             const csBase = cpu.segBase(cpu.cs);
@@ -1672,8 +2122,15 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 5: // JMP FAR m16:16/32 (FF /5)
-          if (!cpu.use32) {
+        case 5: { // JMP FAR m16:16/32 (FF /5)
+          if (d.isReg) {
+            // Register-mode operand is INVALID for JMP FAR m. Treat as
+            // silent NOP instead of wild-JMP'ing into ram[2] (which sent
+            // us into the IVT) or dispatching #UD (Triton has no handler
+            // and we loop forever).
+            break;
+          }
+          if (opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
             cpu.loadCS(farSel);
@@ -1685,15 +2142,64 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;
+        }
         case 6: // PUSH r/m32
           if (opSize === 16) cpu.push16(d.val);
           else cpu.push32(d.val);
           break;
-        default:
-          console.warn(`Unimplemented FF /${d.regField} at 0x${((cpu.eip) >>> 0).toString(16)}`);
+        default: {
+          const csBaseHere = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
+          const ipHere = (instrEip - csBaseHere) >>> 0;
+          console.warn(`Unimplemented FF /${d.regField} at CS:IP=${cpu.cs.toString(16)}:${ipHere.toString(16)} (linear 0x${instrEip.toString(16)}) csBase=0x${csBaseHere.toString(16)} realMode=${cpu.realMode} use32=${cpu.use32}`);
+          // Dump the GDT slot for CS to see if an explicit descriptor exists
+          if (!cpu.realMode && cpu.emu?._gdtBase) {
+            const csIdx = (cpu.cs & 0xFFF8) >>> 3;
+            const descAddr = cpu.emu._gdtBase + csIdx * 8;
+            let desc = '';
+            for (let i = 0; i < 8; i++) desc += cpu.mem.readU8((descAddr + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+            console.warn(`  CS GDT[${csIdx}] @0x${descAddr.toString(16)}: ${desc}`);
+          }
+          // Dump stack (8 words) — top-of-stack often holds the call site
+          const ssBaseHere = cpu.realMode ? (cpu.ss * 16) >>> 0 : cpu.segBase(cpu.ss);
+          const spHere = cpu.use32 ? (cpu.reg[ESP] >>> 0) : (cpu.reg[ESP] & 0xFFFF);
+          let stk = '';
+          for (let i = 0; i < 8; i++) stk += cpu.mem.readU16((ssBaseHere + spHere + i * 2) >>> 0).toString(16).padStart(4, '0') + ' ';
+          console.warn(`  SS:SP=${cpu.ss.toString(16)}:${spHere.toString(16)} stack[0..16]: ${stk}`);
+          // Dump 16 bytes around the faulting instruction (so the previous CALL/JMP shows)
+          let ctx = '';
+          for (let i = -8; i < 8; i++) ctx += cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+          console.warn(`  bytes(eip-8..+8): ${ctx}`);
+          // If top-of-stack looks like a near-call return address within the
+          // current CS, dump the 8 bytes before it — that's where the CALL
+          // instruction lives, and its disassembly reveals the target.
+          const topWord = cpu.mem.readU16((ssBaseHere + spHere) >>> 0);
+          const retLinear = (csBaseHere + topWord) >>> 0;
+          let retCtx = '';
+          for (let i = -8; i < 2; i++) retCtx += cpu.mem.readU8((retLinear + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+          console.warn(`  caller bytes(ret-8..+2) at linear 0x${retLinear.toString(16)}: ${retCtx}`);
+          // Also dump 32 bytes of DS data around a guessed indirect-call target
+          // (the FF /2 near-call form `ff 16 lo hi` puts the offset 2 bytes into
+          // the call instruction). Try to decode it and dump [ds:offset].
+          const callOp = cpu.mem.readU8((retLinear - 4) >>> 0);
+          const callMod = cpu.mem.readU8((retLinear - 3) >>> 0);
+          if (callOp === 0xff && callMod === 0x16) {
+            const target = cpu.mem.readU16((retLinear - 2) >>> 0);
+            const dsBaseHere = cpu.segBase(cpu.ds);
+            const val = cpu.mem.readU16((dsBaseHere + target) >>> 0);
+            console.warn(`  near call [ds:0x${target.toString(16)}]=0x${val.toString(16)} (ds=${cpu.ds.toString(16)} base 0x${dsBaseHere.toString(16)})`);
+            // Also sample what that slot would contain under several candidate
+            // base hypotheses (crash came from a wrong DS — help identify it).
+            const csBaseProbe = csBaseHere;
+            const ssBaseProbe = ssBaseHere;
+            const cand0 = cpu.mem.readU16((0 + target) >>> 0);
+            const candCS = cpu.mem.readU16((csBaseProbe + target) >>> 0);
+            const candSS = cpu.mem.readU16((ssBaseProbe + target) >>> 0);
+            console.warn(`  [target 0x${target.toString(16)}] at base=0:0x${cand0.toString(16)} at base=csBase(0x${csBaseProbe.toString(16)}):0x${candCS.toString(16)} at base=ssBase(0x${ssBaseProbe.toString(16)}):0x${candSS.toString(16)}`);
+          }
           cpu.haltReason = 'illegal instruction';
           cpu.halted = true;
           break;
+        }
       }
       break;
     }

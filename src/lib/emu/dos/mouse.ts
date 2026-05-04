@@ -430,6 +430,13 @@ const MOUSE_TRAMP_OFF = 0x0500;
 export function dispatchMouseCallback(emu: Emulator): boolean {
   const m = emu.dosMouse;
   if (!m.pendingCallbackMask || !m.callbackMask || !m.callbackSeg) return false;
+  // The callback seg:off stored via INT 33h AX=0Ch is a real-mode pair.
+  // In protected mode the raw `cpu.cs = seg; cpu.eip = segBase(seg)+off`
+  // below would load a value that is not a valid GDT selector and derail
+  // the DPMI client. DPMI-aware programs should use INT 31h AX=0303 to
+  // bridge RM events into PM; we can't reflect a plain INT 33h callback
+  // from PM without a full mode-switch trampoline.
+  if (!emu.cpu.realMode) return false;
   // Don't dispatch if a hardware interrupt handler or another callback is active
   if (emu._hwIntSavedSP >= 0) return false;
   if (emu._mouseCallbackSavedSP >= 0) return false;

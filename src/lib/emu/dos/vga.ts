@@ -182,7 +182,9 @@ export class VGAState {
     this.atcRegs[0x10] = 0x0C; // Mode Control: blink enable, line graphics enable
     this.atcRegs[0x11] = 0x00; // Overscan Color
     this.atcRegs[0x12] = 0x0F; // Color Plane Enable (all planes)
-    this.atcRegs[0x13] = 0x08; // Horizontal Pixel Panning
+    // Horizontal Pixel Panning: 0 for graphics and 8-dot text; 0x08 (no-pan)
+    // for 9-dot text modes. Real BIOS applies this per-mode.
+    this.atcRegs[0x13] = 0x00;
     this.atcRegs[0x14] = 0x00; // Color Select
 
     // Sequencer defaults
@@ -212,6 +214,7 @@ export class VGAState {
       ]);
       this.seqRegs[1] = 0x01; this.seqRegs[2] = 0x0F; this.seqRegs[4] = 0x0E;
       this.gcRegs[5] = 0x40; this.gcRegs[6] = 0x05;
+      this.atcRegs[0x10] = 0x41; // 256-color mode + graphics enable
       this.miscOutput = 0x63;
     } else if (mode === 0x12) {
       // Mode 12h (640x480x16) — planar
@@ -336,13 +339,67 @@ export class VGAState {
   // Mode X state: true when mode 13h has Chain-4 disabled (unchained 256-color planar)
   unchained = false;
 
-  /** Get actual visible pixel height from CRTC registers (accounts for double-scanning) */
+  /** CRT scanlines per CRTC display row. CRTC[0x09] has two scanline-doubling
+   *  mechanisms that are *alternatives*, not cumulative: bits 0-4 (Maximum
+   *  Scan Line, N+1 scanlines per CRTC row advance) and bit 7 (Scan Doubling
+   *  at the pipeline output). BIOS mode 0x0D defaults to CRTC[09]=0xC1 with
+   *  both set, yet the image is still 200 rows — take whichever halves more
+   *  aggressively rather than multiplying them. */
+  getRowRepeat(): number {
+    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
+    const scanDouble = (this.crtcRegs[0x09] & 0x80) ? 2 : 1;
+    return Math.max(maxScanLine + 1, scanDouble);
+  }
+
+  /** Actual visible pixel height from CRTC registers, accounting for row repeat. */
   getVisibleHeight(): number {
     const vdeLow = this.crtcRegs[0x12];
     const overflow = this.crtcRegs[0x07];
     const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
-    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
-    return Math.floor((vde + 1) / (maxScanLine + 1));
+    return Math.floor((vde + 1) / this.getRowRepeat());
+  }
+
+  /** Line Compare (10-bit): split-screen boundary scanline.
+   *  CRTC[0x18] = bits 7:0, CRTC[0x07] bit 4 = bit 8, CRTC[0x09] bit 6 = bit 9.
+   *  When the CRTC's current scanline reaches this value, the address counter
+   *  is reset to 0 (as if displayStart=0) for the remainder of the frame. */
+  getLineCompare(): number {
+    const low = this.crtcRegs[0x18];
+    const bit8 = (this.crtcRegs[0x07] & 0x10) ? 0x100 : 0;
+    const bit9 = (this.crtcRegs[0x09] & 0x40) ? 0x200 : 0;
+    return low | bit8 | bit9;
+  }
+
+  /** Horizontal Pixel Panning (ATC[0x13]) — returns effective pixel shift.
+   *  In standard modes: bits 0-2 give pan 0-7 directly.
+   *  In 256-color modes (mode 13h / Mode X): the register is HALVED to obtain
+   *  the real pan (only even values 0,2,4,6 are meaningful → pan 0,1,2,3).
+   *  Second Reality's opening scroll writes `(x & 3) * 2` expecting this
+   *  halving behavior — without it the scroll oscillates. Detection via GC[5]
+   *  bit 6 ("256-color mode enable"), stable at mode init.
+   *  Bit 3 (+0x08) is the 9-dot text "no pan" marker — not relevant here. */
+  getPixelPan(): number {
+    const raw = this.atcRegs[0x13] & 0x0F;
+    if (this.gcRegs[5] & 0x40) return (raw >> 1) & 0x03;
+    return raw & 0x07;
+  }
+
+  /** Visible pixel width derived from CRTC Horizontal Display End (CRTC[0x01]).
+   *  dots_per_char = 9 dots if Seq[0x01] bit 0 == 0, else 8 dots.
+   *  In 256-color modes each pixel spans 2 dot clocks, so the dot count is
+   *  halved. We detect 256-color via GC[5] bit 6 ("256-color mode enable"):
+   *  it's programmed at mode init by the BIOS and stays stable. We avoid
+   *  ATC[0x10] bit 6 because games transiently rewrite ATC[0x10] for blink
+   *  toggles and palette page select — that caused framebuffer reinit
+   *  oscillation and broke Second Reality. */
+  getVisibleWidth(): number {
+    const hde = this.crtcRegs[0x01] + 1; // char columns
+    const eightDot = !!(this.seqRegs[1] & 0x01);
+    const dotsPerChar = eightDot ? 8 : 9;
+    let width = hde * dotsPerChar;
+    if (this.gcRegs[5] & 0x40) width >>= 1; // 256-color mode
+    if (this.seqRegs[1] & 0x08) width >>= 1; // dot clock / 2
+    return width;
   }
 
   /** Check if current register state indicates Mode X (unchained mode 13h) */
@@ -650,6 +707,8 @@ export function syncMode13h(emu: Emulator): void {
   const mem = emu.memory;
   const lut = buildRGBLookup(vga.palette);
   const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
+  const width = vga.framebuffer.width;
+  const height = vga.framebuffer.height;
 
   // CRTC Start Address: display starts at this byte offset in VRAM
   // Used for hardware scrolling and double-buffering
@@ -659,8 +718,27 @@ export function syncMode13h(emu: Emulator): void {
   const wordMode = !(vga.crtcRegs[0x17] & 0x40); // bit 6 clear = word mode
   const displayStart = wordMode ? startReg * 2 : startReg;
 
-  for (let i = 0; i < 64000; i++) {
-    buf32[i] = lut[mem.readU8(0xA0000 + ((displayStart + i) & 0xFFFF)) & vga.dacPixelMask];
+  // Line Compare: split-screen boundary in display rows, converted from CRT
+  // scanlines via the same row-repeat factor getVisibleHeight uses.
+  const splitRow = Math.floor(vga.getLineCompare() / vga.getRowRepeat());
+
+  // Horizontal Pixel Panning: shift display left by pan pixels per scanline.
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split (the upper half pans, bottom half stays still). When bit 5
+  // is clear, pan is kept for the whole frame.
+  const pan = vga.getPixelPan();
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+  const pixelMask = vga.dacPixelMask;
+
+  for (let y = 0; y < height; y++) {
+    const belowSplit = y >= splitRow;
+    const rowBase = belowSplit ? 0 : displayStart;
+    const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
+    const vramRowStart = rowBase + y * width + effPan;
+    const pxBase = y * width;
+    for (let x = 0; x < width; x++) {
+      buf32[pxBase + x] = lut[mem.readU8(0xA0000 + ((vramRowStart + x) & 0xFFFF)) & pixelMask];
+    }
   }
 
   vga.dirty = false;
@@ -668,8 +746,9 @@ export function syncMode13h(emu: Emulator): void {
 }
 
 /** Sync Mode X (unchained 256-color planar) framebuffer from VGA planes.
- *  Supports page flipping via CRTC display start address (regs 0x0C-0x0D).
- *  Resolution is derived from CRTC registers (typically 320x200 or 320x240). */
+ *  Supports page flipping via CRTC display start address (regs 0x0C-0x0D),
+ *  line compare split-screen (CRTC 0x18), pixel panning (ATC 0x13), and
+ *  dynamic width derived from CRTC horizontal display end. */
 export function syncModeX(emu: Emulator): void {
   const vga = emu.vga;
 
@@ -680,18 +759,42 @@ export function syncModeX(emu: Emulator): void {
   const overflow = vga.crtcRegs[0x07];
   const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
   const totalScanlines = vde + 1;
-  // Max Scan Line register (CRTC 0x09) bits 0-4: each pixel row occupies (maxScanLine+1) scanlines
-  // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
-  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
-  const height = Math.floor(totalScanlines / (maxScanLine + 1));
-  // Display width is always 320 pixels in Mode X (the CRTC offset register
-  // controls memory pitch, not display width — wider pitch is for virtual scrolling)
-  const width = 320;
+  // CRTC row repeat (maxScanLine or Scan Doubling bit). See getRowRepeat().
+  const rowRepeat = vga.getRowRepeat();
+  const height = Math.floor(totalScanlines / rowRepeat);
+  // Display width derived from CRTC Horizontal Display End (stable: computed
+  // from CRTC[0x01] + Seq[1] + currentMode.bpp, none of which games rewrite
+  // mid-gameplay). Supports Mode X tweaks (360x270, 400x300) without the
+  // ATC[0x10]-driven oscillation that broke Second Reality positioning.
+  let width = vga.getVisibleWidth();
+  if (width <= 0) width = 320;
+  width = (width + 3) & ~3;
 
-  // Reinit framebuffer if resolution changed
+  // Mode-tweak debounce: SR (and similar demos) reprogram CRTC one register
+  // at a time, and our vblank-triggered syncGraphics can fall between two
+  // writes — capturing e.g. height=200 while pitch is still 176 from the
+  // previous scene. Rendering that snapshot freezes a half-torn frame that
+  // stays on screen until the next dim change. Require the new (width,height)
+  // to stabilise over two consecutive syncs before applying the reshape.
   if (!vga.framebuffer || vga.framebuffer.width !== width || vga.framebuffer.height !== height) {
-    vga.initFramebuffer(width, height);
-    if (!vga.framebuffer) return;
+    const s = vga as any;
+    if (s._pendingFbWidth === width && s._pendingFbHeight === height) {
+      vga.initFramebuffer(width, height);
+      if (!vga.framebuffer) return;
+      s._pendingFbWidth = -1;
+      s._pendingFbHeight = -1;
+    } else {
+      s._pendingFbWidth = width;
+      s._pendingFbHeight = height;
+      // Skip rendering this frame — the framebuffer still reflects the
+      // previous stable geometry, so we'd either under-write (leaving stale
+      // content visible) or read inconsistent CRTC values. Defer until the
+      // dimensions confirm on the next sync.
+      return;
+    }
+  } else {
+    (vga as any)._pendingFbWidth = -1;
+    (vga as any)._pendingFbHeight = -1;
   }
 
   const lut = buildRGBLookup(vga.palette);
@@ -699,27 +802,64 @@ export function syncModeX(emu: Emulator): void {
   const p0 = vga.planes[0], p1 = vga.planes[1], p2 = vga.planes[2], p3 = vga.planes[3];
   const pixelMask = vga.dacPixelMask;
 
-  // Display start address from CRTC regs 0x0C (high) and 0x0D (low)
-  // This is the byte offset into planar memory where display begins
+  // Display start address from CRTC regs 0x0C (high) and 0x0D (low).
+  // In unchained Mode X, programs write byte offsets per plane directly — do
+  // NOT apply CRTC[0x17] word-mode × 2 (that shift applies to the raw CRTC
+  // character counter, but Mode X code addresses planes byte-by-byte).
   const displayStart = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
 
   // CRTC offset register (0x13) = bytes per scanline / 2 in each plane
-  // For Mode X 320 wide: 320/4 pixels per plane per line = 80 bytes, offset = 80/2 = 40
   const pitch = (vga.crtcRegs[0x13] || 40) * 2;
 
-  // Width is always a multiple of 4 in Mode X — process 4 pixels per byte offset
-  // (one pixel from each plane), avoiding per-pixel switch and shift
-  const bytesPerRow = width >> 2;
-  for (let y = 0; y < height; y++) {
-    const rowStart = displayStart + y * pitch;
-    let px = y * width;
-    for (let b = 0; b < bytesPerRow; b++) {
-      const offset = (rowStart + b) & 0x1FFFF;
-      buf32[px]     = lut[p0[offset] & pixelMask];
-      buf32[px + 1] = lut[p1[offset] & pixelMask];
-      buf32[px + 2] = lut[p2[offset] & pixelMask];
-      buf32[px + 3] = lut[p3[offset] & pixelMask];
-      px += 4;
+  // Line Compare: split-screen boundary, converted from CRT scanlines to
+  // display rows using the same row-repeat we used to derive height.
+  const lineCompareRaw = vga.getLineCompare();
+  const splitRow = Math.floor(lineCompareRaw / rowRepeat);
+
+  // Horizontal Pixel Panning: shift pixels left by `pan` at scanline start.
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split (upper half pans, bottom half stays still). When bit 5 is
+  // clear, pan applies to the whole frame.
+  const pan = vga.getPixelPan();
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+
+  if (pan === 0) {
+    // Fast path: pan=0 everywhere, 4-pixel unroll
+    const bytesPerRow = width >> 2;
+    for (let y = 0; y < height; y++) {
+      const rowBase = (y < splitRow) ? displayStart : 0;
+      const rowStart = rowBase + y * pitch;
+      let px = y * width;
+      for (let b = 0; b < bytesPerRow; b++) {
+        const offset = (rowStart + b) & 0x1FFFF;
+        buf32[px]     = lut[p0[offset] & pixelMask];
+        buf32[px + 1] = lut[p1[offset] & pixelMask];
+        buf32[px + 2] = lut[p2[offset] & pixelMask];
+        buf32[px + 3] = lut[p3[offset] & pixelMask];
+        px += 4;
+      }
+    }
+  } else {
+    // General path: per-row pan + split handling, walk plane-by-plane
+    for (let y = 0; y < height; y++) {
+      const belowSplit = y >= splitRow;
+      const rowBase = belowSplit ? 0 : displayStart;
+      const rowStart = rowBase + y * pitch;
+      const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
+      const pxBase = y * width;
+      let srcByte = (rowStart + (effPan >> 2)) & 0x1FFFF;
+      let plane = effPan & 3;
+      let b0 = p0[srcByte], b1 = p1[srcByte], b2 = p2[srcByte], b3 = p3[srcByte];
+      for (let x = 0; x < width; x++) {
+        const v = (plane === 0 ? b0 : plane === 1 ? b1 : plane === 2 ? b2 : b3) & pixelMask;
+        buf32[pxBase + x] = lut[v];
+        plane++;
+        if (plane === 4) {
+          plane = 0;
+          srcByte = (srcByte + 1) & 0x1FFFF;
+          b0 = p0[srcByte]; b1 = p1[srcByte]; b2 = p2[srcByte]; b3 = p3[srcByte];
+        }
+      }
     }
   }
 
@@ -783,31 +923,74 @@ export function syncCGA6(emu: Emulator): void {
   emu.onVideoFrame?.();
 }
 
-/** Sync EGA/VGA planar 16-color mode (0D, 0E, 10, 12) from plane buffers */
+/** Sync EGA/VGA planar 16-color mode (0D, 0E, 10, 12) from plane buffers.
+ *  Supports CRTC start address, line compare split-screen, and pixel panning.
+ *  Respects CRTC-derived visible height: rows beyond VDE are filled with the
+ *  overscan color (fixes Moktar bottom-line flicker from page flipping with
+ *  a partial 192-row buffer vs the mode's 200-row framebuffer). */
 export function syncPlanar16(emu: Emulator): void {
   const vga = emu.vga;
   if (!vga.framebuffer) return;
 
   const mode = vga.currentMode;
   const width = mode.width;
-  const height = mode.height;
+  const fbHeight = mode.height;
   const bytesPerRow = width >> 3; // 8 pixels per byte
   const lut = buildRGBLookup(vga.palette);
   const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
   const p0 = vga.planes[0], p1 = vga.planes[1], p2 = vga.planes[2], p3 = vga.planes[3];
   const atcLut = vga.buildAtcDacLookup();
 
+  // CRTC start address — in EGA/VGA planar 16-color modes, programs typically
+  // write byte-offsets per plane directly into CRTC[0x0C:0x0D] (each plane is
+  // addressed independently). Applying CRTC[0x17] word-mode × 2 here breaks
+  // games that hardware-page-flip (e.g. Moktar writes 0x1E00 byte-offset).
+  const displayStart = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
+  const pitch = (vga.crtcRegs[0x13] || bytesPerRow) * 2;
+
+  // Visible height derived from CRTC Vertical Display End — respects games
+  // that program less than mode.height rows (Moktar uses 192 visible rows).
+  const vdeLow = vga.crtcRegs[0x12];
+  const overflow = vga.crtcRegs[0x07];
+  const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
+  // CRTC row repeat (maxScanLine or Scan Doubling bit). See getRowRepeat().
+  const rowRepeat = vga.getRowRepeat();
+  const visibleRows = Math.floor((vde + 1) / rowRepeat);
+  const height = Math.min(visibleRows, fbHeight);
+
+  // Line Compare: split-screen boundary (row-based after max scan line)
+  const splitRow = Math.floor(vga.getLineCompare() / rowRepeat);
+
+  // Pixel Panning (0-7 in EGA planar 16-color modes).
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split; when bit 5 is clear, pan applies to the whole frame.
+  const pan = vga.getPixelPan();
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+
   for (let y = 0; y < height; y++) {
-    const rowOff = y * bytesPerRow;
-    for (let xByte = 0; xByte < bytesPerRow; xByte++) {
-      const offset = rowOff + xByte;
-      const b0 = p0[offset], b1 = p1[offset], b2 = p2[offset], b3 = p3[offset];
-      const px = y * width + xByte * 8;
-      for (let bit = 7; bit >= 0; bit--) {
-        const colorIdx = ((b0 >> bit) & 1) | (((b1 >> bit) & 1) << 1) |
-          (((b2 >> bit) & 1) << 2) | (((b3 >> bit) & 1) << 3);
-        buf32[px + (7 - bit)] = lut[atcLut[colorIdx]];
-      }
+    const belowSplit = y >= splitRow;
+    const rowBase = belowSplit ? 0 : displayStart;
+    const rowOff = rowBase + y * pitch;
+    const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
+    const pxBase = y * width;
+    for (let x = 0; x < width; x++) {
+      const srcPx = x + effPan;
+      const byteOff = (rowOff + (srcPx >> 3)) & 0x1FFFF;
+      const bit = 7 - (srcPx & 7);
+      const colorIdx = ((p0[byteOff] >> bit) & 1) | (((p1[byteOff] >> bit) & 1) << 1) |
+        (((p2[byteOff] >> bit) & 1) << 2) | (((p3[byteOff] >> bit) & 1) << 3);
+      buf32[pxBase + x] = lut[atcLut[colorIdx]];
+    }
+  }
+
+  // Fill rows beyond the CRTC-visible area with the overscan color so
+  // framebuffer rows 192..199 don't show stale plane data between frames.
+  if (height < fbHeight) {
+    const overscanIdx = vga.atcRegs[0x11] & vga.dacPixelMask;
+    const overscan = lut[overscanIdx];
+    for (let y = height; y < fbHeight; y++) {
+      const pxBase = y * width;
+      buf32.fill(overscan, pxBase, pxBase + width);
     }
   }
 
@@ -850,7 +1033,6 @@ export function syncGraphics(emu: Emulator): void {
   const mode = emu.videoMode;
   // Mode X: mode 13h with Chain-4 disabled
   if (mode === 0x13 && emu.vga.unchained) {
-    if (!(emu.vga as any)._mxLog) { (emu.vga as any)._mxLog = true; console.warn(`[VGA] Using Mode X renderer: ${emu.vga.getVisibleHeight()}h pitch=${(emu.vga.crtcRegs[0x13]||40)*2} start=${(emu.vga.crtcRegs[0x0C]<<8)|emu.vga.crtcRegs[0x0D]}`); }
     syncModeX(emu);
     return;
   }

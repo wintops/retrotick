@@ -22,7 +22,13 @@ export function exec0F(
     case 0x8C: case 0x8D: case 0x8E: case 0x8F: {
       const disp = opSize === 16 ? (cpu.fetch16() << 16 >> 16) : cpu.fetchI32();
       if (cpu.testCC(op2 - 0x80)) {
-        cpu.eip = (cpu.eip + disp) | 0;
+        if (!cpu.use32) {
+          // 16-bit mode: IP wraps within the segment
+          const base = cpu.segBase(cpu.cs);
+          cpu.eip = (base + ((cpu.eip - base + disp) & 0xFFFF)) >>> 0;
+        } else {
+          cpu.eip = (cpu.eip + disp) | 0;
+        }
       }
       break;
     }
@@ -47,6 +53,28 @@ export function exec0F(
         if (opSize === 16) cpu.setReg16(d.regField, d.val);
         else cpu.reg[d.regField] = d.val | 0;
       }
+      break;
+    }
+
+    // LSS (0F B2) / LFS (0F B4) / LGS (0F B5) — load far pointer
+    // mem16:16 (opSize=16) or mem16:32 (opSize=32) → SS/FS/GS:reg
+    case 0xB2: case 0xB4: case 0xB5: {
+      const d = cpu.decodeModRM(opSize);
+      if (d.isReg) break; // invalid encoding
+      let offset: number;
+      let selector: number;
+      if (opSize === 16) {
+        offset = d.val & 0xFFFF;
+        selector = cpu.mem.readU16((d.addr + 2) >>> 0);
+        cpu.setReg16(d.regField, offset);
+      } else {
+        offset = d.val | 0;
+        selector = cpu.mem.readU16((d.addr + 4) >>> 0);
+        cpu.reg[d.regField] = offset;
+      }
+      if (op2 === 0xB2) cpu.ss = selector;
+      else if (op2 === 0xB4) cpu.loadFS(selector);
+      else cpu.gs = selector;
       break;
     }
 
@@ -120,7 +148,9 @@ export function exec0F(
         }
         case 2: { // LLDT r/m16
           const d = cpu.decodeModRM(16);
-          if (cpu.emu) cpu.emu._ldtr = d.val & 0xFFFF;
+          if (cpu.emu) {
+            cpu.emu._ldtr = d.val & 0xFFFF;
+          }
           break;
         }
         case 3: { // LTR r/m16
@@ -180,6 +210,11 @@ export function exec0F(
             // 32-bit operand size: base is 32 bits
             const baseMask = opSize === 16 ? 0x00FFFFFF : 0xFFFFFFFF;
             cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0) & baseMask;
+            // Update VCPI PM cache so V86→PM switch restores the correct GDT
+            if (cpu.emu._vcpiPmGdtBase !== undefined) {
+              cpu.emu._vcpiPmGdtBase = cpu.emu._gdtBase;
+              cpu.emu._vcpiPmGdtLimit = cpu.emu._gdtLimit;
+            }
           }
           break;
         }
@@ -189,22 +224,36 @@ export function exec0F(
             cpu.emu._idtLimit = cpu.mem.readU16(d.addr);
             const baseMask = opSize === 16 ? 0x00FFFFFF : 0xFFFFFFFF;
             cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0) & baseMask;
+            if (cpu.emu._vcpiPmIdtBase !== undefined) {
+              cpu.emu._vcpiPmIdtBase = cpu.emu._idtBase;
+              cpu.emu._vcpiPmIdtLimit = cpu.emu._idtLimit;
+            }
           }
           break;
         }
         case 4: { // SMSW r/m16 — Store Machine Status Word (low 16 bits of CR0)
           const d = cpu.decodeModRM(16);
-          const cr0 = cpu.emu?._cr0 ?? 0x0000;
+          // Shadow PE=1 in pseudo-V86 so guests see "protected mode" without
+          // actually persisting PE in _cr0 (lets a subsequent PE write trigger
+          // the real RM→PM transition path).
+          const rawCr0 = cpu.emu?._cr0 ?? 0x0000;
+          const cr0 = cpu._vm86 ? (rawCr0 | 1) : rawCr0;
           cpu.writeModRM(d, cr0 & 0xFFFF, 16);
           break;
         }
         case 6: { // LMSW r/m16 — Load Machine Status Word
           const d = cpu.decodeModRM(16);
           if (cpu.emu) {
+            const oldPE = cpu.emu._cr0 & 1;
             // LMSW can set PE but cannot clear it
             const val = d.val & 0xFFFF;
             cpu.emu._cr0 = (cpu.emu._cr0 & ~0x000E) | (val & 0x000F);
-            if (cpu.emu._cr0 & 1) cpu.realMode = false;
+            if (!oldPE && (cpu.emu._cr0 & 1)) {
+              cpu.realMode = false;
+              // Guest is entering its own PM — leave pseudo-V86 so far jumps
+              // resolve selectors through the GDT instead of sel*16 paragraphs.
+              cpu._vm86 = false;
+            }
           }
           break;
         }
@@ -218,9 +267,36 @@ export function exec0F(
     case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
-      if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
-        // Valid selector — return data segment access rights, set ZF
-        const rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+      // LAR is PM-only — in real mode and V86 it should #UD. DOS/4GW's
+      // V86-detection code at cs=1569:2c75 issues `LSL EAX,AX`/`LAR` against
+      // an RM segment value (e.g. 0x271e, the V86 SS) and uses the failure
+      // (ZF=0) to detect non-PM execution. Without this gate our cached PM
+      // segBases entry from the prior PM context wrongly succeeds and the
+      // routine then PUSHes 0xFFFE on a zero V86 stack, derailing CS to
+      // 0xFFFE on the first IRQ-induced IRETD.
+      let rights: number | undefined;
+      if (cpu.realMode || cpu._vm86) {
+        rights = undefined; // fail
+      } else if (cpu.emu?._gdtBase) {
+        rights = cpu.loadGdtDescriptorAccessRights(sel);
+        // Treat a slot with Present bit clear as invalid → ZF=0.
+        if (rights !== undefined && (rights & 0x8000) === 0) rights = undefined;
+        // Shadow-selector fallback: an all-zero GDT slot for a non-null
+        // selector is DOS/4GW using a real-mode segment value as a PM
+        // selector (see cpu.segBase). Real DPMI hosts auto-shadow these;
+        // we report them as present 16-bit data R/W DPL=3 segments so
+        // that DOS/4GW's LAR-based validator accepts them.
+        if (rights === undefined && sel >= 8) {
+          const base = cpu.loadGdtDescriptorBase(sel);
+          const lim = cpu.loadGdtDescriptorLimit(sel);
+          if ((base === undefined || (base === 0 && lim === 0))) {
+            rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+          }
+        }
+      } else if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
+        rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+      }
+      if (rights !== undefined) {
         if (opSize === 16) {
           cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (rights & 0xFFFF);
         } else {
@@ -237,7 +313,25 @@ export function exec0F(
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
       const canonical = sel >>> 3;
-      const limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      // PM-only: in real mode / V86, LSL must fail (ZF=0, dest unchanged).
+      // See LAR comment above.
+      if (cpu.realMode || cpu._vm86) {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+        break;
+      }
+      // Fast path: segLimits Map (populated by the NE/Win16 loaders and by
+      // the DPMI helpers that mutate GDT entries). Fallback to reading the
+      // GDT descriptor when the selector was set up outside of any loader —
+      // e.g., by `dpmiSetDescriptor` before a corresponding segLimits update,
+      // or by guest code writing a raw descriptor through a flat-mode alias.
+      // Returning the old 64KB default here is NOT safe: DOS/4GW's 16-bit
+      // PM memcpy reads `lsl cx, bx` for small selectors and then runs
+      // `rep movsw` — a wrong 0xFFFF causes it to overwrite 64KB of its
+      // own PM code.
+      let limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      if (limit === undefined && cpu.emu?._gdtBase) {
+        limit = cpu.loadGdtDescriptorLimit(sel);
+      }
       if (limit !== undefined) {
         if (opSize === 16) {
           cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (limit & 0xFFFF);
@@ -266,6 +360,12 @@ export function exec0F(
       break;
     }
 
+    // CLTS (0F 06) — Clear Task-Switched flag in CR0 (privileged)
+    // PM init code uses this before touching the FPU so #NM doesn't fire.
+    case 0x06:
+      if (cpu.emu) cpu.emu._cr0 = (cpu.emu._cr0 & ~0x08) >>> 0;
+      break;
+
     // INVD (0F 08) — Invalidate caches (privileged, NOP in emulator)
     case 0x08:
       break;
@@ -279,8 +379,14 @@ export function exec0F(
       const d = cpu.decodeModRM(32);
       const crn = d.regField;
       let val = 0;
-      if (crn === 0) val = cpu.emu?._cr0 ?? 0;
-      // CR2 (page fault address), CR3 (page dir base), CR4 (extensions) — return 0
+      if (crn === 0) {
+        const rawCr0 = cpu.emu?._cr0 ?? 0;
+        // Shadow PE=1 in pseudo-V86 (see SMSW above).
+        val = cpu._vm86 ? (rawCr0 | 1) >>> 0 : rawCr0;
+      }
+      else if (crn === 2) val = cpu.emu?._cr2 ?? 0;
+      else if (crn === 3) val = cpu.emu?._cr3 ?? 0;
+      // CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
       break;
     }
@@ -296,19 +402,46 @@ export function exec0F(
     case 0x22: {
       const d = cpu.decodeModRM(32);
       const crn = d.regField;
+      if (crn === 2 && cpu.emu) {
+        cpu.emu._cr2 = d.val >>> 0;
+        break;
+      }
+      if (crn === 3 && cpu.emu) {
+        cpu.emu._cr3 = d.val >>> 0;
+        // PD base changed — refresh paging state from current CR0.PG.
+        const pg = (cpu.emu._cr0 & 0x80000000) !== 0;
+        cpu.mem.setPaging(pg && !cpu.realMode, cpu.emu._cr3 & ~0xFFF);
+        break;
+      }
       if (crn === 0 && cpu.emu) {
         const oldPE = cpu.emu._cr0 & 1;
+        const oldPG = (cpu.emu._cr0 & 0x80000000) !== 0;
         cpu.emu._cr0 = d.val >>> 0;
         const newPE = cpu.emu._cr0 & 1;
+        const newPG = (cpu.emu._cr0 & 0x80000000) !== 0;
         if (!oldPE && newPE) {
           // Transition to protected mode — set up segment bases from GDT
+          console.log(`[CR0] RM→PM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)}`);
           cpu.realMode = false;
-          console.warn(`[CR0] Enter PM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} gdtBase=0x${(cpu.emu?._gdtBase??0).toString(16)} idtBase=0x${(cpu.emu?._idtBase??0).toString(16)}`);
+          // Guest is entering its own PM — leave pseudo-V86 so far jumps
+          // resolve selectors through the GDT instead of sel*16 paragraphs.
+          cpu._vm86 = false;
         } else if (oldPE && !newPE) {
-          // Back to real mode — force 16-bit operand/address size
+          // Back to real mode — enable "unreal mode" if data segments have flat base.
+          // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
+          // CPU to cache the flat base for 32-bit data access in real mode.
+          console.log(`[CR0] PM→RM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)} ds=${cpu.ds.toString(16)} es=${cpu.es.toString(16)} ss=${cpu.ss.toString(16)} esp=${(cpu.reg[4] >>> 0).toString(16)}`);
+          if (cpu.segBase(cpu.ds) === 0 || cpu.segBase(cpu.es) === 0) {
+            cpu._unrealMode = true;
+          }
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;
+        }
+        // Update paging state whenever PG or PE changes. Paging only takes
+        // effect in protected mode (PE=1) and when PG=1.
+        if (oldPG !== newPG || oldPE !== newPE) {
+          cpu.mem.setPaging(newPG && newPE !== 0, (cpu.emu._cr3 ?? 0) & ~0xFFF);
         }
       }
       break;

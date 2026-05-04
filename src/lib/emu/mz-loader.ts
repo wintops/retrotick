@@ -12,7 +12,9 @@ export interface LoadedMZ {
   mcbFirstSeg: number;     // first MCB segment for LoL
 }
 
-export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHeader, exePath: string): LoadedMZ {
+export interface MZEnvFlags { soundBlaster?: boolean; adlib?: boolean; gus?: boolean; }
+
+export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHeader, exePath: string, envFlags?: MZEnvFlags): LoadedMZ {
   const data = new Uint8Array(arrayBuffer);
   const dv = new DataView(arrayBuffer);
 
@@ -25,6 +27,21 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
     imageSize = (mzHeader.e_cp - 1) * 512 + (mzHeader.e_cblp || 512) - headerSize;
   }
   imageSize = Math.min(imageSize, arrayBuffer.byteLength - headerSize);
+
+  // DOS extenders (DOS/4GW, DOS/16M, etc.) put their LE/LX/NE/PE header
+  // past the MZ image. The MZ stub then jumps to that header to bootstrap
+  // protected mode. Detect a valid e_lfanew with a known new-format
+  // signature and extend imageSize to cover the whole file.
+  if (arrayBuffer.byteLength >= 0x40) {
+    const e_lfanew = dv.getUint32(0x3C, true);
+    if (e_lfanew >= headerSize && e_lfanew + 4 <= arrayBuffer.byteLength) {
+      const sig = (data[e_lfanew] << 8) | data[e_lfanew + 1];
+      // 'LE', 'LX', 'NE', 'PE' magic numbers
+      if (sig === 0x4C45 || sig === 0x4C58 || sig === 0x4E45 || sig === 0x5045) {
+        imageSize = arrayBuffer.byteLength - headerSize;
+      }
+    }
+  }
 
   const topSeg = 0xA000; // 640KB
   const LOAD_SEG = 0x0100; // PSP segment
@@ -46,9 +63,18 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   const progSeg = LOAD_SEG + 0x10;
   const progLinear = progSeg * 16;
 
-  // Total program paragraphs
+  // Total program paragraphs.
+  // Real DOS gives the program min(maxalloc, available) — NOT minalloc.
+  // The Watcom DOS extender stub (DOS4GW etc.) relies on receiving all
+  // conventional memory, then shrinks itself with AH=4Ah before EXEC'ing
+  // its child via AH=4Bh. If we only allocate minalloc, the stub has no
+  // memory left to alloc the child and crashes (panic loop at INT 3).
   const imageParas = Math.ceil(imageSize / 16);
-  const totalParas = 0x10 + imageParas + mzHeader.e_minalloc;
+  const baseParas = 0x10 + imageParas; // PSP (16 paras) + image
+  const maxAvailable = topSeg - LOAD_SEG - 1; // leave 1 para for trailing free MCB
+  const minNeeded = baseParas + mzHeader.e_minalloc;
+  const desired = baseParas + mzHeader.e_maxalloc; // may be huge if maxalloc=0xFFFF
+  const totalParas = Math.max(minNeeded, Math.min(desired, maxAvailable));
 
   // --- MCB chain ---
   // MCB 1: environment block
@@ -77,10 +103,27 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   }
 
   // --- Build PSP ---
-  memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
+  // 0x00: INT 20h instruction (legacy program-terminate via CALL CS:0)
+  memory.writeU8(pspLinear + 0x00, 0xCD);
   memory.writeU8(pspLinear + 0x01, 0x20);
+  // 0x02: top of allocated memory (paragraphs)
   memory.writeU16(pspLinear + 0x02, topSeg);
-  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
+  // 0x16: parent PSP segment
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG);
+  // 0x18..0x2B: Job File Table (20 default handles, 0xFF = closed). DOS sets the
+  // first 5 to STDIN/OUT/ERR/AUX/PRN (handles 0..4) before launching the program.
+  for (let i = 0; i < 20; i++) memory.writeU8(pspLinear + 0x18 + i, i < 5 ? i : 0xFF);
+  // 0x32: JFT entry count (DOS 3+ uses 20 by default)
+  memory.writeU16(pspLinear + 0x32, 20);
+  // 0x34: far pointer to JFT (PSP:0018)
+  memory.writeU16(pspLinear + 0x34, 0x0018);
+  memory.writeU16(pspLinear + 0x36, LOAD_SEG);
+  // 0x50: DOS function dispatcher: INT 21h; RETF (3 bytes). Some DOS programs
+  // (notably Watcom DOS/4G family) issue `CALL FAR PSP:0050h` rather than
+  // `INT 21h` directly, so this stub MUST be valid code.
+  memory.writeU8(pspLinear + 0x50, 0xCD); // INT
+  memory.writeU8(pspLinear + 0x51, 0x21); // 21h
+  memory.writeU8(pspLinear + 0x52, 0xCB); // RETF
 
   // Write environment
   const envLinear = ENV_SEG * 16;
@@ -89,10 +132,14 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
-  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
-  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
-  const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
-  for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  if (envFlags?.soundBlaster !== false) {
+    const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+    for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
+  }
+  if (envFlags?.gus !== false) {
+    const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
+    for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  }
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
@@ -101,7 +148,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 
@@ -141,7 +188,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   };
 }
 
-export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: string): LoadedMZ {
+export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: string, envFlags?: MZEnvFlags): LoadedMZ {
   const data = new Uint8Array(arrayBuffer);
   const imageSize = data.byteLength;
 
@@ -189,10 +236,27 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   }
 
   // --- Build PSP ---
-  memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
+  // 0x00: INT 20h instruction (legacy program-terminate via CALL CS:0)
+  memory.writeU8(pspLinear + 0x00, 0xCD);
   memory.writeU8(pspLinear + 0x01, 0x20);
+  // 0x02: top of allocated memory (paragraphs)
   memory.writeU16(pspLinear + 0x02, topSeg);
-  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
+  // 0x16: parent PSP segment
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG);
+  // 0x18..0x2B: Job File Table (20 default handles, 0xFF = closed). DOS sets the
+  // first 5 to STDIN/OUT/ERR/AUX/PRN (handles 0..4) before launching the program.
+  for (let i = 0; i < 20; i++) memory.writeU8(pspLinear + 0x18 + i, i < 5 ? i : 0xFF);
+  // 0x32: JFT entry count (DOS 3+ uses 20 by default)
+  memory.writeU16(pspLinear + 0x32, 20);
+  // 0x34: far pointer to JFT (PSP:0018)
+  memory.writeU16(pspLinear + 0x34, 0x0018);
+  memory.writeU16(pspLinear + 0x36, LOAD_SEG);
+  // 0x50: DOS function dispatcher: INT 21h; RETF (3 bytes). Some DOS programs
+  // (notably Watcom DOS/4G family) issue `CALL FAR PSP:0050h` rather than
+  // `INT 21h` directly, so this stub MUST be valid code.
+  memory.writeU8(pspLinear + 0x50, 0xCD); // INT
+  memory.writeU8(pspLinear + 0x51, 0x21); // 21h
+  memory.writeU8(pspLinear + 0x52, 0xCB); // RETF
 
   // Write environment
   const envLinear = ENV_SEG * 16;
@@ -201,10 +265,14 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
-  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
-  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
-  const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
-  for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  if (envFlags?.soundBlaster !== false) {
+    const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+    for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
+  }
+  if (envFlags?.gus !== false) {
+    const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
+    for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  }
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
@@ -213,7 +281,7 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 

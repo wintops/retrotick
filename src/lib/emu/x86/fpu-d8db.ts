@@ -1,6 +1,6 @@
 import type { CPU } from './cpu';
 import type { Memory } from '../memory';
-import { fpuPush, fpuPop, fpuST, fpuSetST } from './fpu';
+import { fpuPush, fpuPop, fpuST, fpuSetST, readExtended80, writeExtended80 } from './fpu';
 
 // Flag bits needed for fpuCompareToCPUFlags
 const CF = 0x001;
@@ -109,24 +109,39 @@ export function execFPU_D9(cpu: CPU, mod: number, regField: number, rm: number, 
       case 0: fpuPush(cpu, readF32(mem, addr)); break;
       case 2: writeF32(mem, addr, fpuST(cpu, 0)); break;
       case 3: writeF32(mem, addr, fpuPop(cpu)); break;
-      case 4: { // FLDENV — Load FPU Environment (14 bytes in 16-bit mode)
-        cpu.fpuCW = mem.readU16(addr);
-        cpu.fpuSW = mem.readU16(addr + 2);
-        cpu.fpuTW = mem.readU16(addr + 4);
-        // IP/opcode/operand fields (offsets 6-13) not critical — skip
+      case 4: { // FLDENV — Load FPU Environment (14 bytes in 16-bit mode, 28 in 32-bit)
+        if (cpu.use32) {
+          cpu.fpuCW = mem.readU16(addr);
+          cpu.fpuSW = mem.readU16(addr + 4);
+          cpu.fpuTW = mem.readU16(addr + 8);
+        } else {
+          cpu.fpuCW = mem.readU16(addr);
+          cpu.fpuSW = mem.readU16(addr + 2);
+          cpu.fpuTW = mem.readU16(addr + 4);
+        }
         cpu.fpuTop = (cpu.fpuSW >> 11) & 7;
         break;
       }
       case 5: cpu.fpuCW = mem.readU16(addr); break; // FLDCW
-      case 6: { // FNSTENV — Store FPU Environment (14 bytes in 16-bit mode)
-        mem.writeU16(addr, cpu.fpuCW);
-        mem.writeU16(addr + 2, cpu.fpuSW | (cpu.fpuTop << 11));
-        mem.writeU16(addr + 4, cpu.fpuTW);
-        mem.writeU16(addr + 6, 0);  // FPU IP offset
-        mem.writeU16(addr + 8, 0);  // FPU IP selector
-        mem.writeU16(addr + 10, 0); // FPU operand offset
-        mem.writeU16(addr + 12, 0); // FPU operand selector
-        // FNSTENV masks all exceptions after storing
+      case 6: { // FNSTENV — Store FPU Environment (14 bytes in 16-bit mode, 28 in 32-bit)
+        const swOut = (cpu.fpuSW & ~0x3800) | ((cpu.fpuTop & 7) << 11);
+        if (cpu.use32) {
+          mem.writeU32(addr + 0, cpu.fpuCW);
+          mem.writeU32(addr + 4, swOut);
+          mem.writeU32(addr + 8, cpu.fpuTW);
+          mem.writeU32(addr + 12, 0);
+          mem.writeU32(addr + 16, 0);
+          mem.writeU32(addr + 20, 0);
+          mem.writeU32(addr + 24, 0);
+        } else {
+          mem.writeU16(addr, cpu.fpuCW);
+          mem.writeU16(addr + 2, swOut);
+          mem.writeU16(addr + 4, cpu.fpuTW);
+          mem.writeU16(addr + 6, 0);
+          mem.writeU16(addr + 8, 0);
+          mem.writeU16(addr + 10, 0);
+          mem.writeU16(addr + 12, 0);
+        }
         cpu.fpuCW |= 0x003F;
         break;
       }
@@ -273,81 +288,20 @@ export function execFPU_DB(cpu: CPU, mod: number, regField: number, rm: number, 
       case 3: mem.writeU32(addr, fpuRound(cpu, fpuPop(cpu))); break;
       case 5: {
         // FLD m80real: preserve raw 10 bytes for FSTP round-trip
-        const lo = mem.readU32(addr);
-        const hi = mem.readU32(addr + 4);
-        const exp_sign = mem.readU16(addr + 8);
-        const sign = (exp_sign & 0x8000) ? -1 : 1;
-        const exp = (exp_sign & 0x7FFF);
-        if (exp === 0 && lo === 0 && hi === 0) {
-          fpuPush(cpu, 0);
-        } else if (exp === 0x7FFF) {
-          fpuPush(cpu, sign * Infinity);
-        } else {
-          const mantissa = hi * 0x100000000 + lo;
-          fpuPush(cpu, sign * mantissa * Math.pow(2, exp - 16383 - 63));
-        }
-        cpu.fpuRaw80[cpu.fpuTop] = [lo, hi, exp_sign];
+        const { value, raw } = readExtended80(mem, addr);
+        fpuPush(cpu, value);
+        cpu.fpuRaw80[cpu.fpuTop] = raw;
         break;
       }
       case 7: {
         // FSTP m80 — use raw bytes if available for exact preservation
         const raw80 = cpu.fpuRaw80[cpu.fpuTop];
-        if (raw80) {
-          mem.writeU32(addr, raw80[0]);
-          mem.writeU32(addr + 4, raw80[1]);
-          mem.writeU16(addr + 8, raw80[2]);
-          cpu.fpuRaw80[cpu.fpuTop] = undefined;
-          cpu.fpuI64[cpu.fpuTop] = undefined;
-          cpu.fpuRaw64[cpu.fpuTop] = undefined;
-          cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
-          cpu.fpuTop = (cpu.fpuTop + 1) & 7;
-          break;
-        }
-        const val = fpuPop(cpu);
-        const sign = (val < 0 || Object.is(val, -0)) ? 1 : 0;
-        const abs = Math.abs(val);
-        if (abs === 0) {
-          mem.writeU32(addr, 0);
-          mem.writeU32(addr + 4, 0);
-          mem.writeU16(addr + 8, sign << 15);
-        } else if (isNaN(val)) {
-          mem.writeU32(addr, 0);
-          mem.writeU32(addr + 4, 0xC0000000);
-          mem.writeU16(addr + 8, 0x7FFF);
-        } else if (!isFinite(abs)) {
-          mem.writeU32(addr, 0);
-          mem.writeU32(addr + 4, 0x80000000);
-          mem.writeU16(addr + 8, (sign << 15) | 0x7FFF);
-        } else {
-          // Decompose double to 80-bit extended
-          // Double: 1 sign, 11-bit exp (bias 1023), 52-bit mantissa (implicit 1)
-          // Extended: 1 sign, 15-bit exp (bias 16383), 64-bit mantissa (explicit 1)
-          const buf = new ArrayBuffer(8);
-          const dv = new DataView(buf);
-          dv.setFloat64(0, abs, false); // big-endian for easy bit extraction
-          const hi32 = dv.getUint32(0);
-          const lo32 = dv.getUint32(4);
-          const dblExp = (hi32 >>> 20) & 0x7FF;
-          const dblMantHi = hi32 & 0xFFFFF; // top 20 bits of 52-bit mantissa
-          const dblMantLo = lo32;            // bottom 32 bits of 52-bit mantissa
-          if (dblExp === 0) {
-            // Denormal double → denormal or small normal extended
-            // For simplicity, store as extended denormal
-            const mantHi = (dblMantHi << 11) | (dblMantLo >>> 21);
-            const mantLo = (dblMantLo << 11) >>> 0;
-            mem.writeU32(addr, mantLo);
-            mem.writeU32(addr + 4, mantHi);
-            mem.writeU16(addr + 8, sign << 15);
-          } else {
-            const extExp = dblExp - 1023 + 16383;
-            // 64-bit mantissa: bit 63 = explicit 1, bits 62..11 = 52-bit mantissa, bits 10..0 = 0
-            const mantHi = (0x80000000 | (dblMantHi << 11) | (dblMantLo >>> 21)) >>> 0;
-            const mantLo = (dblMantLo << 11) >>> 0;
-            mem.writeU32(addr, mantLo);
-            mem.writeU32(addr + 4, mantHi);
-            mem.writeU16(addr + 8, (sign << 15) | extExp);
-          }
-        }
+        writeExtended80(mem, addr, cpu.fpuStack[cpu.fpuTop], raw80);
+        cpu.fpuRaw80[cpu.fpuTop] = undefined;
+        cpu.fpuI64[cpu.fpuTop] = undefined;
+        cpu.fpuRaw64[cpu.fpuTop] = undefined;
+        cpu.fpuTW |= (3 << (cpu.fpuTop * 2));
+        cpu.fpuTop = (cpu.fpuTop + 1) & 7;
         break;
       }
       default:

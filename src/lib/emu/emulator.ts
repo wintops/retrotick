@@ -357,6 +357,16 @@ export class Emulator {
   _emsMapping?: number[];  // 4 physical page mappings
   _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
   _emsHandleNames?: Map<number, string>; // EMS 4.0 handle names (AH=53)
+  _vcpiNextPage?: number;  // VCPI page allocator (page frame number)
+  _vcpiPrivateArea?: number;   // VCPI host private area base address
+  _vcpiSavedIVT?: Uint16Array; // V86 IVT segment values saved before first PM entry
+  _vcpiPmGdtBase?: number; // Saved PM GDT/IDT for VCPI V86→PM restore
+  _vcpiPmGdtLimit?: number;
+  _vcpiPmIdtBase?: number;
+  _vcpiPmIdtLimit?: number;
+  _vcpiLastClientGdtBase?: number;  // Last non-empty client GDT seen on DE0C
+  _vcpiLastClientGdtLimit?: number;
+  _vcpiDebugRegs?: number[]; // VCPI DR0-3, DR6, DR7, reserved×2 (set/read via INT 67h DE08/DE09)
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
@@ -367,13 +377,16 @@ export class Emulator {
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
-  _cr0 = 0;           // Control Register 0 (PE bit etc.)
+  _cr0 = 0x12;        // CR0 — MP (bit 1) + ET (bit 4): Pentium post-BIOS state with FPU present
+  _cr2 = 0;           // CR2 — last #PF faulting linear address (read by guest #PF handler)
+  _cr3 = 0;           // Control Register 3 (page directory base) — stored for read-back, paging not actually performed
   _gdtBase = 0;       // GDT linear base address
   _gdtLimit = 0;      // GDT limit
   _idtBase = 0;       // IDT linear base address
   _idtLimit = 0;      // IDT limit
   _ldtr = 0;          // Local Descriptor Table Register (selector)
   _tr = 0;            // Task Register (selector)
+  _dpmiState?: import('./dos/dpmi').DpmiState;  // DPMI host state (set on PM entry)
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
@@ -435,6 +448,19 @@ export class Emulator {
 
   // WASM JIT (DOS programs only)
   wasmJitEnabled = false; // set to true to enable WASM JIT for DOS programs
+
+  // DOS feature flags (from DosSettings, applied at load time)
+  dosEnableDpmi = true;
+  /** Start DOS MZ programs in pseudo-V86 (PE=1, VM=1) so DOS/4GW and
+   *  DOS/4GW Pro detect a V86-under-monitor environment and take their
+   *  VCPI client path. Keeps realMode=true so segment addressing stays
+   *  sel*16 — the CPU is "V86-flavored real mode" like EMM386. */
+  dosEnableV86 = true;
+  dosEnableXms = true;
+  dosEnableEms = true;
+  dosEnableSoundBlaster = true;
+  dosEnableAdlib = true;
+  dosEnableGus = true;
   dosSpeedFactor = 1; // 1 = full speed, 0.5 = half, 0.25 = quarter
   flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
@@ -547,6 +573,7 @@ export class Emulator {
   running = false;
   halted = false;
   traceApi = false;
+  traceDosInt = false; // gate heavy DOS/DPMI per-INT trace logs
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
@@ -1552,6 +1579,26 @@ export class Emulator {
     }
   }
 
+  /** Atomic 16-bit port write (OUT DX,AX / OUTSW / OUT imm8,AX).
+   *  Some devices (e.g. the GUS register-data port 0x304) have word-specific
+   *  semantics that differ from two consecutive byte writes — route those
+   *  through their device handlers first, then fall back to the byte path. */
+  portOutWord(port: number, value: number): void {
+    if (this.dosAudio.portOutWord(port, value)) return;
+    this.portOut(port, value & 0xFF);
+    this.portOut((port + 1) & 0xFFFF, (value >>> 8) & 0xFF);
+  }
+
+  /** Atomic 16-bit port read (IN AX,DX / INSW / IN AX,imm8). Mirrors
+   *  portOutWord's dispatch. */
+  portInWord(port: number): number {
+    const audioVal = this.dosAudio.portInWord(port);
+    if (audioVal >= 0) return audioVal & 0xFFFF;
+    const lo = this.portIn(port) & 0xFF;
+    const hi = this.portIn((port + 1) & 0xFFFF) & 0xFF;
+    return ((hi << 8) | lo) & 0xFFFF;
+  }
+
   /** Write to an I/O port */
   portOut(port: number, value: number): void {
     if (isVGAPort(port)) {
@@ -1742,6 +1789,9 @@ export class Emulator {
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
   injectHwKey(scancode: number, browserChar?: number): void {
+    if ((this as Emulator & { traceKey?: boolean }).traceKey) {
+      console.log(`[KEY] inject 0x${scancode.toString(16)} char=${browserChar} wait=${this._dosWaitingForKey} waitMsg=${this.waitingForMessage} halt=${this._dosHalted} e0p=${this._injectE0Pending} pend=[${this._pendingHwKeys.map(x=>x.toString(16)).join(',')}] buf=${this.dosKeyBuffer.length}`);
+    }
     // Queue scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
     // On break code: flush queued repeat make codes so repeat stops immediately.
@@ -1768,39 +1818,53 @@ export class Emulator {
     if (this._pendingHwKeys.length >= MAX_HW_KEY_QUEUE) return;
     this._pendingHwKeys.push(scancode);
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
+    // Fast path: DOS program blocked at INT 21h AH=01/07/08 — deliver straight
+    // to dosKeyBuffer so deliverDosKey can set AL on the next tick. Bypasses
+    // the INT 09h → BDA pipeline, which would require the CPU to run (it's
+    // halted) for the scancode to become readable.
+    // 0xE0 has bit 7 set but is NOT a break code — it's the extended-key
+    // prefix. Treat it as a make code for the purposes of this fast path.
+    const isBreakCode = (scancode & 0x80) !== 0 && scancode !== 0xE0;
+    // Clear the stale E0-pending flag when a break code arrives — it usually
+    // means we just saw an E0-prefixed keyup (e.g. arrow release), and the
+    // pair has no make code to deliver. Leaving it set would make the next
+    // non-extended keypress look extended.
+    if (isBreakCode) this._injectE0Pending = false;
+    if (this._dosWaitingForKey && !isBreakCode) {
+      if (scancode === 0xE0) {
+        // E0 prefix: record for the following make code, leave the program
+        // blocked. Waking the CPU now would let it run past the INT 21h stub
+        // with AL unset — the make code hasn't arrived yet.
+        this._injectE0Pending = true;
+        const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
+        if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
+        return;
+      }
+      const SCAN_TO_ASCII: (number|undefined)[] = [
+        undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
+        0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
+        0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
+        0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
+      ];
+      const isExtended = this._injectE0Pending || scancode >= 0x3B;
+      const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
+      if (this.dosKeyBuffer.length < 16) {
+        this.dosKeyBuffer.push({ ascii, scan: scancode });
+      }
+      // Remove this scancode (and E0 prefix if present) from _pendingHwKeys
+      // so that INT 09h does not fire and write a duplicate to BDA.
+      if (this._injectE0Pending) {
+        const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
+        if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
+      }
+      const scIdx = this._pendingHwKeys.lastIndexOf(scancode);
+      if (scIdx >= 0) this._pendingHwKeys.splice(scIdx, 1);
+      this._pendingHwKeyChars.delete(scancode);
+      this._injectE0Pending = false;
+    }
+
     // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
     if ((this.waitingForMessage || this._dosHalted) && this.running && !this.halted) {
-      // If DOS is waiting for a key via INT 21h AH=01/07/08 and this is a make code
-      // (not E0 prefix, not break code), push directly to dosKeyBuffer for immediate delivery
-      if (this._dosWaitingForKey && !(scancode & 0x80)) {
-        if (scancode === 0xE0) {
-          // E0 prefix: mark for next scancode, don't push to buffer yet
-          this._injectE0Pending = true;
-        } else {
-          const SCAN_TO_ASCII: (number|undefined)[] = [
-            undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
-            0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
-            0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
-            0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
-          ];
-          const isExtended = this._injectE0Pending || scancode >= 0x3B;
-          const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
-          if (this.dosKeyBuffer.length < 16) {
-            this.dosKeyBuffer.push({ ascii, scan: scancode });
-          }
-          // Remove this scancode (and E0 prefix if present) from _pendingHwKeys
-          // so that INT 09h does not fire and write a duplicate to BDA.
-          if (this._injectE0Pending) {
-            // E0 was the previous entry — remove both E0 and this scancode
-            const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
-            if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
-          }
-          const scIdx = this._pendingHwKeys.lastIndexOf(scancode);
-          if (scIdx >= 0) this._pendingHwKeys.splice(scIdx, 1);
-          this._pendingHwKeyChars.delete(scancode);
-          this._injectE0Pending = false;
-        }
-      }
       this.waitingForMessage = false;
       this._dosHalted = false;
       requestAnimationFrame(this.tick);
@@ -1814,6 +1878,8 @@ export class Emulator {
   _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
+  _hwIntSavedSS = -1; // SS selector saved alongside SP — PM ISRs switch stacks mid-handler
+  _dosLastTimerTickSteps = 0; // cpuSteps at last PIT IRQ0 dispatch, for cycle-gated timing
   _hwIntPMActive = false; // true while a PM IDT-dispatched handler is running
   /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
   _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; use32: boolean; segBases: Map<number, number> } | undefined;

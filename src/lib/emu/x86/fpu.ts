@@ -1,4 +1,5 @@
 import type { CPU } from './cpu';
+import type { Memory } from '../memory';
 import { execFPU_D8, execFPU_D9, execFPU_DA, execFPU_DB } from './fpu-d8db';
 import { execFPU_DC, execFPU_DD, execFPU_DE, execFPU_DF } from './fpu-dcdf';
 
@@ -34,6 +35,73 @@ export function fpuSetST(cpu: CPU, i: number, val: number): void {
   cpu.fpuRaw64[slot] = undefined;
   cpu.fpuRaw80[slot] = undefined;
   cpu.fpuTW &= ~(3 << (slot * 2));
+}
+
+// 80-bit extended real codec shared by FLD/FSTP m80 and FSAVE/FRSTOR.
+
+export function readExtended80(mem: Memory, addr: number): { value: number; raw: [number, number, number] } {
+  const lo = mem.readU32(addr);
+  const hi = mem.readU32(addr + 4);
+  const exp_sign = mem.readU16(addr + 8);
+  const sign = (exp_sign & 0x8000) ? -1 : 1;
+  const exp = exp_sign & 0x7FFF;
+  let value: number;
+  if (exp === 0 && lo === 0 && hi === 0) {
+    value = 0;
+  } else if (exp === 0x7FFF) {
+    value = sign * Infinity;
+  } else {
+    const mantissa = hi * 0x100000000 + lo;
+    value = sign * mantissa * Math.pow(2, exp - 16383 - 63);
+  }
+  return { value, raw: [lo, hi, exp_sign] };
+}
+
+export function writeExtended80(mem: Memory, addr: number, val: number, raw80: [number, number, number] | undefined): void {
+  if (raw80) {
+    mem.writeU32(addr, raw80[0]);
+    mem.writeU32(addr + 4, raw80[1]);
+    mem.writeU16(addr + 8, raw80[2]);
+    return;
+  }
+  const sign = (val < 0 || Object.is(val, -0)) ? 1 : 0;
+  const abs = Math.abs(val);
+  if (abs === 0) {
+    mem.writeU32(addr, 0);
+    mem.writeU32(addr + 4, 0);
+    mem.writeU16(addr + 8, sign << 15);
+  } else if (isNaN(val)) {
+    mem.writeU32(addr, 0);
+    mem.writeU32(addr + 4, 0xC0000000);
+    mem.writeU16(addr + 8, 0x7FFF);
+  } else if (!isFinite(abs)) {
+    mem.writeU32(addr, 0);
+    mem.writeU32(addr + 4, 0x80000000);
+    mem.writeU16(addr + 8, (sign << 15) | 0x7FFF);
+  } else {
+    const buf = new ArrayBuffer(8);
+    const dv = new DataView(buf);
+    dv.setFloat64(0, abs, false);
+    const hi32 = dv.getUint32(0);
+    const lo32 = dv.getUint32(4);
+    const dblExp = (hi32 >>> 20) & 0x7FF;
+    const dblMantHi = hi32 & 0xFFFFF;
+    const dblMantLo = lo32;
+    if (dblExp === 0) {
+      const mantHi = (dblMantHi << 11) | (dblMantLo >>> 21);
+      const mantLo = (dblMantLo << 11) >>> 0;
+      mem.writeU32(addr, mantLo);
+      mem.writeU32(addr + 4, mantHi);
+      mem.writeU16(addr + 8, sign << 15);
+    } else {
+      const extExp = dblExp - 1023 + 16383;
+      const mantHi = (0x80000000 | (dblMantHi << 11) | (dblMantLo >>> 21)) >>> 0;
+      const mantLo = (dblMantLo << 11) >>> 0;
+      mem.writeU32(addr, mantLo);
+      mem.writeU32(addr + 4, mantHi);
+      mem.writeU16(addr + 8, (sign << 15) | extExp);
+    }
+  }
 }
 
 export function execFPU(cpu: CPU, opcode: number): void {
