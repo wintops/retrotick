@@ -814,10 +814,15 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
     }
   }, [emu, render]);
 
-  // Measure actual ch width and compute scaleX to fit 80 columns into 640px
+  // Measure actual ch width and compute scaleX to fit 80 columns into 640px.
+  // useCanvas is in the deps so the measurement re-runs when the user
+  // toggles between DOM and canvas renderers — when the app boots in canvas
+  // mode the <pre> isn't mounted, preRef stays null, and the initial run
+  // bails before measuring; without this dep, switching to DOM later would
+  // keep scaleX at its default 1 and stretch the layout horizontally.
   const [scaleX, setScaleX] = useState(1);
   useEffect(() => {
-    if (emu.isGraphicsMode) return;
+    if (emu.isGraphicsMode || useCanvas) return;
     const el = preRef.current;
     if (!el) return;
     const span = document.createElement('span');
@@ -829,7 +834,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
     const chWidth = span.getBoundingClientRect().width;
     document.body.removeChild(span);
     if (chWidth > 0) setScaleX(640 / (COLS * chWidth));
-  }, [COLS, emu.isGraphicsMode, lineHeight]);
+  }, [COLS, emu.isGraphicsMode, lineHeight, useCanvas]);
 
   // Canvas text mode: draw after each render
   useLayoutEffect(() => {
