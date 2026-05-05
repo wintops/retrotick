@@ -1412,6 +1412,63 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     }
   }, [minimized, handleMaximize, windowStyle]);
 
+  // System-menu Move: cursor becomes "move" and the window follows the pointer
+  // until the user clicks to commit (or presses Escape to cancel).
+  const handleSystemMove = useCallback(() => {
+    if (maximized) return;
+    const startW = isConsole ? 640 * consoleZoom : canvasSize.w;
+    const captionH = 21;
+    const startPos = { x: windowPos.x, y: windowPos.y };
+    const onMove = (e: PointerEvent) => {
+      setWindowPos({ x: e.clientX - startW / 2, y: Math.max(0, e.clientY - captionH / 2) });
+    };
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerdown', onCommit, true);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.cursor = '';
+    };
+    const onCommit = (e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); cleanup(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setWindowPos(startPos); cleanup(); }
+    };
+    document.body.style.cursor = 'move';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerdown', onCommit, true);
+    document.addEventListener('keydown', onKey);
+  }, [maximized, isConsole, consoleZoom, canvasSize.w, windowPos]);
+
+  // System-menu Size: pointer drives the window's bottom-right corner until
+  // the user clicks to commit (or presses Escape to cancel). Only meaningful
+  // when WS_THICKFRAME is set, which the menu enforces by graying the item.
+  const handleSystemSize = useCallback(() => {
+    if (maximized) return;
+    const start = { x: windowPos.x, y: windowPos.y, w: canvasSize.w, h: canvasSize.h };
+    const onMove = (e: PointerEvent) => {
+      const newW = Math.max(120, e.clientX - start.x);
+      const newH = Math.max(60, e.clientY - start.y - 21);
+      setCanvasSize({ w: newW, h: newH });
+    };
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerdown', onCommit, true);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.cursor = '';
+    };
+    const onCommit = (e: PointerEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      cleanup();
+      applyCanvasToEmu(canvasSize.w, canvasSize.h);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setCanvasSize({ w: start.w, h: start.h }); cleanup(); }
+    };
+    document.body.style.cursor = 'nwse-resize';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerdown', onCommit, true);
+    document.addEventListener('keydown', onKey);
+  }, [maximized, windowPos, canvasSize, applyCanvasToEmu]);
+
 
   if (crashInfo) {
     const crashExeName = windowTitle || exeBaseName;
@@ -1539,6 +1596,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
         zoomActive={consoleZoom > 1}
         onFullscreenToggle={isConsole ? handleFullscreenToggle : undefined}
+        fullscreenActive={isFullscreen}
+        onSystemMove={handleSystemMove}
+        onSystemSize={handleSystemSize}
         lang={detectedLang}
       >
         <div
