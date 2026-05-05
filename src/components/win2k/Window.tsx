@@ -72,6 +72,7 @@ export const svgMax = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/s
 export const svgRestore = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M2 0h7v7H7v2H0V2h2V0zm1 2h4v1H3v3H2V2h1zm-1 2h5v4H1V4h1zm0 1v2h4V5H2z' fill='#000'/></svg>";
 export const svgClose = "<svg width='8' height='7' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M0 0h2v1h1v1h2V1h1V0h2v1H7v1H6v1H5v1h1v1h1v1h1v1H6V6H5V5H3v1H2v1H0V6h1V5h1V4h1V3H2V2H1V1H0V0z' fill='#000'/></svg>";
 export const svgHelp = "<svg width='6' height='9' xmlns='http://www.w3.org/2000/svg'><path fill='#000' d='M0 1h2v2H0zM1 0h4v1H1zM4 1h2v2H4zM3 3h2v1H3zM2 4h2v2H2zM2 7h2v2H2z'/></svg>";
+export const svgFullscreen = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill='#000' d='M0 0h4v1H1v3H0V0zm5 0h4v4H8V1H5V0zM0 5h1v3h3v1H0V5zm8 0h1v4H5V8h3V5z'/></svg>";
 
 // --- Window Style Constants ---
 export const WS_BORDER      = 0x00800000;
@@ -121,6 +122,8 @@ interface WindowProps {
   onZoomToggle?: () => void;
   /** Reflects current zoom state — button appears sunken when active. */
   zoomActive?: boolean;
+  /** When provided, renders a fullscreen button in the title bar. */
+  onFullscreenToggle?: () => void;
   children?: ComponentChildren;
 }
 
@@ -130,7 +133,7 @@ export function Window({
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
   hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang,
-  onZoomToggle, zoomActive, children,
+  onZoomToggle, zoomActive, onFullscreenToggle, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
   const hasThickFrame = !!(wStyle & WS_THICKFRAME);
@@ -265,6 +268,10 @@ export function Window({
             </>}
             {onZoomToggle && <>
               {capBtnText('2×', onZoomToggle, zoomActive, zoomActive ? 'Restore 1× zoom' : 'Zoom 2×')}
+              <span style={{ width: '2px' }} />
+            </>}
+            {onFullscreenToggle && <>
+              {capBtnSvg(svgFullscreen, 'top 2px left 3px', onFullscreenToggle)}
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}

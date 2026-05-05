@@ -407,6 +407,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
   const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
+  const fsWrapperRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fsScale, setFsScale] = useState(1);
   const [crashInfo, setCrashInfo] = useState<{ eip: string; description: string } | null>(null);
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
@@ -414,6 +417,35 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [replaceTerm, setReplaceTerm] = useState('');
   const [modalFlashTrigger, setModalFlashTrigger] = useState(0);
   const flashModal = useCallback(() => setModalFlashTrigger(c => c + 1), []);
+
+  const handleFullscreenToggle = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      fsWrapperRef.current?.requestFullscreen?.().catch(() => { /* user gesture missing or blocked */ });
+    }
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => {
+      const active = document.fullscreenElement === fsWrapperRef.current;
+      setIsFullscreen(active);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) { setFsScale(1); return; }
+    const recompute = () => {
+      const baseW = 640 * consoleZoom;
+      const baseH = 480 * consoleZoom;
+      setFsScale(Math.min(window.innerWidth / baseW, window.innerHeight / baseH));
+    };
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [isFullscreen, consoleZoom]);
 
   // When restored from taskbar, send SC_RESTORE to the emulator
   const prevMinimized = useRef(minimizedProp);
@@ -1506,6 +1538,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onResizeStart={onResizeStart}
         onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
         zoomActive={consoleZoom > 1}
+        onFullscreenToggle={isConsole ? handleFullscreenToggle : undefined}
         lang={detectedLang}
       >
         <div
@@ -1520,7 +1553,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onContextMenu={(e) => e.preventDefault()}
         >
           {isConsole && emuRef.current ? (
-            <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} />
+            <div
+              ref={fsWrapperRef}
+              style={isFullscreen ? {
+                width: '100vw', height: '100vh',
+                background: '#000',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              } : undefined}
+            >
+              <div style={isFullscreen ? { transform: `scale(${fsScale})`, transformOrigin: 'center' } : undefined}>
+                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} />
+              </div>
+            </div>
           ) : (
             <canvas
               ref={canvasRef}
