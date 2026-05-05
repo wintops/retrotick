@@ -25,6 +25,13 @@ const DEFAULT_CURSOR_XOR: Uint16Array = new Uint16Array([
 const DEFAULT_CURSOR_HOTX = 0;
 const DEFAULT_CURSOR_HOTY = 0;
 
+// Text-mode software cursor masks (INT 33h AX=0Ah, BX=0).
+// Formula: displayed_char_attr = (orig_char_attr AND screenMask) XOR cursorMask
+// Defaults (matching DOSBox-staging) preserve the character and produce
+// inverse-video colors (clears blink/intensity, swaps fg/bg).
+const DEFAULT_TEXT_SCREEN_MASK = 0x77FF;
+const DEFAULT_TEXT_CURSOR_MASK = 0x7700;
+
 /** DOS mouse driver state, stored on Emulator as `dosMouse` */
 export interface DosMouseState {
   installed: boolean;
@@ -61,6 +68,12 @@ export interface DosMouseState {
   cursorXor: Uint16Array;
   cursorHotX: number;
   cursorHotY: number;
+  // Text-mode cursor (INT 33h AX=0Ah)
+  textCursorType: 0 | 1;     // 0 = software (mask-based), 1 = hardware (CRTC scanlines)
+  textScreenMask: number;    // AND mask applied to char/attr word for software cursor
+  textCursorMask: number;    // XOR mask applied to char/attr word for software cursor
+  textCursorStart: number;   // Hardware cursor scanline start
+  textCursorEnd: number;     // Hardware cursor scanline end
 }
 
 export function createDosMouseState(): DosMouseState {
@@ -86,6 +99,11 @@ export function createDosMouseState(): DosMouseState {
     cursorXor: Uint16Array.from(DEFAULT_CURSOR_XOR),
     cursorHotX: DEFAULT_CURSOR_HOTX,
     cursorHotY: DEFAULT_CURSOR_HOTY,
+    textCursorType: 0,
+    textScreenMask: DEFAULT_TEXT_SCREEN_MASK,
+    textCursorMask: DEFAULT_TEXT_CURSOR_MASK,
+    textCursorStart: 6,
+    textCursorEnd: 7,
   };
 }
 
@@ -183,6 +201,11 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.cursorXor = Uint16Array.from(DEFAULT_CURSOR_XOR);
       m.cursorHotX = DEFAULT_CURSOR_HOTX;
       m.cursorHotY = DEFAULT_CURSOR_HOTY;
+      m.textCursorType = 0;
+      m.textScreenMask = DEFAULT_TEXT_SCREEN_MASK;
+      m.textCursorMask = DEFAULT_TEXT_CURSOR_MASK;
+      m.textCursorStart = 6;
+      m.textCursorEnd = 7;
       m.installed = true;
       cpu.setReg16(EAX, 0xFFFF); // mouse installed
       cpu.setReg16(EBX, 3);       // 3 buttons
@@ -252,8 +275,21 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       return true;
     }
 
-    case 0x000A: // Set text cursor type (stub)
+    case 0x000A: { // Set text cursor type
+      const type = cpu.getReg16(EBX);
+      if (type === 0) {
+        // Software cursor: CX = screen (AND) mask, DX = cursor (XOR) mask
+        m.textCursorType = 0;
+        m.textScreenMask = cpu.getReg16(ECX);
+        m.textCursorMask = cpu.getReg16(EDX);
+      } else {
+        // Hardware cursor: CX = scanline start, DX = scanline end
+        m.textCursorType = 1;
+        m.textCursorStart = cpu.getReg16(ECX) & 0x1F;
+        m.textCursorEnd = cpu.getReg16(EDX) & 0x1F;
+      }
       return true;
+    }
 
     case 0x000B: // Read motion counters (mickeys)
       cpu.setReg16(ECX, m.mickeysX & 0xFFFF);
@@ -351,6 +387,39 @@ export function updateMouseRangeForMode(emu: Emulator): void {
   if (prevMaxY !== m.maxY) {
     m.y = Math.max(m.minY, Math.min(m.maxY, m.y));
   }
+}
+
+/**
+ * Compute the text-mode mouse cursor cell override.
+ * Returns the modified char/attr to draw at the mouse position, or null if
+ * no cursor should be drawn (mouse not installed, hidden, in graphics mode,
+ * or in hardware-cursor mode — which is rendered via the CRTC instead).
+ *
+ * Applies INT 33h AX=0Ah software-cursor masks:
+ *   displayed = (orig_char_attr AND screenMask) XOR cursorMask
+ */
+export function getTextModeCursorOverride(emu: Emulator, COLS: number, ROWS: number):
+  { row: number; col: number; char: number; attr: number } | null
+{
+  const m = emu.dosMouse;
+  if (!m.installed || m.cursorVisible < 0 || emu.isGraphicsMode) return null;
+  if (m.textCursorType !== 0) return null;
+
+  const col = Math.floor(m.x * COLS / (m.maxX + 1));
+  const row = Math.floor(m.y * ROWS / (m.maxY + 1));
+  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
+
+  const cell = emu.consoleBuffer[row * COLS + col];
+  const origChar = cell ? (cell.char & 0xFF) : 0x20;
+  const origAttr = cell ? cell.attr : 0x07;
+  const orig = ((origAttr & 0xFF) << 8) | origChar;
+  const result = (orig & m.textScreenMask) ^ m.textCursorMask;
+  return {
+    row,
+    col,
+    char: result & 0xFF,
+    attr: (result >>> 8) & 0xFF,
+  };
 }
 
 /**

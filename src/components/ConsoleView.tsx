@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preac
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
-import { injectDosMouseEvent, drawGfxMouseCursor } from '../lib/emu/dos/mouse';
+import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride } from '../lib/emu/dos/mouse';
 import { VGA_FONT_8X8_ROM } from '../lib/emu/dos/vga-font-data';
 import { VGA_FONT_8X16_ROM } from '../lib/emu/dos/vga-font-16';
 
@@ -72,13 +72,17 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
   const imgData = ctx.createImageData(w, h);
   const pixels = imgData.data;
 
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
+
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      const ch = cell ? cell.char : 0x20;
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      const ch = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0x20);
+      const attr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      const fg = attr & 0x0F;
+      const bg = (attr >> 4) & 0x0F;
       const fgColor = COLORS[fg];
       const bgColor = COLORS[bg];
       const fontOffset = (ch & 0xFF) * charH;
@@ -150,26 +154,29 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
   ctx.fillStyle = COLORS[0];
   ctx.fillRect(0, 0, cw, ch);
 
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
+
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      if (cell && cell.char === 0) continue;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      if (!isMouseCell && cell && cell.char === 0) continue;
 
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const effChar = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0);
+      const effAttr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      const fg = effAttr & 0x0F;
+      const bg = (effAttr >> 4) & 0x0F;
       const x = col * charW;
       const y = row * lineH;
-      const wide = cell && cell.char > 0x20 && isFullwidth(cell.char);
+      const wide = !isMouseCell && cell && cell.char > 0x20 && isFullwidth(cell.char);
 
       // Background — +1px overlap to prevent fractional pixel gaps
       ctx.fillStyle = COLORS[bg];
       ctx.fillRect(x, y, (wide ? charW * 2 : charW) + 1, lineH);
 
       // Character
-      const c = (cell && cell.char > 0x20)
-        ? String.fromCharCode(cell.char)
-        : '';
+      const c = effChar > 0x20 ? String.fromCharCode(effChar) : '';
       if (c) {
         ctx.fillStyle = COLORS[fg];
         ctx.fillText(c, x, y);
@@ -359,6 +366,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
 
   // Build DOM content from console buffer
   const lineHeight = emu.charHeight === 8 ? 8 : 16;
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
   const rows: preact.JSX.Element[] = [];
   for (let row = 0; row < ROWS; row++) {
     const spans: preact.JSX.Element[] = [];
@@ -375,15 +383,18 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      if (cell && cell.char === 0) continue;
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      if (!isMouseCell && cell && cell.char === 0) continue;
+      const effAttr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      const effChar = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0);
+      const fg = effAttr & 0x0F;
+      const bg = (effAttr >> 4) & 0x0F;
       const isCursor = row === emu.consoleCursorY && col === emu.consoleCursorX;
-      const charCode = cell ? cell.char : 0;
+      const charCode = effChar;
       const ch = (charCode > 0 && charCode !== 0x20)
         ? (emu.isDOS && charCode <= 0xFF ? cp437ToChar(charCode) : String.fromCharCode(charCode))
         : '\u00A0';
-      const wide = charCode > 0x20 && isFullwidth(charCode);
+      const wide = !isMouseCell && charCode > 0x20 && isFullwidth(charCode);
 
       if (isCursor && cursorActive) {
         flushRun();
@@ -777,7 +788,12 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
     const px = Math.round((e.clientX - rect.left) * 640 / rect.width);
     const py = Math.round((e.clientY - rect.top) * 480 / rect.height);
     injectDosMouseEvent(emu, px, py, 640, 480, e.buttons, type);
-  }, [emu]);
+    // In text mode, the cursor doesn't follow the framebuffer (no onVideoFrame).
+    // Force a re-render so the mouse cell follows the pointer.
+    if (!emu.isGraphicsMode && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0) {
+      render();
+    }
+  }, [emu, render]);
 
   // Measure actual ch width and compute scaleX to fit 80 columns into 640px
   const [scaleX, setScaleX] = useState(1);
@@ -807,7 +823,8 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
   const fb = emu.vga.framebuffer;
   const gfxWidth = fb ? fb.width : emu.vga.currentMode.width;
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
-  const dosMouseVisible = isGfx && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
+  const dosMouseVisible = emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
+  const dosTextMouseVisible = !isGfx && dosMouseVisible && emu.dosMouse.textCursorType === 0;
 
   const dispW = 640 * zoom;
   const dispH = 480 * zoom;
@@ -829,7 +846,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
             width: `${dispW}px`,
             height: `${dispH}px`,
             imageRendering: 'pixelated',
-            cursor: dosMouseVisible ? 'none' : 'default',
+            cursor: isGfx && dosMouseVisible ? 'none' : 'default',
           }}
         />
       ) : useCanvas ? (
@@ -841,6 +858,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
             width: `${dispW}px`,
             height: `${dispH}px`,
             imageRendering: 'pixelated',
+            cursor: dosTextMouseVisible ? 'none' : 'default',
           }}
         />
       ) : (
@@ -853,7 +871,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
             background: '#000',
             color: '#C0C0C0',
             font: `${lineHeight}px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
-            cursor: 'text',
+            cursor: dosTextMouseVisible ? 'none' : 'text',
             overflow: 'hidden',
             userSelect: 'text',
             width: `${COLS}ch`,
