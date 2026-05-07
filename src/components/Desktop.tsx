@@ -18,13 +18,14 @@ interface Props {
   onViewResources: (arrayBuffer: ArrayBuffer, fileName?: string) => void;
   onOpenFolder: (path: string) => void;
   onShowDisplayProperties?: () => void;
+  onDownload?: (items: { name: string; isFolder: boolean }[]) => void;
   clipboard: ClipboardState | null;
   onCut: (items: string[], prefix: string) => void;
   onCopy: (items: string[], prefix: string) => void;
   onPaste: (prefix: string) => Promise<void>;
 }
 
-export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplayProperties, clipboard, onCut, onCopy, onPaste }: Props) {
+export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplayProperties, onDownload, clipboard, onCut, onCopy, onPaste }: Props) {
   const fetchItems = useCallback(() => getRootItems(), []);
   const fm = useFolderTools('', fetchItems);
   const [dragOver, setDragOver] = useState(false);
@@ -304,17 +305,20 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
         const { item } = fm.contextMenu;
         const multi = fm.selected.size > 1;
         const isScr = item.name.toLowerCase().endsWith('.scr');
-        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_CUT = 4, CMD_COPY = 5, CMD_DELETE = 6, CMD_RENAME = 7, CMD_PROPS = 8;
+        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_CUT = 4, CMD_COPY = 5, CMD_DELETE = 6, CMD_RENAME = 7, CMD_PROPS = 8, CMD_DOWNLOAD = 9;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
+        const downloadAsZip = multi || item.isFolder;
+        const downloadLabel = downloadAsZip ? t().downloadAsZip : t().download;
         const menuItems: MenuItem[] = [];
         if (item.isFolder) {
           menuItems.push(mi(CMD_OPEN, t().open, { isDefault: true, isGrayed: multi }));
           menuItems.push(sep);
           menuItems.push(mi(CMD_CUT, t().cut));
           menuItems.push(mi(CMD_COPY, t().copy_));
+          menuItems.push(mi(CMD_DOWNLOAD, downloadLabel));
           menuItems.push(sep);
           menuItems.push(mi(CMD_DELETE, t().delete_));
           menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
@@ -325,6 +329,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
           menuItems.push(sep);
           menuItems.push(mi(CMD_CUT, t().cut));
           menuItems.push(mi(CMD_COPY, t().copy_));
+          menuItems.push(mi(CMD_DOWNLOAD, downloadLabel));
           menuItems.push(sep);
           menuItems.push(mi(CMD_DELETE, t().delete_));
           menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
@@ -343,6 +348,12 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
                 else if (id === CMD_VIEW) handleViewResources(item.name);
                 else if (id === CMD_CUT) onCut([...fm.selected], '');
                 else if (id === CMD_COPY) onCopy([...fm.selected], '');
+                else if (id === CMD_DOWNLOAD) {
+                  const targets = multi
+                    ? fm.items.filter(i => fm.selected.has(i.name)).map(i => ({ name: i.name, isFolder: i.isFolder }))
+                    : [{ name: item.name, isFolder: item.isFolder }];
+                  onDownload?.(targets);
+                }
                 else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
                 else if (id === CMD_DELETE) { fm.setConfirmDelete([...fm.selected]); fm.setContextMenu(null); }
                 else if (id === CMD_PROPS) {

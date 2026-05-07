@@ -406,6 +406,17 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [windowReady, setWindowReady] = useState(false);
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
+  const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
+  // Bumped whenever the DOS console's screen layout (graphics ↔ text mode,
+  // text rows × charH) changes — triggers a re-render so consoleClientH
+  // re-reads the up-to-date emu state.
+  const [consoleLayoutBump, setConsoleLayoutBump] = useState(0);
+  const handleScreenLayoutChange = useCallback(() => {
+    setConsoleLayoutBump(b => b + 1);
+  }, []);
+  const fsWrapperRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fsScale, setFsScale] = useState(1);
   const [crashInfo, setCrashInfo] = useState<{ eip: string; description: string } | null>(null);
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
@@ -413,6 +424,35 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [replaceTerm, setReplaceTerm] = useState('');
   const [modalFlashTrigger, setModalFlashTrigger] = useState(0);
   const flashModal = useCallback(() => setModalFlashTrigger(c => c + 1), []);
+
+  const handleFullscreenToggle = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      fsWrapperRef.current?.requestFullscreen?.().catch(() => { /* user gesture missing or blocked */ });
+    }
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => {
+      const active = document.fullscreenElement === fsWrapperRef.current;
+      setIsFullscreen(active);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) { setFsScale(1); return; }
+    const recompute = () => {
+      const baseW = 640 * consoleZoom;
+      const baseH = 480 * consoleZoom;
+      setFsScale(Math.min(window.innerWidth / baseW, window.innerHeight / baseH));
+    };
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [isFullscreen, consoleZoom]);
 
   // When restored from taskbar, send SC_RESTORE to the emulator
   const prevMinimized = useRef(minimizedProp);
@@ -441,6 +481,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     setHasMainWindow(false);
     setCrashInfo(null);
     setMessageBoxes([]);
+    setConsoleZoom(1);
     preMaxState.current = null;
 
     const canvas = canvasRef.current;
@@ -1378,6 +1419,63 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     }
   }, [minimized, handleMaximize, windowStyle]);
 
+  // System-menu Move: cursor becomes "move" and the window follows the pointer
+  // until the user clicks to commit (or presses Escape to cancel).
+  const handleSystemMove = useCallback(() => {
+    if (maximized) return;
+    const startW = isConsole ? 640 * consoleZoom : canvasSize.w;
+    const captionH = 21;
+    const startPos = { x: windowPos.x, y: windowPos.y };
+    const onMove = (e: PointerEvent) => {
+      setWindowPos({ x: e.clientX - startW / 2, y: Math.max(0, e.clientY - captionH / 2) });
+    };
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerdown', onCommit, true);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.cursor = '';
+    };
+    const onCommit = (e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); cleanup(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setWindowPos(startPos); cleanup(); }
+    };
+    document.body.style.cursor = 'move';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerdown', onCommit, true);
+    document.addEventListener('keydown', onKey);
+  }, [maximized, isConsole, consoleZoom, canvasSize.w, windowPos]);
+
+  // System-menu Size: pointer drives the window's bottom-right corner until
+  // the user clicks to commit (or presses Escape to cancel). Only meaningful
+  // when WS_THICKFRAME is set, which the menu enforces by graying the item.
+  const handleSystemSize = useCallback(() => {
+    if (maximized) return;
+    const start = { x: windowPos.x, y: windowPos.y, w: canvasSize.w, h: canvasSize.h };
+    const onMove = (e: PointerEvent) => {
+      const newW = Math.max(120, e.clientX - start.x);
+      const newH = Math.max(60, e.clientY - start.y - 21);
+      setCanvasSize({ w: newW, h: newH });
+    };
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerdown', onCommit, true);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.cursor = '';
+    };
+    const onCommit = (e: PointerEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      cleanup();
+      applyCanvasToEmu(canvasSize.w, canvasSize.h);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setCanvasSize({ w: start.w, h: start.h }); cleanup(); }
+    };
+    document.body.style.cursor = 'nwse-resize';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerdown', onCommit, true);
+    document.addEventListener('keydown', onKey);
+  }, [maximized, windowPos, canvasSize, applyCanvasToEmu]);
+
 
   if (crashInfo) {
     const crashExeName = windowTitle || exeBaseName;
@@ -1474,13 +1572,22 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     );
   }
 
+  // Console window height tracks the active video mode: graphics modes use
+  // the full 480 area, text modes shrink to ROWS × charH (= 400 for 80×25 and
+  // 80×50) so the canvas renders at native size with no fractional stretch.
+  const consoleEmu = emuRef.current;
+  const consoleClientH = consoleEmu && !consoleEmu.isGraphicsMode
+    ? (consoleEmu.screenRows || 25) * (consoleEmu.charHeight || 16) * consoleZoom
+    : 480 * consoleZoom;
+  void consoleLayoutBump; // dependency: re-evaluate when the layout changes
+
   return (
     <div ref={desktopRef} style={{ position: 'absolute', left: `${windowPos.x}px`, top: `${windowPos.y}px`, zIndex, visibility: windowReady ? 'visible' : 'hidden', display: minimizedProp ? 'none' : undefined, touchAction: 'none' }} onPointerDown={onFocus}>
       <Window
         title={windowTitle}
         style={windowStyle}
-        clientW={isConsole ? 640 : canvasSize.w}
-        clientH={isConsole ? 480 : canvasSize.h}
+        clientW={isConsole ? 640 * consoleZoom : canvasSize.w}
+        clientH={isConsole ? consoleClientH : canvasSize.h}
         iconUrl={iconUrl}
         iconElement={!iconUrl ? EXE_ICON_16 : undefined}
         focused={parentFocused}
@@ -1502,6 +1609,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onTitleBarMouseDown={onTitleBarMouseDown}
         onTitleBarDblClick={handleTitleBarDblClick}
         onResizeStart={onResizeStart}
+        onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
+        zoomActive={consoleZoom > 1}
+        onFullscreenToggle={isConsole ? handleFullscreenToggle : undefined}
+        fullscreenActive={isFullscreen}
+        onSystemMove={handleSystemMove}
+        onSystemSize={handleSystemSize}
         lang={detectedLang}
       >
         <div
@@ -1516,7 +1629,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onContextMenu={(e) => e.preventDefault()}
         >
           {isConsole && emuRef.current ? (
-            <ConsoleView emu={emuRef.current} focused={focused} />
+            <div
+              ref={fsWrapperRef}
+              style={isFullscreen ? {
+                width: '100vw', height: '100vh',
+                background: '#000',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              } : undefined}
+            >
+              <div style={isFullscreen ? { transform: `scale(${fsScale})`, transformOrigin: 'center' } : undefined}>
+                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} onScreenLayoutChange={handleScreenLayoutChange} />
+              </div>
+            </div>
           ) : (
             <canvas
               ref={canvasRef}

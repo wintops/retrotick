@@ -21,10 +21,14 @@ interface TaskbarProps {
   onMinimizeApp: (id: number) => void;
   onCloseApp: (id: number) => void;
   onMinimizeAll?: () => void;
+  onLaunchTaskmgr?: () => void;
+  taskmgrAvailable?: boolean;
   onShowWelcome?: () => void;
   onShowRegionalSettings?: () => void;
   onShowDosSettings?: () => void;
   onShowGeneralSettings?: () => void;
+  onExportWorkbench?: () => void;
+  onImportWorkbench?: () => void;
   onResetToDefault?: () => void;
   onShutDown?: () => void;
 }
@@ -49,7 +53,7 @@ interface ContextMenu {
   y: number;
 }
 
-export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onShowWelcome, onShowRegionalSettings, onShowDosSettings, onShowGeneralSettings, onResetToDefault, onShutDown }: TaskbarProps) {
+export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onLaunchTaskmgr, taskmgrAvailable, onShowWelcome, onShowRegionalSettings, onShowDosSettings, onShowGeneralSettings, onExportWorkbench, onImportWorkbench, onResetToDefault, onShutDown }: TaskbarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [startOpen, setStartOpen] = useState(false);
@@ -120,12 +124,16 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
             <MenuDropdown
               items={[
                 { id: 1, text: t().welcome, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 5, text: t().regionalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 6, text: t().dosSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 7, text: t().generalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 4, text: t().githubProject, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 5, text: t().regionalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 7, text: t().generalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 6, text: t().dosSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 8, text: t().exportWorkbench, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 9, text: t().importWorkbench, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 3, text: t().resetToDefault, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 2, text: t().shutDown, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
               ]}
               x={startPos.x}
@@ -136,6 +144,8 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
                 else if (id === 5) onShowRegionalSettings?.();
                 else if (id === 6) onShowDosSettings?.();
                 else if (id === 7) onShowGeneralSettings?.();
+                else if (id === 8) onExportWorkbench?.();
+                else if (id === 9) onImportWorkbench?.();
                 else if (id === 4) window.open('https://github.com/lqs/retrotick', '_blank');
                 else if (id === 2) onShutDown?.();
                 else if (id === 3) onResetToDefault?.();
@@ -212,12 +222,14 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
 
       {/* Taskbar background context menu */}
       {bgContextMenu && (() => {
-        const CMD_MINIMIZE_ALL = 1;
+        const CMD_MINIMIZE_ALL = 1, CMD_TASKMGR = 2;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const items: MenuItem[] = [
           mi(CMD_MINIMIZE_ALL, t().minimizeAllWindows, { isGrayed: runningApps.length === 0 }),
+          { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
+          mi(CMD_TASKMGR, t().taskManager, { isGrayed: !taskmgrAvailable }),
         ];
         return (
           <div onPointerDown={(e: Event) => e.stopPropagation()}>
@@ -227,6 +239,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
               onCommand={(id) => {
                 setBgContextMenu(null);
                 if (id === CMD_MINIMIZE_ALL) onMinimizeAll?.();
+                else if (id === CMD_TASKMGR) onLaunchTaskmgr?.();
               }}
               onClose={() => setBgContextMenu(null)}
             />

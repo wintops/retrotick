@@ -8,9 +8,16 @@ export interface UiStrings {
   resetToDefault: string;
   shutDown: string;
   minimizeAllWindows: string;
+  taskManager: string;
   restore: string;
   minimize: string;
   close: string;
+  // System menu (title-bar icon click)
+  sysMaximize: string;
+  sysMove: string;
+  sysSize: string;
+  sysZoom2x: string;
+  sysFullscreen: string;
   welcomeTitle: string;
   welcomeHeading: string;
   welcomeIntro: string;
@@ -140,6 +147,24 @@ export interface UiStrings {
   sizeKB: string;              // "KB" (French: "Ko")
   sizeMB: string;              // "MB" (French: "Mo")
   sizeGB: string;              // "GB" (French: "Go")
+  // Workbench export/import
+  exportWorkbench: string;
+  importWorkbench: string;
+  confirmImportWorkbench: string;
+  workbenchImportFailed: string;
+  workbenchExporting: string;
+  workbenchImporting: string;
+  workbenchPhaseReading: string;
+  workbenchPhaseCompressing: string;
+  workbenchPhaseLoading: string;
+  workbenchPhaseDecompressing: string;
+  workbenchPhaseRestoring: string;
+  workbenchPhaseFinalizing: string;
+  // Right-click download
+  download: string;
+  downloadAsZip: string;
+  downloadingZip: string;
+  downloadFailed: string;
 }
 
 const en: UiStrings = {
@@ -147,12 +172,18 @@ const en: UiStrings = {
   welcome: 'Welcome',
   regionalSettings: 'Regional Settings',
   githubProject: 'GitHub Project',
-  resetToDefault: 'Reset to Default...',
+  resetToDefault: 'Reset Workbench...',
   shutDown: 'Shut Down...',
   minimizeAllWindows: 'Minimize All Windows',
+  taskManager: 'Task Manager',
   restore: 'Restore',
   minimize: 'Minimize',
   close: 'Close',
+  sysMaximize: 'Maximize',
+  sysMove: 'Move',
+  sysSize: 'Size',
+  sysZoom2x: 'Zoom 2×',
+  sysFullscreen: 'Full Screen',
   welcomeTitle: 'Welcome',
   welcomeHeading: 'Welcome to RetroTick',
   welcomeIntro: 'Drag and drop any EXE or DLL onto the desktop, or add these example programs:',
@@ -260,6 +291,23 @@ const en: UiStrings = {
   statusObjects: '{0} object(s)',
   statusSelected: '{0} object(s) selected',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Export Workbench...",
+  importWorkbench: "Import Workbench...",
+  confirmImportWorkbench: "Importing a workbench will replace all current files and settings. Continue?",
+  workbenchImportFailed: "Failed to import workbench: {0}",
+  workbenchExporting: "Exporting Workbench...",
+  workbenchImporting: "Importing Workbench...",
+  workbenchPhaseReading: "Reading data ({0}/{1})...",
+  workbenchPhaseCompressing: "Compressing...",
+  workbenchPhaseLoading: "Reading file ({0} / {1})...",
+  workbenchPhaseDecompressing: "Decompressing...",
+  workbenchPhaseRestoring: "Restoring data ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalizing...",
+  download: "Download",
+  downloadAsZip: "Download as .zip",
+  downloadingZip: "Building archive...",
+  downloadFailed: "Download failed: {0}",
 };
 
 const fr: UiStrings = {
@@ -267,12 +315,18 @@ const fr: UiStrings = {
   welcome: 'Bienvenue',
   regionalSettings: 'Param\u00e8tres r\u00e9gionaux',
   githubProject: 'Projet GitHub',
-  resetToDefault: 'R\u00e9initialiser...',
+  resetToDefault: 'R\u00e9initialiser le workbench...',
   shutDown: 'Arr\u00eater...',
   minimizeAllWindows: 'R\u00e9duire toutes les fen\u00eatres',
+  taskManager: 'Gestionnaire des t\u00e2ches',
   restore: 'Restaurer',
   minimize: 'R\u00e9duire',
   close: 'Fermer',
+  sysMaximize: 'Agrandir',
+  sysMove: 'D\u00e9placer',
+  sysSize: 'Dimension',
+  sysZoom2x: 'Zoom 2\u00d7',
+  sysFullscreen: 'Plein \u00e9cran',
   welcomeTitle: 'Bienvenue',
   welcomeHeading: 'Bienvenue dans RetroTick',
   welcomeIntro: 'Glissez-d\u00e9posez un EXE ou DLL sur le bureau, ou ajoutez ces exemples\u00a0:',
@@ -380,6 +434,23 @@ const fr: UiStrings = {
   statusObjects: '{0} objet(s)',
   statusSelected: '{0} objet(s) s\u00e9lectionn\u00e9(s)',
   sizeKB: 'Ko', sizeMB: 'Mo', sizeGB: 'Go',
+  // Workbench export/import
+  exportWorkbench: "Exporter le workbench...",
+  importWorkbench: "Importer un workbench...",
+  confirmImportWorkbench: "Importer un workbench remplacera tous les fichiers et paramètres actuels. Continuer ?",
+  workbenchImportFailed: "Échec de l’importation du workbench : {0}",
+  workbenchExporting: "Exportation du workbench...",
+  workbenchImporting: "Importation du workbench...",
+  workbenchPhaseReading: "Lecture des données ({0}/{1})...",
+  workbenchPhaseCompressing: "Compression...",
+  workbenchPhaseLoading: "Lecture du fichier ({0} / {1})...",
+  workbenchPhaseDecompressing: "Décompression...",
+  workbenchPhaseRestoring: "Restauration des données ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalisation...",
+  download: "Télécharger",
+  downloadAsZip: "Télécharger en .zip",
+  downloadingZip: "Création de l’archive...",
+  downloadFailed: "Échec du téléchargement : {0}",
 };
 
 const de: UiStrings = {
@@ -387,12 +458,18 @@ const de: UiStrings = {
   welcome: 'Willkommen',
   regionalSettings: 'L\u00e4ndereinstellungen',
   githubProject: 'GitHub-Projekt',
-  resetToDefault: 'Zur\u00fccksetzen...',
+  resetToDefault: 'Workbench zur\u00fccksetzen...',
   shutDown: 'Herunterfahren...',
   minimizeAllWindows: 'Alle Fenster minimieren',
+  taskManager: 'Task-Manager',
   restore: 'Wiederherstellen',
   minimize: 'Minimieren',
   close: 'Schlie\u00dfen',
+  sysMaximize: 'Maximieren',
+  sysMove: 'Verschieben',
+  sysSize: 'Gr\u00f6\u00dfe \u00e4ndern',
+  sysZoom2x: 'Zoom 2\u00d7',
+  sysFullscreen: 'Vollbild',
   welcomeTitle: 'Willkommen',
   welcomeHeading: 'Willkommen bei RetroTick',
   welcomeIntro: 'Ziehen Sie eine EXE- oder DLL-Datei auf den Desktop, oder f\u00fcgen Sie diese Beispielprogramme hinzu:',
@@ -500,6 +577,23 @@ const de: UiStrings = {
   statusObjects: '{0} Objekt(e)',
   statusSelected: '{0} Objekt(e) markiert',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Workbench exportieren...",
+  importWorkbench: "Workbench importieren...",
+  confirmImportWorkbench: "Beim Importieren eines Workbench werden alle aktuellen Dateien und Einstellungen ersetzt. Fortfahren?",
+  workbenchImportFailed: "Workbench-Import fehlgeschlagen: {0}",
+  workbenchExporting: "Workbench wird exportiert...",
+  workbenchImporting: "Workbench wird importiert...",
+  workbenchPhaseReading: "Daten werden gelesen ({0}/{1})...",
+  workbenchPhaseCompressing: "Komprimieren...",
+  workbenchPhaseLoading: "Datei wird gelesen ({0} / {1})...",
+  workbenchPhaseDecompressing: "Dekomprimieren...",
+  workbenchPhaseRestoring: "Daten werden wiederhergestellt ({0}/{1})...",
+  workbenchPhaseFinalizing: "Wird abgeschlossen...",
+  download: "Herunterladen",
+  downloadAsZip: "Als .zip herunterladen",
+  downloadingZip: "Archiv wird erstellt...",
+  downloadFailed: "Download fehlgeschlagen: {0}",
 };
 
 const es: UiStrings = {
@@ -507,12 +601,18 @@ const es: UiStrings = {
   welcome: 'Bienvenido',
   regionalSettings: 'Configuraci\u00f3n regional',
   githubProject: 'Proyecto GitHub',
-  resetToDefault: 'Restablecer...',
+  resetToDefault: 'Restablecer workbench...',
   shutDown: 'Apagar...',
   minimizeAllWindows: 'Minimizar todas las ventanas',
+  taskManager: 'Administrador de tareas',
   restore: 'Restaurar',
   minimize: 'Minimizar',
   close: 'Cerrar',
+  sysMaximize: 'Maximizar',
+  sysMove: 'Mover',
+  sysSize: 'Tamaño',
+  sysZoom2x: 'Zoom 2×',
+  sysFullscreen: 'Pantalla completa',
   welcomeTitle: 'Bienvenido',
   welcomeHeading: 'Bienvenido a RetroTick',
   welcomeIntro: 'Arrastre y suelte un EXE o DLL en el escritorio, o agregue estos programas de ejemplo:',
@@ -620,6 +720,23 @@ const es: UiStrings = {
   statusObjects: '{0} objeto(s)',
   statusSelected: '{0} objeto(s) seleccionado(s)',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Exportar workbench...",
+  importWorkbench: "Importar workbench...",
+  confirmImportWorkbench: "Importar un workbench reemplazará todos los archivos y la configuración actuales. ¿Continuar?",
+  workbenchImportFailed: "No se pudo importar el workbench: {0}",
+  workbenchExporting: "Exportando workbench...",
+  workbenchImporting: "Importando workbench...",
+  workbenchPhaseReading: "Leyendo datos ({0}/{1})...",
+  workbenchPhaseCompressing: "Comprimiendo...",
+  workbenchPhaseLoading: "Leyendo archivo ({0} / {1})...",
+  workbenchPhaseDecompressing: "Descomprimiendo...",
+  workbenchPhaseRestoring: "Restaurando datos ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalizando...",
+  download: "Descargar",
+  downloadAsZip: "Descargar como .zip",
+  downloadingZip: "Creando archivo...",
+  downloadFailed: "Error de descarga: {0}",
 };
 
 const ja: UiStrings = {
@@ -627,12 +744,18 @@ const ja: UiStrings = {
   welcome: '\u3088\u3046\u3053\u305d',
   regionalSettings: '\u5730\u57df\u306e\u8a2d\u5b9a',
   githubProject: 'GitHub \u30d7\u30ed\u30b8\u30a7\u30af\u30c8',
-  resetToDefault: '\u65e2\u5b9a\u5024\u306b\u623b\u3059...',
+  resetToDefault: '\u30ef\u30fc\u30af\u30d9\u30f3\u30c1\u3092\u30ea\u30bb\u30c3\u30c8...',
   shutDown: '\u30b7\u30e3\u30c3\u30c8\u30c0\u30a6\u30f3...',
   minimizeAllWindows: '\u3059\u3079\u3066\u306e\u30a6\u30a3\u30f3\u30c9\u30a6\u3092\u6700\u5c0f\u5316',
+  taskManager: '\u30bf\u30b9\u30af \u30de\u30cd\u30fc\u30b8\u30e3\u30fc',
   restore: '\u5143\u306e\u30b5\u30a4\u30ba\u306b\u623b\u3059',
   minimize: '\u6700\u5c0f\u5316',
   close: '\u9589\u3058\u308b',
+  sysMaximize: '\u6700\u5927\u5316',
+  sysMove: '\u79fb\u52d5',
+  sysSize: '\u30b5\u30a4\u30ba\u5909\u66f4',
+  sysZoom2x: '\u30ba\u30fc\u30e0 2\u500d',
+  sysFullscreen: '\u5168\u753b\u9762\u8868\u793a',
   welcomeTitle: '\u3088\u3046\u3053\u305d',
   welcomeHeading: 'RetroTick \u3078\u3088\u3046\u3053\u305d',
   welcomeIntro: 'EXE \u307e\u305f\u306f DLL \u3092\u30c7\u30b9\u30af\u30c8\u30c3\u30d7\u306b\u30c9\u30e9\u30c3\u30b0\uff06\u30c9\u30ed\u30c3\u30d7\u3059\u308b\u304b\u3001\u4ee5\u4e0b\u306e\u30b5\u30f3\u30d7\u30eb\u30d7\u30ed\u30b0\u30e9\u30e0\u3092\u8ffd\u52a0\u3057\u3066\u304f\u3060\u3055\u3044:',
@@ -740,6 +863,23 @@ const ja: UiStrings = {
   statusObjects: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8',
   statusSelected: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u9078\u629e',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "ワークベンチをエクスポート...",
+  importWorkbench: "ワークベンチをインポート...",
+  confirmImportWorkbench: "ワークベンチをインポートすると、現在のすべてのファイルと設定が置き換えられます。続行しますか？",
+  workbenchImportFailed: "ワークベンチのインポートに失敗しました: {0}",
+  workbenchExporting: "ワークベンチをエクスポート中...",
+  workbenchImporting: "ワークベンチをインポート中...",
+  workbenchPhaseReading: "データを読み込み中 ({0}/{1})...",
+  workbenchPhaseCompressing: "圧縮中...",
+  workbenchPhaseLoading: "ファイルを読み込み中 ({0} / {1})...",
+  workbenchPhaseDecompressing: "展開中...",
+  workbenchPhaseRestoring: "データを復元中 ({0}/{1})...",
+  workbenchPhaseFinalizing: "完了処理中...",
+  download: "ダウンロード",
+  downloadAsZip: ".zip でダウンロード",
+  downloadingZip: "アーカイブを作成中...",
+  downloadFailed: "ダウンロードに失敗しました: {0}",
 };
 
 const zhCN: UiStrings = {
@@ -747,12 +887,18 @@ const zhCN: UiStrings = {
   welcome: '\u6b22\u8fce',
   regionalSettings: '\u533a\u57df\u8bbe\u7f6e',
   githubProject: 'GitHub \u9879\u76ee',
-  resetToDefault: '\u6062\u590d\u9ed8\u8ba4...',
+  resetToDefault: '\u91cd\u7f6e Workbench...',
   shutDown: '\u5173\u673a...',
   minimizeAllWindows: '\u6700\u5c0f\u5316\u6240\u6709\u7a97\u53e3',
+  taskManager: '\u4efb\u52a1\u7ba1\u7406\u5668',
   restore: '\u8fd8\u539f',
   minimize: '\u6700\u5c0f\u5316',
   close: '\u5173\u95ed',
+  sysMaximize: '\u6700\u5927\u5316',
+  sysMove: '\u79fb\u52a8',
+  sysSize: '\u5927\u5c0f',
+  sysZoom2x: '\u7f29\u653e 2\u00d7',
+  sysFullscreen: '\u5168\u5c4f',
   welcomeTitle: '\u6b22\u8fce',
   welcomeHeading: '\u6b22\u8fce\u4f7f\u7528 RetroTick',
   welcomeIntro: '\u5c06 EXE \u6216 DLL \u6587\u4ef6\u62d6\u653e\u5230\u684c\u9762\uff0c\u6216\u6dfb\u52a0\u4ee5\u4e0b\u793a\u4f8b\u7a0b\u5e8f\uff1a',
@@ -860,6 +1006,23 @@ const zhCN: UiStrings = {
   statusObjects: '{0} \u4e2a\u5bf9\u8c61',
   statusSelected: '\u9009\u62e9\u4e86 {0} \u4e2a\u5bf9\u8c61',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "导出 Workbench...",
+  importWorkbench: "导入 Workbench...",
+  confirmImportWorkbench: "导入 Workbench 将替换所有当前的文件和设置。是否继续？",
+  workbenchImportFailed: "Workbench 导入失败：{0}",
+  workbenchExporting: "正在导出 Workbench...",
+  workbenchImporting: "正在导入 Workbench...",
+  workbenchPhaseReading: "正在读取数据 ({0}/{1})...",
+  workbenchPhaseCompressing: "正在压缩...",
+  workbenchPhaseLoading: "正在读取文件 ({0} / {1})...",
+  workbenchPhaseDecompressing: "正在解压...",
+  workbenchPhaseRestoring: "正在恢复数据 ({0}/{1})...",
+  workbenchPhaseFinalizing: "正在完成...",
+  download: "下载",
+  downloadAsZip: "下载为 .zip",
+  downloadingZip: "正在创建压缩包...",
+  downloadFailed: "下载失败：{0}",
 };
 
 const ptBR: UiStrings = {
@@ -867,12 +1030,18 @@ const ptBR: UiStrings = {
   welcome: 'Bem-vindo',
   regionalSettings: 'Configura\u00e7\u00f5es regionais',
   githubProject: 'Projeto GitHub',
-  resetToDefault: 'Restaurar padr\u00e3o...',
+  resetToDefault: 'Restaurar workbench...',
   shutDown: 'Desligar...',
   minimizeAllWindows: 'Minimizar todas as janelas',
+  taskManager: 'Gerenciador de Tarefas',
   restore: 'Restaurar',
   minimize: 'Minimizar',
   close: 'Fechar',
+  sysMaximize: 'Maximizar',
+  sysMove: 'Mover',
+  sysSize: 'Tamanho',
+  sysZoom2x: 'Zoom 2×',
+  sysFullscreen: 'Tela cheia',
   welcomeTitle: 'Bem-vindo',
   welcomeHeading: 'Bem-vindo ao RetroTick',
   welcomeIntro: 'Arraste e solte um EXE ou DLL na \u00e1rea de trabalho, ou adicione estes programas de exemplo:',
@@ -980,6 +1149,23 @@ const ptBR: UiStrings = {
   statusObjects: '{0} objeto(s)',
   statusSelected: '{0} objeto(s) selecionado(s)',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Exportar workbench...",
+  importWorkbench: "Importar workbench...",
+  confirmImportWorkbench: "Importar um workbench substituirá todos os arquivos e configurações atuais. Continuar?",
+  workbenchImportFailed: "Falha ao importar o workbench: {0}",
+  workbenchExporting: "Exportando workbench...",
+  workbenchImporting: "Importando workbench...",
+  workbenchPhaseReading: "Lendo dados ({0}/{1})...",
+  workbenchPhaseCompressing: "Compactando...",
+  workbenchPhaseLoading: "Lendo arquivo ({0} / {1})...",
+  workbenchPhaseDecompressing: "Descompactando...",
+  workbenchPhaseRestoring: "Restaurando dados ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalizando...",
+  download: "Baixar",
+  downloadAsZip: "Baixar como .zip",
+  downloadingZip: "Criando arquivo...",
+  downloadFailed: "Falha no download: {0}",
 };
 
 const it: UiStrings = {
@@ -987,12 +1173,18 @@ const it: UiStrings = {
   welcome: 'Benvenuto',
   regionalSettings: 'Impostazioni internazionali',
   githubProject: 'Progetto GitHub',
-  resetToDefault: 'Ripristina predefiniti...',
+  resetToDefault: 'Ripristina workbench...',
   shutDown: 'Arresta il sistema...',
   minimizeAllWindows: 'Riduci a icona tutte le finestre',
+  taskManager: 'Gestione attività',
   restore: 'Ripristina',
   minimize: 'Riduci a icona',
   close: 'Chiudi',
+  sysMaximize: 'Ingrandisci',
+  sysMove: 'Sposta',
+  sysSize: 'Dimensione',
+  sysZoom2x: 'Zoom 2×',
+  sysFullscreen: 'Schermo intero',
   welcomeTitle: 'Benvenuto',
   welcomeHeading: 'Benvenuto in RetroTick',
   welcomeIntro: 'Trascinare un file EXE o DLL sul desktop, oppure aggiungere questi programmi di esempio:',
@@ -1100,6 +1292,23 @@ const it: UiStrings = {
   statusObjects: '{0} oggetto/i',
   statusSelected: '{0} oggetto/i selezionato/i',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Esporta workbench...",
+  importWorkbench: "Importa workbench...",
+  confirmImportWorkbench: "L’importazione di un workbench sostituirà tutti i file e le impostazioni correnti. Continuare?",
+  workbenchImportFailed: "Importazione del workbench non riuscita: {0}",
+  workbenchExporting: "Esportazione workbench in corso...",
+  workbenchImporting: "Importazione workbench in corso...",
+  workbenchPhaseReading: "Lettura dei dati ({0}/{1})...",
+  workbenchPhaseCompressing: "Compressione...",
+  workbenchPhaseLoading: "Lettura del file ({0} / {1})...",
+  workbenchPhaseDecompressing: "Decompressione...",
+  workbenchPhaseRestoring: "Ripristino dei dati ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalizzazione...",
+  download: "Scarica",
+  downloadAsZip: "Scarica come .zip",
+  downloadingZip: "Creazione archivio...",
+  downloadFailed: "Download non riuscito: {0}",
 };
 
 const pl: UiStrings = {
@@ -1107,12 +1316,18 @@ const pl: UiStrings = {
   welcome: 'Witamy',
   regionalSettings: 'Ustawienia regionalne',
   githubProject: 'Projekt GitHub',
-  resetToDefault: 'Przywr\u00f3\u0107 domy\u015blne...',
+  resetToDefault: 'Resetuj workbench...',
   shutDown: 'Zamknij system...',
   minimizeAllWindows: 'Minimalizuj wszystkie okna',
+  taskManager: 'Menedżer zadań',
   restore: 'Przywr\u00f3\u0107',
   minimize: 'Minimalizuj',
   close: 'Zamknij',
+  sysMaximize: 'Maksymalizuj',
+  sysMove: 'Przenie\u015b',
+  sysSize: 'Rozmiar',
+  sysZoom2x: 'Powi\u0119kszenie 2\u00d7',
+  sysFullscreen: 'Pe\u0142ny ekran',
   welcomeTitle: 'Witamy',
   welcomeHeading: 'Witamy w RetroTick',
   welcomeIntro: 'Przeci\u0105gnij plik EXE lub DLL na pulpit, lub dodaj te przyk\u0142adowe programy:',
@@ -1220,6 +1435,23 @@ const pl: UiStrings = {
   statusObjects: 'Obiekt\u00f3w: {0}',
   statusSelected: 'Zaznaczonych obiekt\u00f3w: {0}',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "Eksportuj workbench...",
+  importWorkbench: "Importuj workbench...",
+  confirmImportWorkbench: "Zaimportowanie workbencha zastąpi wszystkie bieżące pliki i ustawienia. Kontynuować?",
+  workbenchImportFailed: "Importowanie workbencha nie powiodło się: {0}",
+  workbenchExporting: "Eksportowanie workbencha...",
+  workbenchImporting: "Importowanie workbencha...",
+  workbenchPhaseReading: "Odczyt danych ({0}/{1})...",
+  workbenchPhaseCompressing: "Kompresja...",
+  workbenchPhaseLoading: "Odczyt pliku ({0} / {1})...",
+  workbenchPhaseDecompressing: "Dekompresja...",
+  workbenchPhaseRestoring: "Przywracanie danych ({0}/{1})...",
+  workbenchPhaseFinalizing: "Finalizowanie...",
+  download: "Pobierz",
+  downloadAsZip: "Pobierz jako .zip",
+  downloadingZip: "Tworzenie archiwum...",
+  downloadFailed: "Pobieranie nie powiodło się: {0}",
 };
 
 const ko: UiStrings = {
@@ -1227,12 +1459,18 @@ const ko: UiStrings = {
   welcome: '환영합니다',
   regionalSettings: '국가별 설정',
   githubProject: 'GitHub 프로젝트',
-  resetToDefault: '기본값으로 복원...',
+  resetToDefault: '워크벤치 재설정...',
   shutDown: '시스템 종료...',
   minimizeAllWindows: '모든 창 최소화',
+  taskManager: '작업 관리자',
   restore: '복원',
   minimize: '최소화',
   close: '닫기',
+  sysMaximize: '최대화',
+  sysMove: '이동',
+  sysSize: '크기 조정',
+  sysZoom2x: '확대 2×',
+  sysFullscreen: '전체 화면',
   welcomeTitle: '환영합니다',
   welcomeHeading: 'RetroTick에 오신 것을 환영합니다',
   welcomeIntro: 'EXE 또는 DLL 파일을 바탕 화면에 끌어다 놓거나, 아래 예제 프로그램을 추가하세요:',
@@ -1340,6 +1578,23 @@ const ko: UiStrings = {
   statusObjects: '\uac1c\uccb4 {0}\uac1c',
   statusSelected: '{0}\uac1c \uac1c\uccb4 \uc120\ud0dd',
   sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
+  // Workbench export/import
+  exportWorkbench: "워크벤치 내보내기...",
+  importWorkbench: "워크벤치 가져오기...",
+  confirmImportWorkbench: "워크벤치를 가져오면 현재 모든 파일과 설정이 대체됩니다. 계속하시겠습니까?",
+  workbenchImportFailed: "워크벤치 가져오기에 실패했습니다: {0}",
+  workbenchExporting: "워크벤치 내보내는 중...",
+  workbenchImporting: "워크벤치 가져오는 중...",
+  workbenchPhaseReading: "데이터 읽는 중 ({0}/{1})...",
+  workbenchPhaseCompressing: "압축 중...",
+  workbenchPhaseLoading: "파일 읽는 중 ({0} / {1})...",
+  workbenchPhaseDecompressing: "압축 푸는 중...",
+  workbenchPhaseRestoring: "데이터 복원 중 ({0}/{1})...",
+  workbenchPhaseFinalizing: "마무리 중...",
+  download: "다운로드",
+  downloadAsZip: ".zip으로 다운로드",
+  downloadingZip: "아카이브 만드는 중...",
+  downloadFailed: "다운로드 실패: {0}",
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

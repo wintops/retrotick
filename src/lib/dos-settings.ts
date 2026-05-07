@@ -31,7 +31,7 @@ export interface DosSettings {
 const STORAGE_KEY = 'retrotick-dos';
 
 const DEFAULTS: DosSettings = {
-  textRenderer: 'dom',
+  textRenderer: 'canvas',
   jitEnabled: false,
   dpmi: false,
   v86: false,

@@ -2,9 +2,7 @@ import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preac
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
-import { injectDosMouseEvent, drawGfxMouseCursor } from '../lib/emu/dos/mouse';
-import { VGA_FONT_8X8_ROM } from '../lib/emu/dos/vga-font-data';
-import { VGA_FONT_8X16_ROM } from '../lib/emu/dos/vga-font-16';
+import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride, getDisplayedTextCursor } from '../lib/emu/dos/mouse';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -58,7 +56,8 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
   if (!ctx) return;
 
   const charH = emu.charHeight === 8 ? 8 : 16;
-  const fontData = charH === 8 ? VGA_FONT_8X8_ROM : VGA_FONT_8X16_ROM;
+  const fontRAM = emu.vga.fontRAM;
+  const banks = emu.vga.getCharMapBanks();
   const COLORS = getVgaConsoleColorsRGB(emu);
   const CHAR_W = 8;
   const w = COLS * CHAR_W;
@@ -72,21 +71,33 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
   const imgData = ctx.createImageData(w, h);
   const pixels = imgData.data;
 
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
+
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      const ch = cell ? cell.char : 0x20;
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      const ch = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0x20);
+      const attr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      let fg: number;
+      let bank: number;
+      if (banks.fontSwitchActive) {
+        fg = attr & 0x07;
+        bank = (attr & 0x08) ? banks.mapA : banks.mapB;
+      } else {
+        fg = attr & 0x0F;
+        bank = banks.mapA;
+      }
+      const bg = (attr >> 4) & 0x0F;
       const fgColor = COLORS[fg];
       const bgColor = COLORS[bg];
-      const fontOffset = (ch & 0xFF) * charH;
+      const fontOffset = (bank & 0x07) * 256 * 32 + (ch & 0xFF) * 32;
       const px = col * CHAR_W;
       const py = row * charH;
 
       for (let y = 0; y < charH; y++) {
-        const bits = fontData[fontOffset + y];
+        const bits = fontRAM[fontOffset + y];
         const rowBase = ((py + y) * w + px) * 4;
         for (let x = 0; x < 8; x++) {
           const isSet = (bits >> (7 - x)) & 1;
@@ -103,19 +114,20 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
 
   ctx.putImageData(imgData, 0, 0);
 
-  // Cursor
-  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  // Cursor (BIOS or hardware mouse cursor — they share the unique CRTC cursor)
+  const cur = getDisplayedTextCursor(emu, COLS, ROWS);
   const blink = Math.floor(Date.now() / 500) % 2 === 0;
-  if (blink && !cursorOff && cursorStart <= cursorEnd) {
-    const cx = emu.consoleCursorX * CHAR_W;
-    const cy = emu.consoleCursorY * charH;
-    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+  // Clamp scanlines to current cell height (e.g. charH=8 in 80x50 mode)
+  const cs = Math.min(cur.start, charH - 1);
+  const ce = Math.min(cur.end, charH - 1);
+  if (blink && !cur.disabled && cs <= ce) {
+    const cx = cur.x * CHAR_W;
+    const cy = cur.y * charH;
+    const curCell = emu.consoleBuffer[cur.y * COLS + cur.x];
     const curFg = curCell ? (curCell.attr & 0x0F) : 7;
     const c = COLORS[curFg === 0 ? 7 : curFg];
     ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
-    ctx.fillRect(cx, cy + cursorStart, CHAR_W, cursorEnd - cursorStart + 1);
+    ctx.fillRect(cx, cy + cs, CHAR_W, ce - cs + 1);
   }
 }
 
@@ -132,44 +144,62 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
 
   const COLORS = DEFAULT_CONSOLE_COLORS;
   const lineH = 16;
+  const cellW = 8;
   const font = `${lineH}px ${TEXT_FONT}`;
   ctx.font = font;
-  const charW = ctx.measureText('0').width;
+  const naturalCharW = ctx.measureText('0').width;
+  // Compress the natural-width font into 8-pixel cells so the canvas backing
+  // dimensions match the CSS box (640×400 for 80×25). Without this scale, the
+  // canvas was sized to ceil(COLS×naturalCharW) ≈ 768 and the browser
+  // downsampled 768→640 with a non-integer ratio, making some columns lose a
+  // pixel and producing visibly uneven vertical strokes (e.g. on '0' or '||').
+  const xScale = cellW / naturalCharW;
 
-  // Size canvas to natural font metrics — CSS scales to 640×480
-  const cw = Math.ceil(COLS * charW);
+  // Size canvas to match its CSS box exactly — every cell column is 1 css pixel.
+  const cw = COLS * cellW;
   const ch = ROWS * lineH;
   if (canvas.width !== cw || canvas.height !== ch) {
     canvas.width = cw;
     canvas.height = ch;
-    ctx.font = font; // Resizing clears context state
-    ctx.textBaseline = 'top';
   }
+  // Re-apply state every frame: a canvas-width assignment clears it, but the
+  // <canvas> element may also have been mounted by JSX at exactly (cw, ch),
+  // in which case the if above never runs and the context still carries its
+  // default textBaseline='alphabetic' — fillText would then draw glyphs ~12 px
+  // above their intended top, hiding row 0 off-screen.
+  ctx.font = font;
+  ctx.textBaseline = 'top';
 
-  // Clear
+  // Clear (canvas coords, no scale)
   ctx.fillStyle = COLORS[0];
   ctx.fillRect(0, 0, cw, ch);
+
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
+
+  ctx.save();
+  ctx.scale(xScale, 1);
 
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      if (cell && cell.char === 0) continue;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      if (!isMouseCell && cell && cell.char === 0) continue;
 
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
-      const x = col * charW;
+      const effChar = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0);
+      const effAttr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      const fg = effAttr & 0x0F;
+      const bg = (effAttr >> 4) & 0x0F;
+      const x = col * naturalCharW;
       const y = row * lineH;
-      const wide = cell && cell.char > 0x20 && isFullwidth(cell.char);
+      const wide = !isMouseCell && cell && cell.char > 0x20 && isFullwidth(cell.char);
 
-      // Background — +1px overlap to prevent fractional pixel gaps
+      // Background — +1px overlap (in scaled coords) to prevent fractional gaps
       ctx.fillStyle = COLORS[bg];
-      ctx.fillRect(x, y, (wide ? charW * 2 : charW) + 1, lineH);
+      ctx.fillRect(x, y, (wide ? naturalCharW * 2 : naturalCharW) + 1, lineH);
 
       // Character
-      const c = (cell && cell.char > 0x20)
-        ? String.fromCharCode(cell.char)
-        : '';
+      const c = effChar > 0x20 ? String.fromCharCode(effChar) : '';
       if (c) {
         ctx.fillStyle = COLORS[fg];
         ctx.fillText(c, x, y);
@@ -177,18 +207,21 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
     }
   }
 
-  // Cursor
-  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  ctx.restore();
+
+  // Cursor (BIOS or hardware mouse cursor) — drawn outside ctx.scale so the
+  // rectangle is exactly cellW wide in canvas pixels.
+  const cur = getDisplayedTextCursor(emu, COLS, ROWS);
   const blink = Math.floor(Date.now() / 500) % 2 === 0;
-  if (blink && !cursorOff && cursorStart <= cursorEnd) {
-    const cx = emu.consoleCursorX * charW;
-    const cy = emu.consoleCursorY * lineH;
-    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+  const cs = Math.min(cur.start, lineH - 1);
+  const ce = Math.min(cur.end, lineH - 1);
+  if (blink && !cur.disabled && cs <= ce) {
+    const cx = cur.x * cellW;
+    const cy = cur.y * lineH;
+    const curCell = emu.consoleBuffer[cur.y * COLS + cur.x];
     const curFg = curCell ? (curCell.attr & 0x0F) : 7;
     ctx.fillStyle = COLORS[curFg === 0 ? 7 : curFg];
-    ctx.fillRect(cx, cy + cursorStart, charW, cursorEnd - cursorStart + 1);
+    ctx.fillRect(cx, cy + cs, cellW, ce - cs + 1);
   }
 }
 
@@ -295,9 +328,14 @@ function charToVK(ch: number): number {
 interface ConsoleViewProps {
   emu: Emulator;
   focused?: boolean;
+  /** Display-size multiplier applied to the 640×480 logical surface. */
+  zoom?: number;
+  /** Fired when the console's display dimensions change (graphics ↔ text mode
+   *  or text rows / char height change), so the parent can resize the window. */
+  onScreenLayoutChange?: () => void;
 }
 
-export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
+export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChange }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -329,6 +367,13 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
         render();
       }
     };
+    // Framebuffer reallocated (resolution change) — re-render so the JSX
+    // re-applies width/height props to the canvas DOM element, and notify
+    // the parent so it can resize the surrounding window.
+    emu.onVideoModeChange = () => {
+      render();
+      onScreenLayoutChange?.();
+    };
     render();
     inputRef.current?.focus();
     const blinkTimer = setInterval(render, 500);
@@ -336,6 +381,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       clearInterval(blinkTimer);
       emu.onConsoleOutput = undefined;
       emu.onVideoFrame = undefined;
+      emu.onVideoModeChange = undefined;
     };
   }, [emu, render]);
 
@@ -348,15 +394,16 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const COLORS = emu.isDOS ? getVgaConsoleColors(emu) : DEFAULT_CONSOLE_COLORS;
 
   // Cursor shape from CRTC registers
-  const cursorStartScanline = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEndScanline = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorDisabled = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
   const charH = emu.charHeight || 16;
+  const displayedCursor = getDisplayedTextCursor(emu, COLS, ROWS);
+  const cursorStartScanline = Math.min(displayedCursor.start, charH - 1);
+  const cursorEndScanline = Math.min(displayedCursor.end, charH - 1);
   const cursorBlink = Math.floor(Date.now() / 500) % 2 === 0;
-  const cursorActive = cursorBlink && !cursorDisabled && cursorStartScanline <= cursorEndScanline;
+  const cursorActive = cursorBlink && !displayedCursor.disabled && cursorStartScanline <= cursorEndScanline;
 
   // Build DOM content from console buffer
   const lineHeight = emu.charHeight === 8 ? 8 : 16;
+  const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
   const rows: preact.JSX.Element[] = [];
   for (let row = 0; row < ROWS; row++) {
     const spans: preact.JSX.Element[] = [];
@@ -373,15 +420,18 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     for (let col = 0; col < COLS; col++) {
       const idx = row * COLS + col;
       const cell = emu.consoleBuffer[idx];
-      if (cell && cell.char === 0) continue;
-      const fg = cell ? (cell.attr & 0x0F) : 7;
-      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
-      const isCursor = row === emu.consoleCursorY && col === emu.consoleCursorX;
-      const charCode = cell ? cell.char : 0;
+      const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
+      if (!isMouseCell && cell && cell.char === 0) continue;
+      const effAttr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
+      const effChar = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0);
+      const fg = effAttr & 0x0F;
+      const bg = (effAttr >> 4) & 0x0F;
+      const isCursor = row === displayedCursor.y && col === displayedCursor.x;
+      const charCode = effChar;
       const ch = (charCode > 0 && charCode !== 0x20)
         ? (emu.isDOS && charCode <= 0xFF ? cp437ToChar(charCode) : String.fromCharCode(charCode))
         : '\u00A0';
-      const wide = charCode > 0x20 && isFullwidth(charCode);
+      const wide = !isMouseCell && charCode > 0x20 && isFullwidth(charCode);
 
       if (isCursor && cursorActive) {
         flushRun();
@@ -775,12 +825,22 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     const px = Math.round((e.clientX - rect.left) * 640 / rect.width);
     const py = Math.round((e.clientY - rect.top) * 480 / rect.height);
     injectDosMouseEvent(emu, px, py, 640, 480, e.buttons, type);
-  }, [emu]);
+    // In text mode, the cursor doesn't follow the framebuffer (no onVideoFrame).
+    // Force a re-render so the mouse cell follows the pointer.
+    if (!emu.isGraphicsMode && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0) {
+      render();
+    }
+  }, [emu, render]);
 
-  // Measure actual ch width and compute scaleX to fit 80 columns into 640px
+  // Measure actual ch width and compute scaleX to fit 80 columns into 640px.
+  // useCanvas is in the deps so the measurement re-runs when the user
+  // toggles between DOM and canvas renderers — when the app boots in canvas
+  // mode the <pre> isn't mounted, preRef stays null, and the initial run
+  // bails before measuring; without this dep, switching to DOM later would
+  // keep scaleX at its default 1 and stretch the layout horizontally.
   const [scaleX, setScaleX] = useState(1);
   useEffect(() => {
-    if (emu.isGraphicsMode) return;
+    if (emu.isGraphicsMode || useCanvas) return;
     const el = preRef.current;
     if (!el) return;
     const span = document.createElement('span');
@@ -792,7 +852,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     const chWidth = span.getBoundingClientRect().width;
     document.body.removeChild(span);
     if (chWidth > 0) setScaleX(640 / (COLS * chWidth));
-  }, [COLS, emu.isGraphicsMode, lineHeight]);
+  }, [COLS, emu.isGraphicsMode, lineHeight, useCanvas]);
 
   // Canvas text mode: draw after each render
   useLayoutEffect(() => {
@@ -805,11 +865,17 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const fb = emu.vga.framebuffer;
   const gfxWidth = fb ? fb.width : emu.vga.currentMode.width;
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
-  const dosMouseVisible = isGfx && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
+  const dosMouseVisible = emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
+  const dosTextMouseVisible = !isGfx && dosMouseVisible;
 
+  const dispW = 640 * zoom;
+  // Text modes use their natural pixel height (rows × charH = 400 for 80×25
+  // and 80×50) so there is no fractional vertical stretch. Graphics modes
+  // keep the 480 client area regardless of the underlying framebuffer.
+  const dispH = (isGfx ? 480 : ROWS * lineHeight) * zoom;
   return (
     <div
-      style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }}
+      style={{ position: 'relative', width: `${dispW}px`, height: `${dispH}px`, background: '#000' }}
       onPointerUp={(e) => { handleMouseEvent(e, 'up'); handleClick(); }}
       onPointerDown={(e) => handleMouseEvent(e, 'down')}
       onPointerMove={(e) => handleMouseEvent(e, 'move')}
@@ -817,25 +883,30 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     >
       {isGfx ? (
         <canvas
+          key="gfx"
           ref={canvasRef}
           width={gfxWidth}
           height={gfxHeight}
           style={{
             display: 'block',
-            width: '640px',
-            height: '480px',
+            width: `${dispW}px`,
+            height: `${dispH}px`,
             imageRendering: 'pixelated',
-            cursor: dosMouseVisible ? 'none' : 'default',
+            cursor: isGfx && dosMouseVisible ? 'none' : 'default',
           }}
         />
       ) : useCanvas ? (
         <canvas
+          key="text"
           ref={textCanvasRef}
           width={640}
-          height={480}
+          height={ROWS * lineHeight}
           style={{
-            width: '640px',
-            height: '480px',
+            display: 'block',
+            width: `${dispW}px`,
+            height: `${dispH}px`,
+            imageRendering: 'pixelated',
+            cursor: dosTextMouseVisible ? 'none' : 'default',
           }}
         />
       ) : (
@@ -848,7 +919,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             background: '#000',
             color: '#C0C0C0',
             font: `${lineHeight}px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
-            cursor: 'text',
+            cursor: dosTextMouseVisible ? 'none' : 'text',
             overflow: 'hidden',
             userSelect: 'text',
             width: `${COLS}ch`,
@@ -856,7 +927,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             lineHeight: `${lineHeight}px`,
             letterSpacing: '0px',
             transformOrigin: 'top left',
-            transform: `scaleX(${scaleX}) scaleY(${480 / (ROWS * lineHeight)}) translateZ(0)`,
+            transform: `scaleX(${scaleX * zoom}) scaleY(${dispH / (ROWS * lineHeight)}) translateZ(0)`,
           }}
         >
           {rows}

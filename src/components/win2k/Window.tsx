@@ -1,5 +1,21 @@
 import type { ComponentChildren } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
+import { MenuDropdown } from './MenuBar';
+import { t } from '../../lib/regional-settings';
+import type { MenuItem } from '../../lib/pe/types';
+
+// Real Windows system menu commands. We keep the canonical SC_* values so that
+// callers integrating with WM_SYSCOMMAND can recognise them; non-Windows extras
+// (Zoom 2×, Fullscreen) get private IDs in the 0xE000 range.
+const SC_SIZE       = 0xF000;
+const SC_MOVE       = 0xF010;
+const SC_MINIMIZE   = 0xF020;
+const SC_MAXIMIZE   = 0xF030;
+const SC_CLOSE      = 0xF060;
+const SC_RESTORE    = 0xF120;
+const SC_ZOOM2X     = 0xE001;
+const SC_FULLSCREEN = 0xE002;
+const DOUBLE_CLICK_MS = 400;
 
 // --- Caption bar button SVGs ---
 
@@ -38,11 +54,43 @@ export function capBtnSvg(svgMarkup: string, bgPos: string, onClick?: () => void
   );
 }
 
+/** Caption-bar text button (e.g. "2×"). `active` renders as sunken. */
+export function capBtnText(label: string, onClick?: () => void, active?: boolean, title?: string) {
+  const [pressed, setPressed] = useState(false);
+  const sunken = pressed || active;
+  return (
+    <span
+      title={title}
+      onPointerDown={(e) => { e.stopPropagation(); setPressed(true); }}
+      onPointerUp={() => { setPressed(false); onClick?.(); }}
+      onPointerLeave={() => setPressed(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '22px', height: '14px', background: '#D4D0C8',
+        border: '1px solid',
+        borderColor: sunken ? '#404040 #FFF #FFF #404040' : '#FFF #404040 #404040 #FFF',
+        boxShadow: sunken ? 'none' : 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
+        cursor: 'var(--win2k-cursor)',
+        font: 'bold 9px/1 "Tahoma",sans-serif',
+        color: '#000',
+        userSelect: 'none',
+        paddingBottom: sunken ? '0' : '1px',
+        paddingRight: sunken ? '0' : '1px',
+        paddingTop: sunken ? '1px' : '0',
+        paddingLeft: sunken ? '1px' : '0',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 export const svgMin = "<svg width='6' height='2' xmlns='http://www.w3.org/2000/svg'><rect width='6' height='2' fill='#000'/></svg>";
 export const svgMax = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M0 0h9v9H0V0zm1 2h7v6H1V2z' fill='#000'/></svg>";
 export const svgRestore = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M2 0h7v7H7v2H0V2h2V0zm1 2h4v1H3v3H2V2h1zm-1 2h5v4H1V4h1zm0 1v2h4V5H2z' fill='#000'/></svg>";
 export const svgClose = "<svg width='8' height='7' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M0 0h2v1h1v1h2V1h1V0h2v1H7v1H6v1H5v1h1v1h1v1h1v1H6V6H5V5H3v1H2v1H0V6h1V5h1V4h1V3H2V2H1V1H0V0z' fill='#000'/></svg>";
 export const svgHelp = "<svg width='6' height='9' xmlns='http://www.w3.org/2000/svg'><path fill='#000' d='M0 1h2v2H0zM1 0h4v1H1zM4 1h2v2H4zM3 3h2v1H3zM2 4h2v2H2zM2 7h2v2H2z'/></svg>";
+export const svgFullscreen = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill='#000' d='M0 0h4v1H1v3H0V0zm5 0h4v4H8V1H5V0zM0 5h1v3h3v1H0V5zm8 0h1v4H5V8h3V5z'/></svg>";
 
 // --- Window Style Constants ---
 export const WS_BORDER      = 0x00800000;
@@ -88,6 +136,18 @@ interface WindowProps {
   /** Background color for the client area (default: inherited from frame) */
   clientBg?: string;
   lang?: string;
+  /** When provided, renders a "2×" button in the title bar that toggles zoom. */
+  onZoomToggle?: () => void;
+  /** Reflects current zoom state — button appears sunken when active. */
+  zoomActive?: boolean;
+  /** Reflects current fullscreen state — appears as a checkmark in the system menu. */
+  fullscreenActive?: boolean;
+  /** When provided, renders a fullscreen button in the title bar. */
+  onFullscreenToggle?: () => void;
+  /** System-menu Move command (mouse-driven move mode). Grayed if absent. */
+  onSystemMove?: () => void;
+  /** System-menu Size command (mouse-driven resize mode). Grayed if absent. */
+  onSystemSize?: () => void;
   children?: ComponentChildren;
 }
 
@@ -96,7 +156,9 @@ export function Window({
   focused = true, maximized, minimized,
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
-  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang, children,
+  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang,
+  onZoomToggle, zoomActive, fullscreenActive, onFullscreenToggle,
+  onSystemMove, onSystemSize, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
   const hasThickFrame = !!(wStyle & WS_THICKFRAME);
@@ -148,6 +210,87 @@ export function Window({
     window.addEventListener('pointerup', onUp);
     return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
   }, [draggable]);
+
+  // --- System menu (icon click) ---
+  const [sysMenuPos, setSysMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const iconRef = useRef<HTMLSpanElement>(null);
+  const lastIconClick = useRef(0);
+  const hasSysMenu = !!(wStyle & WS_SYSMENU);
+
+  const openSysMenu = () => {
+    const el = iconRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setSysMenuPos({ x: rect.left, y: rect.bottom });
+  };
+
+  const dispatchSysCmd = (id: number) => {
+    setSysMenuPos(null);
+    switch (id) {
+      case SC_RESTORE:
+        // For minimized windows the parent's title-bar dblclick handler knows
+        // how to restore (postMessage SC_RESTORE + handle un-minimize); for
+        // maximized windows onMaximize toggles back to normal.
+        if (minimized && onTitleBarDblClick) onTitleBarDblClick();
+        else onMaximize?.();
+        break;
+      case SC_MOVE:       onSystemMove?.(); break;
+      case SC_SIZE:       onSystemSize?.(); break;
+      case SC_MINIMIZE:   onMinimize?.(); break;
+      case SC_MAXIMIZE:   onMaximize?.(); break;
+      case SC_CLOSE:      onClose?.(); break;
+      case SC_ZOOM2X:     onZoomToggle?.(); break;
+      case SC_FULLSCREEN: onFullscreenToggle?.(); break;
+    }
+  };
+
+  const handleIconPointerDown = (e: PointerEvent) => {
+    if (!hasSysMenu) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastIconClick.current < DOUBLE_CLICK_MS) {
+      // Double-click on the system icon closes the window (Windows convention).
+      lastIconClick.current = 0;
+      setSysMenuPos(null);
+      onClose?.();
+    } else {
+      lastIconClick.current = now;
+      if (sysMenuPos) setSysMenuPos(null);
+      else openSysMenu();
+    }
+  };
+
+  // Close sysmenu on outside click while it's open.
+  useEffect(() => {
+    if (!sysMenuPos) return;
+    const close = () => setSysMenuPos(null);
+    const timer = setTimeout(() => document.addEventListener('pointerdown', close), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('pointerdown', close); };
+  }, [sysMenuPos]);
+
+  const buildSysMenuItems = (): MenuItem[] => {
+    const s = t();
+    const inNormal = !maximized && !minimized;
+    const items: MenuItem[] = [];
+    items.push({ id: SC_RESTORE,  text: s.restore,     isSeparator: false, isChecked: false, isGrayed: inNormal,                                          isDefault: false,    children: null });
+    items.push({ id: SC_MOVE,     text: s.sysMove,     isSeparator: false, isChecked: false, isGrayed: !!maximized || !onSystemMove,                       isDefault: false,    children: null });
+    items.push({ id: SC_SIZE,     text: s.sysSize,     isSeparator: false, isChecked: false, isGrayed: !!maximized || !(wStyle & WS_THICKFRAME) || !onSystemSize, isDefault: false, children: null });
+    items.push({ id: SC_MINIMIZE, text: s.minimize,    isSeparator: false, isChecked: false, isGrayed: !!minimized || !(wStyle & WS_MINIMIZEBOX),         isDefault: false,    children: null });
+    items.push({ id: SC_MAXIMIZE, text: s.sysMaximize, isSeparator: false, isChecked: false, isGrayed: !!maximized || !(wStyle & WS_MAXIMIZEBOX),         isDefault: false,    children: null });
+    items.push({ id: 0,           text: '',            isSeparator: true,  isChecked: false, isGrayed: false,                                              isDefault: false,    children: null });
+    items.push({ id: SC_CLOSE,    text: `${s.close}\tAlt+F4`, isSeparator: false, isChecked: false, isGrayed: false,                                       isDefault: true,     children: null });
+    if (onZoomToggle || onFullscreenToggle) {
+      items.push({ id: 0,           text: '',            isSeparator: true,  isChecked: false, isGrayed: false, isDefault: false, children: null });
+      if (onZoomToggle) {
+        items.push({ id: SC_ZOOM2X,     text: s.sysZoom2x,    isSeparator: false, isChecked: !!zoomActive,       isGrayed: false, isDefault: false, children: null });
+      }
+      if (onFullscreenToggle) {
+        items.push({ id: SC_FULLSCREEN, text: s.sysFullscreen, isSeparator: false, isChecked: !!fullscreenActive, isGrayed: false, isDefault: false, children: null });
+      }
+    }
+    return items;
+  };
 
   const handleDragTitleMouseDown = draggable ? (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('span[style*="border"]')) return;
@@ -211,14 +354,36 @@ export function Window({
             padding: '2px 2px', display: 'flex', alignItems: 'center',
             height: '20px', userSelect: 'none',
           }}>
-          {iconUrl ? (
-            <img src={iconUrl} style={{
-              display: 'inline-block', width: '16px', height: '16px', marginRight: '3px',
-              flexShrink: 0, imageRendering: 'pixelated',
-            }} />
-          ) : iconElement ? (
-            <span style={{ display: 'inline-flex', width: '16px', height: '16px', marginRight: '3px', flexShrink: 0 }}>{iconElement}</span>
-          ) : null}
+          {(iconUrl || iconElement) && (
+            <span
+              ref={iconRef}
+              onPointerDown={handleIconPointerDown}
+              onDblClick={(e) => { e.stopPropagation(); }}
+              style={{
+                display: 'inline-flex', width: '16px', height: '16px', marginRight: '3px',
+                flexShrink: 0, alignItems: 'center', justifyContent: 'center',
+                cursor: hasSysMenu ? 'var(--win2k-cursor)' : undefined,
+              }}
+            >
+              {iconUrl ? (
+                <img src={iconUrl} style={{
+                  display: 'block', width: '16px', height: '16px',
+                  imageRendering: 'pixelated', pointerEvents: 'none',
+                }} />
+              ) : (
+                <span style={{ display: 'inline-flex', width: '16px', height: '16px', pointerEvents: 'none' }}>{iconElement}</span>
+              )}
+              {sysMenuPos && (
+                <MenuDropdown
+                  items={buildSysMenuItems()}
+                  onCommand={dispatchSysCmd}
+                  onClose={() => setSysMenuPos(null)}
+                  x={sysMenuPos.x}
+                  y={sysMenuPos.y}
+                />
+              )}
+            </span>
+          )}
           <span style={{
             flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', letterSpacing: '0.2px', lineHeight: '16px',
           }}>
@@ -227,6 +392,14 @@ export function Window({
           <span style={{ display: 'flex', gap: '0px', marginLeft: '2px', flexShrink: 0 }}>
             {hasHelp && !(wStyle & WS_MINIMIZEBOX) && !(wStyle & WS_MAXIMIZEBOX) && <>
               {capBtnSvg(svgHelp, 'top 1px left 4px')}
+              <span style={{ width: '2px' }} />
+            </>}
+            {onZoomToggle && <>
+              {capBtnText('2×', onZoomToggle, zoomActive, zoomActive ? 'Restore 1× zoom' : 'Zoom 2×')}
+              <span style={{ width: '2px' }} />
+            </>}
+            {onFullscreenToggle && <>
+              {capBtnSvg(svgFullscreen, 'top 1px left 2px', onFullscreenToggle)}
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}

@@ -24,10 +24,14 @@ import { GeneralSettingsWindow } from './GeneralSettingsWindow';
 import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
 import { FOLDER_ICON_16, EXE_ICON_16 } from './DesktopIcon';
-import { MessageBox, MB_YESNO, MB_ICONQUESTION, IDYES } from './win2k/MessageBox';
+import { MessageBox, MB_OK, MB_YESNO, MB_ICONQUESTION, MB_ICONERROR, IDYES } from './win2k/MessageBox';
+import { exportWorkbench, importWorkbench, downloadWorkbench, pickWorkbenchFile, type WorkbenchProgress } from '../lib/workbench';
+import { downloadSingleFile, downloadItemsAsZip, shouldDownloadAsZip, type DownloadItem } from '../lib/download';
+import { ProgressDialog } from './win2k/ProgressDialog';
 import { ProcessRegistry } from '../lib/emu/emulator';
 import type { Emulator } from '../lib/emu/emulator';
-import { displayName } from '../lib/file-store';
+import { displayName, listFileMetadata, getFile } from '../lib/file-store';
+import { isExeFile } from '../lib/file-utils';
 import { useClipboard } from '../hooks/useClipboard';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
 import { t } from '../lib/regional-settings';
@@ -98,7 +102,10 @@ export function App() {
   const [showDosSettings, setShowDosSettings] = useState(false);
   const [showGeneralSettings, setShowGeneralSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
+  const [infoDialog, setInfoDialog] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [workbenchProgress, setWorkbenchProgress] = useState<{ caption: string; progress: WorkbenchProgress } | null>(null);
   const [showDisplayProperties, setShowDisplayProperties] = useState(false);
+  const [taskmgrPath, setTaskmgrPath] = useState<string | null>(null);
   const [bgSettings, setBgSettings] = useState<BackgroundSettings>(() => {
     const saved = localStorage.getItem('bg-settings');
     if (saved) {
@@ -293,6 +300,96 @@ export function App() {
     });
   }, []);
 
+  const handleExportWorkbench = useCallback(async () => {
+    const caption = t().workbenchExporting;
+    setWorkbenchProgress({ caption, progress: { phase: 'reading', current: 0, total: 1 } });
+    try {
+      const bytes = await exportWorkbench(p => setWorkbenchProgress({ caption, progress: p }));
+      downloadWorkbench(bytes);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setInfoDialog({ text: t().workbenchImportFailed.replace('{0}', msg), isError: true });
+    } finally {
+      setWorkbenchProgress(null);
+    }
+  }, []);
+
+  const handleDownloadItems = useCallback(async (items: DownloadItem[]) => {
+    if (items.length === 0) return;
+    if (!shouldDownloadAsZip(items)) {
+      try {
+        await downloadSingleFile(items[0].name);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setInfoDialog({ text: t().downloadFailed.replace('{0}', msg), isError: true });
+      }
+      return;
+    }
+    const caption = t().downloadingZip;
+    setWorkbenchProgress({ caption, progress: { phase: 'reading', current: 0, total: 1 } });
+    try {
+      await downloadItemsAsZip(items, p => setWorkbenchProgress({ caption, progress: p }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setInfoDialog({ text: t().downloadFailed.replace('{0}', msg), isError: true });
+    } finally {
+      setWorkbenchProgress(null);
+    }
+  }, []);
+
+  const handleImportWorkbench = useCallback(() => {
+    setConfirmDialog({
+      text: t().confirmImportWorkbench,
+      onYes: async () => {
+        const file = await pickWorkbenchFile();
+        if (!file) return;
+        const caption = t().workbenchImporting;
+        setWorkbenchProgress({ caption, progress: { phase: 'loading', current: 0, total: file.size } });
+        try {
+          await importWorkbench(file, p => setWorkbenchProgress({ caption, progress: p }));
+          location.reload();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setInfoDialog({ text: t().workbenchImportFailed.replace('{0}', msg), isError: true });
+        } finally {
+          setWorkbenchProgress(null);
+        }
+      },
+    });
+  }, []);
+
+  const refreshTaskmgr = useCallback(async () => {
+    const metas = await listFileMetadata();
+    const found = metas.find(m => m.name.toLowerCase().replace(/^.*\//, '') === 'taskmgr.exe');
+    setTaskmgrPath(found?.name ?? null);
+  }, []);
+
+  useEffect(() => {
+    refreshTaskmgr();
+    const onChange = () => refreshTaskmgr();
+    window.addEventListener('desktop-files-changed', onChange);
+    return () => window.removeEventListener('desktop-files-changed', onChange);
+  }, [refreshTaskmgr]);
+
+  const handleLaunchTaskmgr = useCallback(async () => {
+    if (!taskmgrPath) return;
+    const data = await getFile(taskmgrPath);
+    if (!data) return;
+    const result = isExeFile(data, taskmgrPath);
+    if (!result.ok || !result.peInfo) return;
+    const metas = await listFileMetadata();
+    const dllExts = new Set(['dll', 'ocx', 'drv', 'vxd', 'cpl']);
+    const siblingDlls = metas.filter(m =>
+      m.name !== taskmgrPath && !m.name.includes('/') &&
+      dllExts.has((m.name.split('.').pop() ?? '').toLowerCase()));
+    const additional = new Map<string, ArrayBuffer>();
+    await Promise.all(siblingDlls.map(async m => {
+      const buf = await getFile(m.name);
+      if (buf) additional.set(m.name, buf);
+    }));
+    handleRunExe(data, result.peInfo, additional.size > 0 ? additional : undefined, taskmgrPath);
+  }, [taskmgrPath, handleRunExe]);
+
   const handleBgApply = useCallback((settings: BackgroundSettings) => {
     setBgSettings(settings);
     localStorage.setItem('bg-settings', JSON.stringify(settings));
@@ -367,6 +464,7 @@ export function App() {
         }} onPointerDown={() => setFocusedAppId(null)}>
           <Desktop onRunExe={handleRunExe} onViewResources={handleViewResources} onOpenFolder={handleOpenFolder}
             onShowDisplayProperties={() => setShowDisplayProperties(true)}
+            onDownload={handleDownloadItems}
             clipboard={clipboard} onCut={clipCut} onCopy={clipCopy} onPaste={clipPaste} />
         </div>
         {runningApps.map((app) => (
@@ -422,6 +520,7 @@ export function App() {
             focused={focusedAppId === folder.id}
             minimized={minimizedApps.has(folder.id)}
             clipboard={clipboard} onCut={clipCut} onCopy={clipCopy} onPaste={clipPaste}
+            onDownload={handleDownloadItems}
           />
         ))}
         {showWelcome && (
@@ -482,6 +581,10 @@ export function App() {
         onShowRegionalSettings={() => { setShowRegionalSettings(true); focusApp(regionalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(regionalSettingsId.current); return s; }); }}
         onShowDosSettings={() => { setShowDosSettings(true); focusApp(dosSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(dosSettingsId.current); return s; }); }}
         onShowGeneralSettings={() => { setShowGeneralSettings(true); focusApp(generalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(generalSettingsId.current); return s; }); }}
+        onExportWorkbench={handleExportWorkbench}
+        onImportWorkbench={handleImportWorkbench}
+        onLaunchTaskmgr={handleLaunchTaskmgr}
+        taskmgrAvailable={!!taskmgrPath}
         onMinimizeAll={() => {
           const ids = new Set([
             ...runningApps.map(a => a.id),
@@ -519,6 +622,45 @@ export function App() {
           />
         </div>
       )}
+      {/* Info / error dialog */}
+      {infoDialog && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 99999 }}>
+          <MessageBox
+            caption="RetroTick"
+            text={infoDialog.text}
+            type={MB_OK | (infoDialog.isError ? MB_ICONERROR : 0)}
+            focused
+            onDismiss={() => setInfoDialog(null)}
+          />
+        </div>
+      )}
+      {/* Workbench export/import progress */}
+      {workbenchProgress && (() => {
+        const p = workbenchProgress.progress;
+        let message = '';
+        let percent: number | null = null;
+        if (p.phase === 'reading') {
+          message = t().workbenchPhaseReading.replace('{0}', String(p.current)).replace('{1}', String(p.total));
+          percent = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
+        } else if (p.phase === 'compressing') {
+          message = t().workbenchPhaseCompressing;
+          percent = null;
+        } else if (p.phase === 'loading') {
+          const fmt = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+          message = t().workbenchPhaseLoading.replace('{0}', fmt(p.current)).replace('{1}', fmt(p.total));
+          percent = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
+        } else if (p.phase === 'decompressing') {
+          message = t().workbenchPhaseDecompressing;
+          percent = null;
+        } else if (p.phase === 'restoring') {
+          message = t().workbenchPhaseRestoring.replace('{0}', String(p.current)).replace('{1}', String(p.total));
+          percent = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
+        } else if (p.phase === 'finalizing') {
+          message = t().workbenchPhaseFinalizing;
+          percent = 100;
+        }
+        return <ProgressDialog caption={workbenchProgress.caption} message={message} percent={percent} />;
+      })()}
     </div>
   );
 }

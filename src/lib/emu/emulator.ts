@@ -477,6 +477,8 @@ export class Emulator {
   charHeight = 16;
   isGraphicsMode = false;
   onVideoFrame?: () => void;
+  /** Fired when the framebuffer is reallocated (video mode resolution change). */
+  onVideoModeChange?: () => void;
 
   /** Initialize VGA Mode X detection callback (call once after memory is ready) */
   initVgaModeXHook(): void {
@@ -490,6 +492,7 @@ export class Emulator {
         this.cpu.mem.setVgaPlanar(null);
       }
     };
+    this.vga.onFramebufferResize = () => this.onVideoModeChange?.();
   }
 
   // API dispatch

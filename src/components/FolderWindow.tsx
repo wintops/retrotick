@@ -89,12 +89,13 @@ interface FolderWindowProps {
   onCut: (items: string[], prefix: string) => void;
   onCopy: (items: string[], prefix: string) => void;
   onPaste: (prefix: string) => Promise<void>;
+  onDownload?: (items: { name: string; isFolder: boolean }[]) => void;
 }
 
 export function FolderWindow({
   folderPath, onStop, onFocus, onMinimize, onOpenFolder,
   onRunExe, onViewResources, zIndex, focused, minimized,
-  clipboard, onCut, onCopy, onPaste,
+  clipboard, onCut, onCopy, onPaste, onDownload,
 }: FolderWindowProps) {
   const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
   const folderDisplayName = displayName(folderPath);
@@ -440,7 +441,9 @@ export function FolderWindow({
       {fm.contextMenu && (() => {
         const { item } = fm.contextMenu;
         const multi = fm.selected.size > 1;
-        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4, CMD_PROPS = 5, CMD_CUT = 6, CMD_COPY = 7;
+        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4, CMD_PROPS = 5, CMD_CUT = 6, CMD_COPY = 7, CMD_DOWNLOAD = 8;
+        const downloadAsZip = multi || item.isFolder;
+        const downloadLabel = downloadAsZip ? t().downloadAsZip : t().download;
         const menuItems: MenuItem[] = [
           mi(CMD_OPEN, t().open, { isDefault: true, isGrayed: multi }),
         ];
@@ -448,6 +451,7 @@ export function FolderWindow({
         menuItems.push(sep);
         menuItems.push(mi(CMD_CUT, t().cut));
         menuItems.push(mi(CMD_COPY, t().copy_));
+        menuItems.push(mi(CMD_DOWNLOAD, downloadLabel));
         menuItems.push(sep);
         menuItems.push(mi(CMD_DELETE, t().delete_));
         menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
@@ -463,6 +467,12 @@ export function FolderWindow({
                 if (id === CMD_OPEN) handleOpen(item);
                 else if (id === CMD_CUT) onCut([...fm.selected], prefix);
                 else if (id === CMD_COPY) onCopy([...fm.selected], prefix);
+                else if (id === CMD_DOWNLOAD) {
+                  const targets = multi
+                    ? fm.items.filter(i => fm.selected.has(i.name)).map(i => ({ name: i.name, isFolder: i.isFolder }))
+                    : [{ name: item.name, isFolder: item.isFolder }];
+                  onDownload?.(targets);
+                }
                 else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
                 else if (id === CMD_VIEW && !item.isFolder) {
                   getFile(item.name).then(buf => {

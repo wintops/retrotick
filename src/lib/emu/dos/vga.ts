@@ -1,6 +1,15 @@
 // VGA state management, palette, mode 13h framebuffer sync
 
 import type { Emulator } from '../emulator';
+import { VGA_FONT_8X8_ROM } from './vga-font-data';
+import { VGA_FONT_8X16_ROM } from './vga-font-16';
+
+/** VGA character generator: 8 banks × 256 chars × up to 32 scanlines per char. */
+export const FONT_BANKS = 8;
+export const FONT_CHARS = 256;
+export const FONT_BYTES_PER_CHAR = 32;
+export const FONT_BANK_SIZE = FONT_CHARS * FONT_BYTES_PER_CHAR;
+export const FONT_RAM_SIZE = FONT_BANKS * FONT_BANK_SIZE;
 
 /** Default VGA refresh rate in Hz (standard CRT = 70). */
 export const VGA_REFRESH_HZ_DEFAULT = 70;
@@ -134,6 +143,13 @@ export class VGAState {
   framebuffer: ImageData | null = null;
   dirty = false;
 
+  // Character generator RAM — 8 banks × 256 chars × 32 bytes per char.
+  // Bank selection at render time uses Sequencer Character Map Select (port 3C4h
+  // reg 0x03): map A and map B are 3-bit selectors; attribute bit 3 picks
+  // between them (intensity bit dual-purpose). When map A == map B (the default,
+  // both 0), attribute bit 3 keeps its normal foreground-intensity meaning.
+  fontRAM = new Uint8Array(FONT_RAM_SIZE);
+
   // VGA retrace timing
   refreshHz = VGA_REFRESH_HZ_DEFAULT; // configurable refresh rate
   private lastVblankSync = false;  // was previous 0x3DA read in VBlank?
@@ -170,6 +186,38 @@ export class VGAState {
 
   constructor() {
     this.initRegsForMode(0x03);
+    this.loadRomFontIntoBank(0, 16);
+  }
+
+  /**
+   * Copy a ROM font (8x8 or 8x16, depending on charH) into one of the 8 font
+   * banks of plane 2. Each char slot is 32 bytes; the high bytes past charH
+   * are zeroed so old data from a previous taller font doesn't bleed through.
+   */
+  loadRomFontIntoBank(bank: number, charH: number): void {
+    const rom = charH <= 8 ? VGA_FONT_8X8_ROM : VGA_FONT_8X16_ROM;
+    const srcBytesPerChar = charH <= 8 ? 8 : 16;
+    const bankBase = (bank & 0x07) * FONT_BANK_SIZE;
+    for (let ch = 0; ch < FONT_CHARS; ch++) {
+      const dstOff = bankBase + ch * FONT_BYTES_PER_CHAR;
+      const srcOff = ch * srcBytesPerChar;
+      for (let r = 0; r < FONT_BYTES_PER_CHAR; r++) {
+        this.fontRAM[dstOff + r] = r < srcBytesPerChar ? rom[srcOff + r] : 0;
+      }
+    }
+  }
+
+  /**
+   * Resolve the Character Map Select register (Sequencer 0x03) into A/B bank
+   * indices. When mapA != mapB, attribute bit 3 selects which bank renders
+   * each character — this enables the "512-character" mode and sacrifices the
+   * foreground-intensity meaning of attribute bit 3.
+   */
+  getCharMapBanks(): { mapA: number; mapB: number; fontSwitchActive: boolean } {
+    const sr3 = this.seqRegs[3] & 0xFF;
+    const mapA = ((sr3 >> 2) & 0x03) | ((sr3 >> 4) & 0x04);
+    const mapB = (sr3 & 0x03) | ((sr3 >> 2) & 0x04);
+    return { mapA, mapB, fontSwitchActive: mapA !== mapB };
   }
 
   /** Initialize VGA register values for a given video mode */
@@ -666,10 +714,16 @@ export class VGAState {
     return lut;
   }
 
+  /** Notified when initFramebuffer creates a buffer with new dimensions. */
+  onFramebufferResize?: () => void;
+
   initFramebuffer(width: number, height: number): void {
-    if (typeof ImageData !== 'undefined') {
-      this.framebuffer = new ImageData(width, height);
-    }
+    if (typeof ImageData === 'undefined') return;
+    const dimsChanged = !this.framebuffer
+      || this.framebuffer.width !== width
+      || this.framebuffer.height !== height;
+    this.framebuffer = new ImageData(width, height);
+    if (dimsChanged) this.onFramebufferResize?.();
   }
 }
 

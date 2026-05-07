@@ -184,8 +184,11 @@ export class GUS {
         return this.readRegister() & 0xFF;
       case 0x105: // Register data high byte
         return (this.readRegister() >> 8) & 0xFF;
-      case 0x107: // DRAM read
-        return this.ram[this.dramAddr & 0xFFFFF];
+      case 0x107: { // DRAM read — auto-increments dram_addr (matches DOSBox)
+        const b = this.ram[this.dramAddr & 0xFFFFF];
+        this.dramAddr = (this.dramAddr + 1) & 0xFFFFF;
+        return b;
+      }
       default:
         return 0;
     }
@@ -237,8 +240,9 @@ export class GUS {
         this.registerData = (this.registerData & 0x00FF) | ((value & 0xFF) << 8);
         this.writeRegister();
         break;
-      case 0x107: // DRAM write
+      case 0x107: // DRAM write — auto-increments dram_addr (matches DOSBox)
         this.ram[this.dramAddr & 0xFFFFF] = value;
+        this.dramAddr = (this.dramAddr + 1) & 0xFFFFF;
         break;
     }
   }
@@ -673,10 +677,14 @@ export class GUS {
         this._tickR.fill(0, 0, totalTicks);
       }
 
-      // Voice-by-voice: all frames of one voice before the next.
+      // Voice-by-voice: all frames of one voice before the next. The skip
+      // condition matches DOSBox: both wave and vol must each have any
+      // CTRL_DISABLED bit set. The earlier `wave.state & vol.state & X`
+      // form required the *same* bit on both sides and missed the
+      // (wave=RESET, vol=STOPPED) case that arises mid-song.
       for (let vi = 0; vi < this.activeVoiceCount; vi++) {
         const v = this.voices[vi];
-        if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
+        if ((v.wave.state & CTRL_DISABLED) && (v.vol.state & CTRL_DISABLED)) continue;
         const panL = PAN_LEFT[v.pan];
         const panR = PAN_RIGHT[v.pan];
         const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
@@ -690,7 +698,7 @@ export class GUS {
           this._tickR[t] += s1 * panR;
           this.incrementCtrlPos(v.wave, vi, true, waveRollover);
           this.incrementCtrlPos(v.vol, vi, false, false);
-          if (v.wave.state & v.vol.state & CTRL_DISABLED) break;
+          if ((v.wave.state & CTRL_DISABLED) && (v.vol.state & CTRL_DISABLED)) break;
         }
       }
     }

@@ -247,6 +247,7 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
 
   emu.vga.currentMode = vgaMode;
   emu.vga.initRegsForMode(mode);
+  emu.vga.loadRomFontIntoBank(0, vgaMode.charHeight);
 
   // Reset DAC palette to defaults on every mode change
   // (real VGA BIOS always resets DAC — no-clear bit only skips video memory clearing)
@@ -405,15 +406,23 @@ function getPixel(_cpu: CPU, emu: Emulator, x: number, y: number): number {
 }
 
 function drawCharGraphics(cpu: CPU, emu: Emulator, ch: number, attr: number, x: number, y: number): void {
-  const fg = attr & 0x0F;
-  const bg = (attr >> 4) & 0x0F;
   const charH = emu.charHeight || 8;
-  // Use the appropriate ROM font based on current char height
-  const fontData = charH <= 8 ? VGA_FONT_8X8_ROM : VGA_FONT_8X16_ROM;
-  const bytesPerChar = charH <= 8 ? 8 : 16;
-  const fontOffset = ch * bytesPerChar;
+  // Resolve font bank from Sequencer Character Map Select. In 512-char mode
+  // (mapA != mapB) attribute bit 3 picks the bank instead of fg intensity.
+  const banks = emu.vga.getCharMapBanks();
+  let fg: number;
+  let bank: number;
+  if (banks.fontSwitchActive) {
+    fg = attr & 0x07;
+    bank = (attr & 0x08) ? banks.mapA : banks.mapB;
+  } else {
+    fg = attr & 0x0F;
+    bank = banks.mapA;
+  }
+  const bg = (attr >> 4) & 0x0F;
+  const fontOffset = (bank & 0x07) * 256 * 32 + ch * 32;
   for (let row = 0; row < charH; row++) {
-    const bits = row < bytesPerChar ? fontData[fontOffset + row] : 0;
+    const bits = emu.vga.fontRAM[fontOffset + row];
     for (let col = 0; col < 8; col++) {
       const px = x + col;
       const py = y + row;
@@ -781,6 +790,7 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         // INT 43h → 8x16 font
         cpu.mem.writeU16(0x43 * 4, ROM_FONT_8X16_OFF);
         cpu.mem.writeU16(0x43 * 4 + 2, ROM_FONT_8X16_SEG);
+        emu.vga.loadRomFontIntoBank(0, 16);
         syncVideoMemory(emu);
         emu.vga.resetPalette();
       } else if (al === 0x12) {
@@ -799,6 +809,7 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         // INT 43h → 8x8 font
         cpu.mem.writeU16(0x43 * 4, ROM_FONT_8X8_OFF);
         cpu.mem.writeU16(0x43 * 4 + 2, ROM_FONT_8X8_SEG);
+        emu.vga.loadRomFontIntoBank(0, 8);
         syncVideoMemory(emu);
         emu.vga.resetPalette();
       } else if (al === 0x30) {
@@ -836,22 +847,71 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         const dl = emu.screenRows - 1;
         cpu.setReg16(EDX, (cpu.getReg16(EDX) & 0xFF00) | dl);
       } else if (al === 0x00 || al === 0x10) {
-        // Load user 8x8 font — stub: just update char height in BDA
-        const charHeight = (cpu.reg[EBX] >> 8) & 0xFF; // BH = bytes per character
-        if (charHeight > 0) {
-          emu.charHeight = charHeight;
-          cpu.mem.writeU16(0x0485, charHeight);
+        // Load user font: ES:BP = font, BH = bytes per char, BL = bank (0-7),
+        // CX = char count, DX = first char.
+        // AL=10h additionally recalculates CRTC for the new char height.
+        const bh = (cpu.reg[EBX] >> 8) & 0xFF;
+        const bl = cpu.reg[EBX] & 0x07;
+        const cx = cpu.getReg16(ECX) & 0xFFFF;
+        const dx = cpu.getReg16(EDX) & 0xFFFF;
+        if (bh > 0 && cx > 0) {
+          const srcAddr = cpu.segBase(cpu.es) + cpu.getReg16(EBP);
+          const bankBase = bl * 256 * 32;
+          const copyRows = Math.min(bh, 32);
+          for (let i = 0; i < cx; i++) {
+            const ch = (dx + i) & 0xFF;
+            const dstOff = bankBase + ch * 32;
+            const srcOff = i * bh;
+            for (let r = 0; r < copyRows; r++) {
+              emu.vga.fontRAM[dstOff + r] = cpu.mem.readU8(srcAddr + srcOff + r);
+            }
+            // Zero the unused tail so old taller-font data does not bleed.
+            for (let r = copyRows; r < 32; r++) {
+              emu.vga.fontRAM[dstOff + r] = 0;
+            }
+          }
         }
-      } else if (al === 0x01 || al === 0x04 || al === 0x22 || al === 0x24) {
-        // Load ROM 8x14 or 8x16 font — stub, resetPalette
-        emu.vga.resetPalette();
-      } else if (al === 0x02 || al === 0x23) {
-        // Load ROM 8x8 font — stub
-        // Don't change to 80x50 since this is just "load to block", not "recalc"
+        if (al === 0x10 && bh > 0) {
+          emu.charHeight = bh;
+          cpu.mem.writeU16(0x0485, bh);
+        }
+      } else if (al === 0x01) {
+        // Load ROM 8x14 font into bank BL without recalc (we use 8x16 fallback).
+        const bl = cpu.reg[EBX] & 0x07;
+        emu.vga.loadRomFontIntoBank(bl, 16);
+      } else if (al === 0x02) {
+        // Load ROM 8x8 font into bank BL without recalc.
+        const bl = cpu.reg[EBX] & 0x07;
+        emu.vga.loadRomFontIntoBank(bl, 8);
+      } else if (al === 0x04) {
+        // Load ROM 8x16 font into bank BL without recalc.
+        const bl = cpu.reg[EBX] & 0x07;
+        emu.vga.loadRomFontIntoBank(bl, 16);
       } else if (al === 0x03) {
-        // Set block specifier — stub
+        // Set block specifier: BL = Character Map Select value (Sequencer 0x03).
+        emu.vga.seqRegs[3] = cpu.reg[EBX] & 0xFF;
+      } else if (al === 0x22) {
+        // Load ROM 8x16 character set for graphics modes (INT 43h vector).
+        emu.vga.loadRomFontIntoBank(0, 16);
+        cpu.mem.writeU16(0x43 * 4, ROM_FONT_8X16_OFF);
+        cpu.mem.writeU16(0x43 * 4 + 2, ROM_FONT_8X16_SEG);
+      } else if (al === 0x23) {
+        // Load ROM 8x8 character set for graphics modes (INT 43h vector).
+        emu.vga.loadRomFontIntoBank(0, 8);
+        cpu.mem.writeU16(0x43 * 4, ROM_FONT_8X8_OFF);
+        cpu.mem.writeU16(0x43 * 4 + 2, ROM_FONT_8X8_SEG);
       } else if (al === 0x20 || al === 0x21) {
-        // Set user graphics chars — stub
+        // Set user graphics chars — INT 1Fh / INT 43h vector update.
+        // Caller passes ES:BP pointing to their own font in user memory; we
+        // don't relocate, just update the vector so programs reading INT 43h
+        // get the user's pointer.
+        if (al === 0x20) {
+          cpu.mem.writeU16(0x1F * 4, cpu.getReg16(EBP));
+          cpu.mem.writeU16(0x1F * 4 + 2, cpu.es);
+        } else {
+          cpu.mem.writeU16(0x43 * 4, cpu.getReg16(EBP));
+          cpu.mem.writeU16(0x43 * 4 + 2, cpu.es);
+        }
       }
       break;
     }
