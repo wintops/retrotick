@@ -396,6 +396,8 @@ export function registerOpengl32(emu: Emulator): void {
       else if (format === 0x1909) bpp = 1; // GL_LUMINANCE
       else if (format === 0x190A) bpp = 2; // GL_LUMINANCE_ALPHA
       else if (format === 0x1906) bpp = 1; // GL_ALPHA
+      else if (format === 0x80E0) bpp = 3; // GL_BGR_EXT
+      else if (format === 0x80E1) bpp = 4; // GL_BGRA_EXT
       const size = width * height * bpp;
       pixels = new Uint8Array(size);
       for (let i = 0; i < size; i++) pixels[i] = emu.memory.readU8(pixelsPtr + i);
