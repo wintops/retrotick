@@ -2,6 +2,7 @@ import type { Emulator } from '../../emulator';
 import type { WindowInfo } from './types';
 import { getClientSize, clampToMinTrackSize } from './_helpers';
 import { emuCompleteThunk } from '../../emu-exec';
+import { launchHelpFile } from '../../help-launcher';
 import {
   SM_CXSCREEN, SM_CYSCREEN, SM_CYMENU, SM_CYCAPTION, SM_CXBORDER, SM_CYBORDER,
   SM_CXFRAME, SM_CYFRAME, SM_CXEDGE, SM_CYEDGE, SM_CXFIXEDFRAME, SM_CYFIXEDFRAME,
@@ -198,8 +199,32 @@ export function registerMisc(emu: Emulator): void {
     return 1;
   });
   user32.register('SetWindowPlacement', 2, () => 1);
-  user32.register('WinHelpA', 4, () => 1);
-  user32.register('WinHelpW', 4, () => 1);
+  // WinHelp(hWndMain, lpszHelp, uCommand, dwData) → BOOL.
+  // HELP_QUIT closes any active help window — we have no hwnd-tracking tie
+  // back to the emulator, so just no-op (the user can close the viewer).
+  // Any other command is treated as "open this file" — the in-page help
+  // viewer doesn't navigate to a context/keyword across sessions.
+  const HELP_QUIT = 0x0002;
+  user32.register('WinHelpA', 4, () => {
+    const _hwnd = emu.readArg(0);
+    const lpszHelp = emu.readArg(1);
+    const uCommand = emu.readArg(2);
+    const _dwData = emu.readArg(3);
+    if (uCommand === HELP_QUIT) return 1;
+    const fileName = lpszHelp ? emu.memory.readCString(lpszHelp) : '';
+    if (fileName) launchHelpFile(emu, fileName);
+    return 1;
+  });
+  user32.register('WinHelpW', 4, () => {
+    const _hwnd = emu.readArg(0);
+    const lpszHelp = emu.readArg(1);
+    const uCommand = emu.readArg(2);
+    const _dwData = emu.readArg(3);
+    if (uCommand === HELP_QUIT) return 1;
+    const fileName = lpszHelp ? emu.memory.readUTF16String(lpszHelp) : '';
+    if (fileName) launchHelpFile(emu, fileName);
+    return 1;
+  });
   user32.register('ShowOwnedPopups', 2, () => 1);
   user32.register('GetLastActivePopup', 1, () => emu.readArg(0));
   user32.register('WaitForInputIdle', 2, () => 0);

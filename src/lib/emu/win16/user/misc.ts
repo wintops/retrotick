@@ -4,6 +4,7 @@ import type { Win16UserHelpers } from './index';
 import { findMenuItemById } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
 import { handleListBoxMessage16 } from './message';
+import { launchHelpFile } from '../../help-launcher';
 
 // Win16 USER module — Miscellaneous APIs
 
@@ -273,7 +274,15 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetKeyState', 2, () => 0, 106);
 
   // Ordinal 171: WinHelp(hWndMain, lpszHelp_ptr, uCommand, dwData_long) — 12 bytes (2+4+2+4)
-  user.register('WinHelp', 12, () => 1, 171);
+  user.register('WinHelp', 12, () => {
+    const HELP_QUIT = 0x0002;
+    const [_hWndMain, lpszHelpRaw, uCommand, _dwData] = emu.readPascalArgs16([2, 4, 2, 4]);
+    if (uCommand === HELP_QUIT) return 1;
+    const linear = lpszHelpRaw ? emu.resolveFarPtr(lpszHelpRaw) : 0;
+    const fileName = linear ? emu.memory.readCString(linear) : '';
+    if (fileName) launchHelpFile(emu, fileName);
+    return 1;
+  }, 171);
 
   // Ordinal 178: TranslateAccelerator — 8 bytes
   user.register('TranslateAccelerator', 8, () => 0, 178);

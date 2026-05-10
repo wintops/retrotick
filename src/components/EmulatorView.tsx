@@ -35,6 +35,7 @@ interface EmulatorViewProps {
   onFocus?: () => void;
   onReady?: () => void;
   onRunExe?: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles?: Map<string, ArrayBuffer>, exeName?: string, commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => void;
+  onOpenHelp?: (arrayBuffer: ArrayBuffer, fileName: string) => void;
   onSetupEmulator?: (emu: Emulator) => void;
   audioContext?: AudioContext | null;
   onTitleChange?: (title: string) => void;
@@ -378,7 +379,7 @@ function renderMdiChildOverlay(
 
 // --- Main EmulatorView ---
 
-export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
+export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onOpenHelp, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
   const exeBaseName = exeName.split(/[/\\]/).pop() || exeName;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const emuRef = useRef<Emulator | null>(null);
@@ -726,6 +727,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
         onStop();
       };
+      if (onOpenHelp) {
+        emu.onOpenHelp = (fileBytes: ArrayBuffer, fileName: string) => {
+          onOpenHelp(fileBytes, fileName);
+        };
+      }
       emu.onCreateProcess = (childExeName: string, childCmdLine: string) => {
         if (!onRunExe) return;
         const lowerName = childExeName.toLowerCase();
@@ -814,6 +820,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         // Allow child to create GUI windows or spawn its own children
         childEmu.onCreateProcess = emu.onCreateProcess;
         childEmu.onCreateChildConsole = emu.onCreateChildConsole;
+        childEmu.onOpenHelp = emu.onOpenHelp;
 
         // When child writes to console, sync cursor back to parent and notify UI
         childEmu.onConsoleOutput = () => {

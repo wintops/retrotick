@@ -826,6 +826,8 @@ export class Emulator {
   onMissingDll?: (dllName: string) => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
+  /** Callback to open a Windows Help (.hlp) file in the built-in viewer */
+  onOpenHelp?: (fileBytes: ArrayBuffer, fileName: string) => void;
 
   _childProcessWaiting = false;
   _childProcessResume: { stackBytes: number; retVal: number; completer: (emu: Emulator, stackBytes: number, retVal: number) => void } | null = null;

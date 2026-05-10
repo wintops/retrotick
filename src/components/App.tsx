@@ -510,6 +510,7 @@ export function App() {
             onFocus={() => handleFocusApp(app.id)}
             onReady={() => handleAppReady(app.id)}
             onRunExe={handleRunExe}
+            onOpenHelp={handleOpenHelp}
             onTitleChange={(title) => setWindowTitles(prev => new Map(prev).set(app.id, title))}
             onIconChange={(url) => setWindowIcons(prev => new Map(prev).set(app.id, url))}
             onMinimize={() => handleTaskbarMinimize(app.id)}
