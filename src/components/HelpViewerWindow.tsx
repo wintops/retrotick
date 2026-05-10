@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, WS_THICKFRAME } from './win2k/Window';
 import { HlpFile } from '../lib/hlp';
-import type { TopicHeader, DecodedParagraph, RenderEvent, FontDescriptor, HlpPicture, Keyword } from '../lib/hlp';
+import type { TopicHeader, DecodedParagraph, RenderEvent, FontDescriptor, HlpPicture, HlpHotspot, Keyword } from '../lib/hlp';
 import { FONT_BOLD, FONT_ITALIC, FONT_UNDERLINE, FONT_STRIKEOUT } from '../lib/hlp/font';
-import { rgbaToBlob } from '../lib/hlp/picture';
-import { useBlobUrls } from '../hooks/useBlobUrls';
+import { rgbaToDataUrl } from '../lib/hlp/picture';
+import { hashContext } from '../lib/hlp/hash';
 import { executeMacros, type MacroHost } from '../lib/hlp/macro';
 
 const WINDOW_STYLE = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
@@ -23,12 +23,11 @@ interface Props {
 }
 
 interface HistoryEntry { vOffset: number; title: string; }
+interface BitmapInfo { url: string; width: number; height: number; hotspots: HlpHotspot[]; }
 
 export function HelpViewerWindow({
   fileBytes, fileName, onStop, onFocus, onMinimize, zIndex, focused, minimized,
 }: Props) {
-  const [maximized, setMaximized] = useState(false);
-  const preMaxState = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const hf = useMemo(() => {
     try { return new HlpFile(fileBytes); }
     catch (e) {
@@ -37,8 +36,43 @@ export function HelpViewerWindow({
     }
   }, [fileBytes]);
 
-  const [windowPos, setWindowPos] = useState({ x: 80, y: 50 });
-  const [clientSize, setClientSize] = useState({ w: CLIENT_W, h: CLIENT_H });
+  // Pull the file's window definition (record-6 in |SYSTEM). When present
+  // it carries position/size in 1024ths of screen, plus a maximize flag.
+  // For a virtual desktop we treat the values as raw pixels rather than
+  // scaling against the real screen — they're already authored as visible
+  // window dimensions on a 1024-pixel-wide reference desktop.
+  const winDef = hf?.system.windows[0];
+  const captionTitleOverride = winDef?.caption?.replace(/^\x01/, '') || undefined;
+  // "Fixed-size" treatment: when the file specifies a maximize state
+  // (flags bit 0x40) AND that state is anything other than 0/3, the
+  // author wants the window opened at the file's exact size and the
+  // user can't resize it. Files that don't set the maximize-specified
+  // bit at all stay user-resizable.
+  const fixedSize = !!winDef
+    && (winDef.flags & 0x40) !== 0
+    && winDef.maximize !== 0
+    && winDef.maximize !== 3;
+
+  const [maximized, setMaximized] = useState(() => {
+    if (!winDef) return false;
+    // flags bit 0x40 = maximize field is meaningful. The field stores an
+    // SW_xxx ShowWindow constant — only SW_SHOWMAXIMIZED (3) means "open
+    // maximized". Other values like SW_SHOWNOACTIVATE (4) or SW_NORMAL (1)
+    // mean normal-sized.
+    return (winDef.flags & 0x40) !== 0 && winDef.maximize === 3;
+  });
+  const preMaxState = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  const [windowPos, setWindowPos] = useState(() => {
+    if (winDef && (winDef.flags & 0x0C) === 0x0C) return { x: winDef.x, y: winDef.y };
+    return { x: 80, y: 50 };
+  });
+  const [clientSize, setClientSize] = useState(() => {
+    if (winDef && (winDef.flags & 0x30) === 0x30 && winDef.width > 0 && winDef.height > 0) {
+      return { w: winDef.width, h: winDef.height };
+    }
+    return { w: CLIENT_W, h: CLIENT_H };
+  });
 
   const handleMaximize = useCallback(() => {
     const TASKBAR_HEIGHT = 30;
@@ -61,7 +95,6 @@ export function HelpViewerWindow({
   const [searchOpen, setSearchOpen] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [current, setCurrent] = useState<TopicHeader | null>(null);
-  const { createUrl } = useBlobUrls();
 
   const keywords = useMemo(() => hf ? [...hf.keywords()] : [], [hf]);
 
@@ -147,7 +180,10 @@ export function HelpViewerWindow({
   }, [keywords, keywordFilter]);
 
   const titleStr = current && hf ? (hf.titleOf(current.vOffset) || '(untitled)') : (hf?.system.title || 'Help');
-  const captionTitle = `${hf?.system.title || fileName}`;
+  // Per-file caption preference: the |SYSTEM window record's Caption field
+  // wins over the |SYSTEM title (which is the help-set name) and the file
+  // name. Empires uses "Age of Empires Help" via the window record.
+  const captionTitle = captionTitleOverride || hf?.system.title || fileName;
 
   if (!hf) {
     return (
@@ -176,7 +212,7 @@ export function HelpViewerWindow({
     >
       <Window
         title={captionTitle}
-        style={WINDOW_STYLE}
+        style={fixedSize ? (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX) : WINDOW_STYLE}
         clientW={clientSize.w}
         clientH={clientSize.h}
         focused={focused}
@@ -184,19 +220,24 @@ export function HelpViewerWindow({
         maximized={maximized}
         onClose={onStop}
         onMinimize={onMinimize}
-        onMaximize={handleMaximize}
+        onMaximize={fixedSize ? undefined : handleMaximize}
         onTitleBarMouseDown={onTitleBarMouseDown}
-        onTitleBarDblClick={handleMaximize}
-        onResizeStart={onResizeStart}
+        onTitleBarDblClick={fixedSize ? undefined : handleMaximize}
+        onResizeStart={fixedSize ? undefined : onResizeStart}
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', font: '11px Tahoma, sans-serif' }}>
-          <Toolbar
-            onContents={handleContents}
-            onSearch={() => setSearchOpen(true)}
-            onBack={handleBack}
-            onPrint={() => window.print()}
-            canBack={history.length > 0}
-          />
+          {/* Hide the chrome toolbar for fixed-size "kiosk-style" help
+              windows. These files ship their own navigation as image
+              hotspots in |bm0, so the standard toolbar is redundant. */}
+          {!fixedSize && (
+            <Toolbar
+              onContents={handleContents}
+              onSearch={() => setSearchOpen(true)}
+              onBack={handleBack}
+              onPrint={() => window.print()}
+              canBack={history.length > 0}
+            />
+          )}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <TopicPane
               hf={hf}
@@ -211,7 +252,6 @@ export function HelpViewerWindow({
                 try { executeMacros(macro, host); }
                 catch (e) { console.warn('[hlp] macro failed:', macro, e); }
               }}
-              createUrl={createUrl}
             />
           </div>
         </div>
@@ -361,28 +401,29 @@ function SearchDialog({ keywords, filter, onFilterChange, onClose, onPick }: {
 
 // --- Topic pane -------------------------------------------------------
 
-function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
+function TopicPane({ hf, topic, title, onJumpHash, onMacro }: {
   hf: HlpFile;
   topic: TopicHeader | null;
   title: string;
   onJumpHash: (hash: number) => void;
   onMacro: (macro: string) => void;
-  createUrl: (b: Blob) => string;
 }) {
-  const [bitmapUrls, setBitmapUrls] = useState<Map<number, { url: string; width: number; height: number }>>(new Map());
   const split = useMemo(() => topic ? hf.topicSplit(topic) : { nonScroll: [], scroll: [] }, [hf, topic]);
   const paragraphs = useMemo(() => [...split.nonScroll, ...split.scroll], [split]);
 
-  // Fallback only fires when the link has no useful render events.
+  // Fallback only fires when the link decoded to nothing renderable —
+  // no text, no pictures, no hotspots. Pages that are intentionally
+  // image-only (e.g. graphical contents pages) must NOT fall back.
   const useFallback = useMemo(() => {
     if (paragraphs.length === 0) return false;
-    let textBytes = 0;
     for (const p of paragraphs) {
       for (const e of p.events) {
-        if (e.kind === 'text') textBytes += e.bytes.length;
+        if (e.kind === 'text' && e.bytes.length > 0) return false;
+        if (e.kind === 'picture' || e.kind === 'jump' || e.kind === 'popup'
+            || e.kind === 'macroHotspot' || e.kind === 'crossFile') return false;
       }
     }
-    return textBytes < 4;
+    return true;
   }, [paragraphs]);
 
   const fallbackText = useMemo(() => {
@@ -397,37 +438,34 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
     return parts.join('\n\n');
   }, [useFallback, topic, hf]);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Build the bitmap-info map synchronously while rendering. Using a
+  // sync data URL (rather than an async blob URL) means images appear on
+  // the first paint after navigation — no flash of "[bm5]" placeholder
+  // text waiting for a later setState. Memoized on `paragraphs` so we
+  // only recompute when the topic actually changes.
+  const bitmapUrls = useMemo(() => {
     const ids = new Set<number>();
     for (const p of paragraphs) {
       for (const e of p.events) {
-        if (e.kind === 'picture') {
-          // type 0x03: |bmN reference, payload starts with u16 picture ID.
-          // type 0x22 (HCW4 inline bitmap reference): 4-byte payload
-          //   u16 LE subtype + u16 LE index.
-          if (e.type === 0x03 && e.payload.length >= 2) {
-            const dv = new DataView(e.payload.buffer, e.payload.byteOffset, e.payload.byteLength);
-            ids.add(dv.getUint16(0, true));
-          } else if (e.type === 0x22 && e.payload.length >= 4) {
-            const dv = new DataView(e.payload.buffer, e.payload.byteOffset, e.payload.byteLength);
-            ids.add(dv.getUint16(2, true));
-          }
+        if (e.kind !== 'picture') continue;
+        if (e.type === 0x03 && e.payload.length >= 2) {
+          const dv = new DataView(e.payload.buffer, e.payload.byteOffset, e.payload.byteLength);
+          ids.add(dv.getUint16(0, true));
+        } else if (e.type === 0x22 && e.payload.length >= 4) {
+          const dv = new DataView(e.payload.buffer, e.payload.byteOffset, e.payload.byteLength);
+          ids.add(dv.getUint16(2, true));
         }
       }
     }
-    (async () => {
-      const m = new Map<number, { url: string; width: number; height: number }>();
-      for (const id of ids) {
-        const pic = hf.bitmap(id);
-        if (!pic) continue;
-        const blob = await rgbaToBlob(pic);
-        if (blob && !cancelled) m.set(id, { url: createUrl(blob), width: pic.width, height: pic.height });
-      }
-      if (!cancelled) setBitmapUrls(m);
-    })();
-    return () => { cancelled = true; };
-  }, [hf, paragraphs, createUrl]);
+    const m = new Map<number, BitmapInfo>();
+    for (const id of ids) {
+      const pic = hf.bitmap(id);
+      if (!pic) continue;
+      const url = rgbaToDataUrl(pic);
+      if (url) m.set(id, { url, width: pic.width, height: pic.height, hotspots: pic.hotspots });
+    }
+    return m;
+  }, [hf, paragraphs]);
 
   const nonScrollLogical = useMemo(() => splitIntoLogicalParas(split.nonScroll), [split.nonScroll]);
   const scrollGroups = useMemo(() => groupForRender(split.scroll), [split.scroll]);
@@ -438,6 +476,10 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
           and any other paragraphs flagged as non-scrolling. WinHelp renders
           these as a fixed banner above the scrolling body. */}
       {hasNonScroll && !useFallback && (
+        // The non-scroll banner uses the same 12 px client inset as the
+        // scrolling body. Per-paragraph leftIndent (often -12 px in table
+        // rows) cancels the left side; top stays at 12 because the file
+        // format has no top-cancellation mechanism.
         <div style={{
           background: '#C0C0C0',
           borderBottom: '1px solid #808080',
@@ -457,7 +499,7 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
         {useFallback ? (
           <>
             <div style={{ font: 'italic 11px Tahoma', color: '#888', marginBottom: 8 }}>
-              (Body uses HCW4 type-32 records with phrase compression — showing extracted text.)
+              (Could not decode this topic's structure — showing raw extracted text.)
             </div>
             <pre style={{ font: '12px "Times New Roman", serif', whiteSpace: 'pre-wrap', color: '#000' }}>
               {fallbackText || '(no readable text extracted)'}
@@ -470,7 +512,7 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
           ) : (
             <ExpandableParagraph key={i} hf={hf} para={g.para}
                                  bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro}
-                                 createUrl={createUrl} depth={0} />
+                                 depth={0} />
           ))
         )}
       </div>
@@ -511,26 +553,29 @@ function groupForRender(input: DecodedParagraph[]): RenderGroup[] {
   return out;
 }
 
-/** Renders a run of table rows. Each row's `cells` array is one cell's
- *  events; we use ParagraphRender per cell so font/hotspot/picture events
- *  inside cells render correctly. */
+/** Renders a run of table rows. Each row record's `cells` array carries
+ *  the paragraphs in declaration order; `cellCols` says which COLUMN each
+ *  cell belongs to. WinHelp lets a single row stack several paragraphs
+ *  inside one column (Empires's "About" page has 3 stacked paragraphs in
+ *  the right column: empty / title / body), so we group cells by their
+ *  column index and emit one `<td>` per declared column with all that
+ *  column's paragraphs stacked vertically. */
 function TableRender({ group, fonts, faces, bitmapUrls, onJumpHash, onMacro }: {
   group: Extract<RenderGroup, { kind: 'table' }>;
   fonts: FontDescriptor[];
   faces: string[];
-  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  bitmapUrls: Map<number, BitmapInfo>;
   onJumpHash: (hash: number) => void;
   onMacro: (macro: string) => void;
 }) {
-  // WinHelp column widths are in twips (1/20 pt). We translate to CSS px
-  // proportionally — the absolute values are typically too large to use
-  // verbatim. Sum the widths and let the table size to its container.
   const totalW = group.columnWidths.reduce((s, c) => s + c.width, 0) || 1;
   return (
     <table style={{
       borderCollapse: 'collapse',
-      margin: '6px 0',
+      margin: 0,
       font: '12px "Times New Roman", serif',
+      width: '100%',
+      tableLayout: 'fixed',
     }}>
       <colgroup>
         {group.columnWidths.map((c, i) => (
@@ -538,22 +583,39 @@ function TableRender({ group, fonts, faces, bitmapUrls, onJumpHash, onMacro }: {
         ))}
       </colgroup>
       <tbody>
-        {group.rows.map((row, ri) => (
-          <tr key={ri}>
-            {(row.cells || []).map((cellEvents, ci) => (
-              <td key={ci} style={{
-                verticalAlign: 'top',
-                padding: '4px 8px',
-                border: 'none',
-              }}>
-                <ParagraphRender
-                  para={{ recordType: row.recordType, events: cellEvents }}
-                  fonts={fonts} faces={faces}
-                  bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
-              </td>
-            ))}
-          </tr>
-        ))}
+        {group.rows.map((row, ri) => {
+          // Bucket cells by column index. We always emit `columns` <td>s
+          // so the colgroup widths apply correctly even for empty cells.
+          const cellsByCol: RenderEvent[][][] = Array.from({ length: group.columns }, () => []);
+          const cells = row.cells || [];
+          const cols = row.cellCols || cells.map((_, i) => i);
+          for (let i = 0; i < cells.length; i++) {
+            const c = cols[i];
+            if (c >= 0 && c < group.columns) cellsByCol[c].push(cells[i]);
+          }
+          return (
+            <tr key={ri}>
+              {cellsByCol.map((cellList, ci) => {
+                const gapPx = twipsPx(group.columnWidths[ci]?.gap ?? 0);
+                return (
+                  <td key={ci} style={{
+                    verticalAlign: 'top',
+                    paddingRight: `${gapPx}px`,
+                    border: 'none',
+                  }}>
+                    {cellList.map((cellEvents, pi) => (
+                      <ParagraphRender
+                        key={pi}
+                        para={{ recordType: row.recordType, events: cellEvents }}
+                        fonts={fonts} faces={faces}
+                        bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
+                    ))}
+                  </td>
+                );
+              })}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -605,13 +667,12 @@ function splitIntoLogicalParas(input: DecodedParagraph[]): DecodedParagraph[] {
  *  jump hotspot the paragraph contains. Clicking the ▶ triangle expands
  *  the target topic's body underneath, indented; clicking the hotspot
  *  text itself navigates as before. */
-function ExpandableParagraph({ hf, para, bitmapUrls, onJumpHash, onMacro, createUrl, depth }: {
+function ExpandableParagraph({ hf, para, bitmapUrls, onJumpHash, onMacro, depth }: {
   hf: HlpFile;
   para: DecodedParagraph;
-  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  bitmapUrls: Map<number, BitmapInfo>;
   onJumpHash: (hash: number) => void;
   onMacro: (macro: string) => void;
-  createUrl: (b: Blob) => string;
   depth: number;
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -662,7 +723,7 @@ function ExpandableParagraph({ hf, para, bitmapUrls, onJumpHash, onMacro, create
       </div>
       {isOpen && (
         <ExpandedTopic hf={hf} hash={onlyHash} bitmapUrls={bitmapUrls}
-                       onJumpHash={onJumpHash} onMacro={onMacro} createUrl={createUrl}
+                       onJumpHash={onJumpHash} onMacro={onMacro}
                        depth={depth + 1} />
       )}
     </div>
@@ -673,13 +734,12 @@ function ExpandableParagraph({ hf, para, bitmapUrls, onJumpHash, onMacro, create
  *  hotspot. Resolves the hash to a topic and renders just its scrolling
  *  paragraphs (skipping the title/non-scroll banner) indented underneath
  *  the parent paragraph. */
-function ExpandedTopic({ hf, hash, bitmapUrls, onJumpHash, onMacro, createUrl, depth }: {
+function ExpandedTopic({ hf, hash, bitmapUrls, onJumpHash, onMacro, depth }: {
   hf: HlpFile;
   hash: number;
-  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  bitmapUrls: Map<number, BitmapInfo>;
   onJumpHash: (hash: number) => void;
   onMacro: (macro: string) => void;
-  createUrl: (b: Blob) => string;
   depth: number;
 }) {
   const target = useMemo(() => hf.topicByJumpTarget(hash), [hf, hash]);
@@ -709,9 +769,53 @@ function ExpandedTopic({ hf, hash, bitmapUrls, onJumpHash, onMacro, createUrl, d
       {items.map((p, i) => (
         <ExpandableParagraph key={i} hf={hf} para={p}
                              bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro}
-                             createUrl={createUrl} depth={depth} />
+                             depth={depth} />
       ))}
     </div>
+  );
+}
+
+/** Renders a |bm picture with its SHG hotspots overlaid as clickable
+ *  regions. Each hotspot's rect is positioned absolutely (in image-pixel
+ *  units) over a relatively-positioned wrapper sized to the image. Click
+ *  resolves to either a topic context (string), context number (numeric
+ *  hash field), or a macro. */
+function ImageWithHotspots({ info, onJumpHash, onMacro }: {
+  info: BitmapInfo;
+  onJumpHash: (hash: number) => void;
+  onMacro: (macro: string) => void;
+}) {
+  const onClick = (h: HlpHotspot, e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Macro hotspot (id1=0x04 path): execute the macro string captured from
+    // the macro-data block.
+    if (h.macro) { onMacro(h.macro); return; }
+    // Jump hotspot: hash field already holds the precomputed context hash;
+    // hand it to the same resolver used for inline text jumps.
+    if (h.hash) { onJumpHash(h.hash); return; }
+    // Fall back to hashing the action string when hash field is empty.
+    if (h.context) onJumpHash(hashContext(h.context));
+  };
+  return (
+    <span style={{ position: 'relative', display: 'inline-block', verticalAlign: 'text-bottom', margin: '0 1px' }}>
+      <img src={info.url} alt="" width={info.width} height={info.height}
+           style={{ display: 'block', imageRendering: 'pixelated' }} />
+      {info.hotspots.map((h, i) => (
+        <a key={i} href="#" title={h.context || h.macro || ''}
+           onClick={(e) => onClick(h, e)}
+           style={{
+             position: 'absolute',
+             left: `${h.left}px`, top: `${h.top}px`,
+             width: `${h.width}px`, height: `${h.height}px`,
+             cursor: 'pointer',
+             // Faint outline only when WinHelp said "with border". For the
+             // typical contents-page navigation buttons this stays invisible.
+             border: h.showBorder ? '1px dotted rgba(0,0,128,0.5)' : 'none',
+             background: 'transparent',
+           }} />
+      ))}
+    </span>
   );
 }
 
@@ -719,7 +823,7 @@ function ParagraphRender({ para, fonts, faces, bitmapUrls, onJumpHash, onMacro }
   para: DecodedParagraph;
   fonts: FontDescriptor[];
   faces: string[];
-  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  bitmapUrls: Map<number, BitmapInfo>;
   onJumpHash: (hash: number) => void;
   onMacro: (macro: string) => void;
 }) {
@@ -795,8 +899,13 @@ function ParagraphRender({ para, fonts, faces, bitmapUrls, onJumpHash, onMacro }
       continue;
     }
   }
+  // Pull layout state from the leading paraBegin. The conversion depends
+  // on record type — type-23/35 stores pixels (so a `-12` leftIndent
+  // cancels the 12 px body inset exactly), while type-32 / 1 / 20 / 22
+  // store twips.
+  const pStyle = paraStyleFromState(para.events, para.recordType);
   return (
-    <p style={{ margin: '0 0 8px', font: '12px "Times New Roman", serif', lineHeight: '1.4' }}>
+    <p style={pStyle}>
       {groups.map((g, gi) => {
         const fd = fonts[g.fontIdx];
         const style = fd ? fontDescriptorToStyle(fd, faces) : {};
@@ -805,12 +914,9 @@ function ParagraphRender({ para, fonts, faces, bitmapUrls, onJumpHash, onMacro }
             {g.chunks.map((c, ci) => {
               if (c.kind === 'image') {
                 const info = bitmapUrls.get(c.content as number);
-                if (info) return <img key={ci} src={info.url} alt="" width={info.width} height={info.height} style={{
-                  display: 'inline-block',
-                  verticalAlign: 'text-bottom',
-                  imageRendering: 'pixelated',
-                  margin: '0 1px',
-                }} />;
+                if (info) return (
+                  <ImageWithHotspots key={ci} info={info} onJumpHash={onJumpHash} onMacro={onMacro} />
+                );
                 return <span key={ci}>[bm{c.content}]</span>;
               }
               if (c.kind === 'jump') {
@@ -842,6 +948,45 @@ function ParagraphRender({ para, fonts, faces, bitmapUrls, onJumpHash, onMacro }
       })}
     </p>
   );
+}
+
+/** Convert WinHelp twips (1/1440 inch) to CSS pixels at 96 DPI. */
+function twipsPx(twips: number): number {
+  return twips / 15;
+}
+
+/** Build the <p> style from the paragraph's ParaInfo. Unit handling
+ *  depends on record type:
+ *    - Type-23 / 35 (HCW3.x table cells): values are stored as device
+ *      pixels, so a `leftIndent: -12` cancels the 12 px body inset
+ *      exactly. Apply verbatim.
+ *    - Type-32 / type-1 / 20 / 22: values are twips. Convert via twips/15.
+ *  `spacingLines` is intentionally not mapped to CSS line-height — its
+ *  semantics differ from CSS and naive use crushes text. */
+function paraStyleFromState(events: RenderEvent[], recordType: number): Record<string, string | number> {
+  const begin = events.find(e => e.kind === 'paraBegin');
+  const s = begin && begin.kind === 'paraBegin' ? begin.state : {};
+  const conv = (recordType === 23 || recordType === 35)
+    ? (n: number) => n
+    : twipsPx;
+  const style: Record<string, string | number> = {
+    margin: 0,
+    font: '12px "Times New Roman", serif',
+    lineHeight: 1.2,
+  };
+  if (s.leftIndent !== undefined && s.leftIndent !== 0) {
+    style.marginLeft = `${conv(s.leftIndent)}px`;
+  }
+  if (s.rightIndent !== undefined && s.rightIndent !== 0) {
+    style.marginRight = `${conv(s.rightIndent)}px`;
+  }
+  if (s.firstLineIndent && s.firstLineIndent !== 0) {
+    style.textIndent = `${conv(s.firstLineIndent)}px`;
+  }
+  if (s.spacingAbove && s.spacingAbove > 0) style.marginTop = `${conv(s.spacingAbove)}px`;
+  if (s.spacingBelow && s.spacingBelow > 0) style.marginBottom = `${conv(s.spacingBelow)}px`;
+  if (s.alignment) style.textAlign = s.alignment;
+  return style;
 }
 
 function fontDescriptorToStyle(fd: FontDescriptor, faces: string[]): Record<string, string | number> {

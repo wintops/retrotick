@@ -41,7 +41,8 @@ class OldPhraseTable implements PhraseTable {
 class HallPhraseTable implements PhraseTable {
   constructor(private blob: Uint8Array, private offsets: Uint32Array) {}
   /** Hall phrase ref decoding:
-   *    even byte (LSB=0):       phrase[byte/2]
+   *    byte == 0:               literal NUL (segment terminator)
+   *    even byte > 0 (LSB=0):   phrase[byte/2]
    *    LSB 2 bits = 01:         2-byte ref, phrase[((byte/2)*64) + 64 + next]
    *    LSB 3 bits = 011:        copy next (byte/8 + 1) bytes literally
    *    LSB 4 bits = 0111:       emit (byte/16 + 1) spaces
@@ -58,10 +59,11 @@ class HallPhraseTable implements PhraseTable {
     };
     while (i < input.length) {
       const b = input[i++];
-      if ((b & 1) === 0) {
+      if (b === 0) {
+        out.push(0x00);
+      } else if ((b & 1) === 0) {
         emit(b >> 1);
       } else if ((b & 0x03) === 0x01) {
-        // 2-byte phrase ref: phrase[byte * 64 + 64 + next]
         if (i >= input.length) break;
         const c = input[i++];
         emit(b * 64 + 64 + c);
@@ -75,7 +77,6 @@ class HallPhraseTable implements PhraseTable {
         const n = (b >> 4) + 1;
         for (let k = 0; k < n; k++) out.push(0x00);
       } else {
-        // unknown control — emit literally
         out.push(b);
       }
     }

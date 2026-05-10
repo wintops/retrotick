@@ -148,21 +148,36 @@ export function parseSystem(body: Uint8Array): SystemInfo {
 }
 
 function parseSecondaryWindow(b: Uint8Array): SecondaryWindow | null {
-  if (b.length < 70) return null;
+  // SECWINDOW layout (HCW4):
+  //   u16 flags
+  //   char[10] Type      — internal type name (e.g. "main")
+  //   char[9]  Name      — display name (sometimes "main" too)
+  //   char[51] Caption   — title-bar text
+  //   i16 x, y           — position in 1024ths of screen
+  //   i16 width, height  — size in 1024ths of screen
+  //   i16 maximize       — non-zero = open maximized
+  //   u8[9] rgb          — 3 RGB triplets (text fg, scroll bg, nonscroll bg)
+  //   (HCW4 may add: onTop, autoSize trailing bytes)
+  if (b.length < 82) return null;
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const flags = dv.getUint16(0, true);
-  const typeName = readAsciiPadded(b, 2, 9);
-  const caption = readAsciiPadded(b, 11, 51);
-  const x = dv.getUint16(62, true);
-  const y = dv.getUint16(64, true);
-  const width = dv.getUint16(66, true);
-  const height = dv.getUint16(68, true);
-  const maximize = dv.getUint16(70, true);
+  const typeName = readAsciiPadded(b, 2, 10);
+  const caption = readAsciiPadded(b, 21, 51);
+  const x = dv.getInt16(72, true);
+  const y = dv.getInt16(74, true);
+  const width = dv.getInt16(76, true);
+  const height = dv.getInt16(78, true);
+  const maximize = dv.getUint16(80, true);
   const rgb: Array<[number, number, number]> = [];
-  let p = 72;
+  let p = 82;
   for (let i = 0; i < 3 && p + 3 <= b.length; i++) {
     rgb.push([b[p], b[p + 1], b[p + 2]]);
     p += 3;
   }
-  return { flags, typeName, caption, x, y, width, height, maximize, rgb };
+  // Optional trailing fields (HCW4 only).
+  let onTop: number | undefined;
+  let autoSize: number | undefined;
+  if (b.length >= p + 1) onTop = b[p];
+  if (b.length >= p + 2) autoSize = b[p + 1];
+  return { flags, typeName, caption, x, y, width, height, maximize, rgb, onTop, autoSize };
 }

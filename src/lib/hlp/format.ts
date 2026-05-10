@@ -61,6 +61,10 @@ export interface DecodedParagraph {
   table?: { columns: number; type: number; columnWidths: Array<{ gap: number; width: number }>; minWidth: number };
   /** Per-cell events when `table` is set. */
   cells?: RenderEvent[][];
+  /** Per-cell column index (0..columns-1). When indices reset back to a
+   *  lower value, that signals the start of a new logical row within the
+   *  same TopicLink record. */
+  cellCols?: number[];
 }
 
 export function decodeDisplayLink(recordType: number, linkData1: Uint8Array, linkData2: Uint8Array): DecodedParagraph {
@@ -178,7 +182,7 @@ function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => voi
       const savedPos = c.pos;
       try {
         const t = c.u8();
-        const sz = c.clong();
+        const sz = c.clongBiased();
         if (t > 0x10) c.cuint();
         if (sz < 0 || sz > c.remaining) throw new Error('picture overruns LD1');
         const payload = c.bytes(sz);
@@ -278,6 +282,7 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
   };
 
   const cells: RenderEvent[][] = [];
+  const cellCols: number[] = [];
   const overall: RenderEvent[] = [];
   // The font opcode (0x80) is a stream-level state: a font set in cell N
   // stays active for cell N+1 unless overridden. Carry it across cells so
@@ -293,6 +298,7 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
     c.u16();           // cellFlag
     c.u8();            // cellByte
     if (c.eof) break;
+    cellCols.push(colIdx);
 
     // ParaInfo: u8 byte0, u8 byte1, u16 paraId, u16 x2 mask, conditional fields.
     /* const byte0   = */ c.u8();
@@ -314,7 +320,11 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
       if (c.remaining >= 3) { state.borderFlags = c.u8(); state.borderColor = c.u16(); }
     }
     if (x2 & 0x0200) {
-      const ntabs = c.cuint();
+      // Tab-stop count is signed-biased like the other ParaInfo ints in
+      // type-23/35 (readScanInt: 1-byte gives (b>>1)-0x40). Plain cuint
+      // would interpret 0x82 as 65 instead of 1, then run away reading
+      // 65 garbage "tab positions" and swallow the real cell content.
+      const ntabs = readScanInt(c);
       const stops: number[] = [];
       for (let i = 0; i < ntabs && !c.eof; i++) stops.push(c.cuint());
       state.tabStops = stops;
@@ -339,7 +349,7 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
   for (const cellEvents of cells) for (const e of cellEvents) overall.push(e);
 
   const table = { columns: cols, type: tableType, columnWidths: colW, minWidth };
-  return { recordType, events: overall, table, cells };
+  return { recordType, events: overall, table, cells, cellCols };
 }
 
 /** Format-opcode loop for a single table cell. Drain one NUL-terminated
@@ -372,7 +382,7 @@ function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () =
       const savedPos = c.pos;
       try {
         const t = c.u8();
-        const sz = c.clong();
+        const sz = c.clongBiased();
         if (t > 0x10) c.cuint();
         if (sz < 0 || sz > c.remaining) throw new Error('picture overruns LD1');
         const payload = c.bytes(sz);
@@ -483,15 +493,24 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
     } else if (op === 0x8C) {
       formatEvents.push({ kind: 'nbHyphen' });
     } else if (op === 0x86 || op === 0x87 || op === 0x88) {
-      // picture: type byte + clongBiased size + (cuint, when type > 0x10) + payload.
-      if (c.remaining < 1) break;
-      const t = c.u8();
-      let sz = 0;
-      try { sz = c.clongBiased(); } catch {}
-      if (t > 0x10) { try { c.cuint(); } catch {} }
-      if (sz < 0 || sz > c.remaining) break;
-      const payload = c.bytes(sz);
-      formatEvents.push({ kind: 'picture', align: op === 0x86 ? 'char' : op === 0x87 ? 'left' : 'right', type: t, payload });
+      // Picture: type byte + biased scanlong size + optional cuint
+      // NumHotspots (when type > 0x10) + payload. If the encoded size
+      // doesn't fit in the remaining LD1, the bytes weren't really a
+      // picture opcode — back up and emit unknown so the rest of the
+      // stream still parses cleanly.
+      const savedPos = c.pos;
+      try {
+        if (c.remaining < 1) throw new Error('picture truncated');
+        const t = c.u8();
+        const sz = c.clongBiased();
+        if (t > 0x10) c.cuint();
+        if (sz < 0 || sz > c.remaining) throw new Error('picture overruns LD1');
+        const payload = c.bytes(sz);
+        formatEvents.push({ kind: 'picture', align: op === 0x86 ? 'char' : op === 0x87 ? 'left' : 'right', type: t, payload });
+      } catch {
+        c.pos = savedPos;
+        formatEvents.push({ kind: 'unknownOp', op });
+      }
     } else if (op === 0x89) {
       formatEvents.push({ kind: 'hotspotEnd' });
       pendingHotspot = null;

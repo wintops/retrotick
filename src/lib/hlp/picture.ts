@@ -192,36 +192,76 @@ function renderDib(pixels: Uint8Array, width: number, height: number, bitcount: 
 }
 
 function parseHotspotTable(body: Uint8Array, out: HlpHotspot[]): void {
-  if (body.length < 8) return;
+  // SHG hotspot block:
+  //   u8  magic = 1
+  //   u16 NumberOfHotspots
+  //   u32 SizeOfMacroData
+  //   HOTSPOT[NumberOfHotspots]   each = u8 id0,u8 id1,u8 id2, i16 x,y,w,h, i32 hash  (15 bytes)
+  //   u8[SizeOfMacroData] MacroData (NUL-terminated macro strings)
+  //   NameTable: 2 ASCIIZ strings per hotspot (name, context)
+  if (body.length < 7) return;
   const c = new Cursor(body);
   /* magic */ c.u8();
-  /* unknown */ c.u8();
   const num = c.u16();
   const macroDataSize = c.u32();
   const start: HlpHotspot[] = [];
+  const macroOffsets: number[] = [];
   for (let i = 0; i < num; i++) {
     if (c.remaining < 15) break;
-    const t = c.u8();
+    // The id-triple identifies hotspot kind:
+    //   id0 0xC8 = popup, 0xCC = jump (with border)
+    //   id1 0x04 means "action lives in macro block at offset = hash"
+    //   id1 0x00 means "hash is a target context hash"
+    const id0 = c.u8();
+    const id1 = c.u8();
+    const id2 = c.u8();
+    void id2;
     const left = c.u16();
     const top = c.u16();
     const width = c.u16();
     const height = c.u16();
     const hash = c.u32();
     start.push({
-      type: t & 0x7F,
-      showBorder: (t & 0x80) === 0,
+      type: id0,
+      showBorder: (id0 & 0x10) !== 0,
       left, top, width, height, hash,
     });
+    macroOffsets.push(id1 === 0x04 ? hash : -1);
   }
-  // Macro data block, then name table
-  const macroDataEnd = c.pos + macroDataSize;
-  void macroDataEnd;
-  // Read name table: array of 2 NUL-terminated strings per hotspot.
+  // Macro data block follows hotspots. For id1=0x04 hotspots, hash is an offset into this block.
+  const macroBuf = c.bytes(Math.min(macroDataSize, c.remaining));
+  for (let i = 0; i < start.length; i++) {
+    const off = macroOffsets[i];
+    if (off < 0 || off >= macroBuf.length) continue;
+    let s = '';
+    for (let p = off; p < macroBuf.length && macroBuf[p] !== 0; p++) {
+      s += String.fromCharCode(macroBuf[p]);
+    }
+    start[i].macro = s;
+  }
+  // NameTable follows: 2 ASCIIZ per hotspot (name = control name, context = action string)
   for (let i = 0; i < start.length && !c.eof; i++) {
     start[i].name = c.asciiZ();
+    if (c.eof) break;
     start[i].context = c.asciiZ();
   }
   out.push(...start);
+}
+
+/** Encode the rendered RGBA into a synchronous PNG data URL. Faster path
+ *  than `rgbaToBlob` + object URL — usable directly during render so
+ *  images appear on first paint. Browser-only (needs HTMLCanvasElement). */
+export function rgbaToDataUrl(p: HlpPicture): string | null {
+  if (!p.width || !p.height || !p.rgba.length) return null;
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = p.width;
+  canvas.height = p.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const img = new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height);
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL('image/png');
 }
 
 /** Encode the rendered RGBA into a PNG blob via OffscreenCanvas (or HTMLCanvasElement fallback). */

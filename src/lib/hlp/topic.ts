@@ -297,10 +297,8 @@ export class TopicReader {
     return link;
   }
 
-  /** Walk all TopicLinks via the NextBlock chain. Helpdeco's loop simply
-   *  follows NextBlock until 0xFFFFFFFF or until a block transition runs
-   *  out — the chain is a single linked list across all blocks (HCW3.1+),
-   *  not per-block independent. */
+  /** Walk all TopicLinks via the NextBlock chain — a single linked list
+   *  across all blocks for HCW3.1+, terminated by 0xFFFFFFFF. */
   *links(): Generator<TopicLinkRaw> {
     if (this.stream.length === 0) return;
     let v = this.internalPtrToPos(HDR_BYTES); // TopicPos == 12 = first byte of block 0's payload
