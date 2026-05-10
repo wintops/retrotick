@@ -56,60 +56,393 @@ export type RenderEvent =
 export interface DecodedParagraph {
   recordType: number;
   events: RenderEvent[];
-  /** For type-23 tables only. */
+  /** Table info — set for type-23 / type-35 records. Each TopicLink record
+   *  is one row; `cells` lists the events per cell within this row. */
   table?: { columns: number; type: number; columnWidths: Array<{ gap: number; width: number }>; minWidth: number };
+  /** Per-cell events when `table` is set. */
+  cells?: RenderEvent[][];
 }
 
 export function decodeDisplayLink(recordType: number, linkData1: Uint8Array, linkData2: Uint8Array): DecodedParagraph {
-  // For HCW4 type-32, take a different (simpler) path: split LinkData2 by
-  // NUL bytes into paragraphs, parse the LinkData1 ParaInfo for fonts /
-  // indents, and ignore unknown format opcodes.
+  // HCW4 type-32: NUL-segmented LD2, ParaInfo prefix, simpler format ops.
   if (recordType === 32) {
     return decodeType32(linkData1, linkData2);
   }
 
+  // type-23 / type-35: table rows. One TopicLink record = one row with N
+  // cells laid out inline in LD1.
+  if (recordType === 23 || recordType === 35) {
+    return decodeTableRow(recordType, linkData1, linkData2);
+  }
+
+  // Types 1 / 20 / 22: standalone paragraph records. LinkData1 starts with
+  // TopicSize (clongBiased) + TopicOffsetIncrement (cuint) + ParaInfo,
+  // then a format-opcode stream terminated by 0xFF. LD2 carries the text
+  // (one NUL-delimited run drains BEFORE each opcode dispatch — same
+  // pattern as table cells).
+  return decodeFlatParagraph(recordType, linkData1, linkData2);
+}
+
+/** Decode a standalone paragraph record (type 1 / 20 / 22). */
+function decodeFlatParagraph(recordType: number, linkData1: Uint8Array, linkData2: Uint8Array): DecodedParagraph {
   const c = new Cursor(linkData1);
   const events: RenderEvent[] = [];
-  let table: DecodedParagraph['table'];
 
-  // Types 1/20/22/23/35: TopicSize + TopicLength biased compressed-long prefix.
+  // TopicSize + TopicOffsetIncrement.
   try { c.clongBiased(); } catch {}
-  try { c.clongBiased(); } catch {}
+  try { c.cuint(); } catch {}
 
-  if (recordType === 23 && c.remaining >= 4) {
-    const cols = c.u8();
-    const tableType = c.u8();
-    const minWidth = c.u16();
-    const colW: Array<{ gap: number; width: number }> = [];
-    for (let i = 0; i < cols && c.remaining >= 2; i++) {
-      const gap = c.cuint();
-      const width = c.cuint();
-      colW.push({ gap, width });
+  // ParaInfo prefix (only present for types 20 / 22; type 1 has none).
+  const state: ParaState = {};
+  if (recordType !== 1 && c.remaining >= 3) {
+    /* const skipByte = */ c.u8();
+    let psLow = 0, psHigh = 0;
+    if (!c.eof) psLow = c.u8();
+    if (!c.eof) psHigh = c.u8();
+    const ps = psLow | (psHigh << 8);
+    if (ps & 0x0001) state.spacingAbove = c.cuint();
+    if (ps & 0x0002) state.spacingBelow = c.cuint();
+    if (ps & 0x0004) state.spacingLines = c.cuint();
+    if (ps & 0x0008) state.leftIndent = c.cuint();
+    if (ps & 0x0010) state.rightIndent = c.cuint();
+    if (ps & 0x0020) state.firstLineIndent = c.cuint();
+    if (ps & 0x0100 && c.remaining >= 3) {
+      state.borderFlags = c.u8();
+      state.borderColor = c.u16();
     }
-    table = { columns: cols, type: tableType, columnWidths: colW, minWidth };
+    if (ps & 0x0200) {
+      const ntabs = c.cuint();
+      const stops: number[] = [];
+      for (let i = 0; i < ntabs && !c.eof; i++) stops.push(c.cuint());
+      state.tabStops = stops;
+    }
+    if (ps & 0x0400) state.alignment = 'center';
+    else if (ps & 0x0800) state.alignment = 'right';
+    else if (ps & 0x1000) state.alignment = 'justify';
   }
+  events.push({ kind: 'paraBegin', state });
 
-  let textPos = 0;
-  const emitText = (n: number) => {
-    if (n <= 0) return;
-    const end = Math.min(textPos + n, linkData2.length);
-    const slice = linkData2.subarray(textPos, end);
-    if (slice.length > 0) events.push({ kind: 'text', bytes: slice });
-    textPos = end;
+  // For type-1 / 20 / 22 (HC30-style flat paragraphs) the LD2 text stream
+  // is consumed in chunks at "termination" opcodes — 0x89 ends the text
+  // inside a hotspot, 0x82 ends a plain paragraph, 0xFF terminates the
+  // record. Each drain skips empty NUL-segments and emits the next
+  // non-empty run.
+  const ld2Pos = { v: 0 };
+  const drainText = () => {
+    while (ld2Pos.v < linkData2.length && linkData2[ld2Pos.v] === 0) ld2Pos.v++;
+    const start = ld2Pos.v;
+    while (ld2Pos.v < linkData2.length && linkData2[ld2Pos.v] !== 0) ld2Pos.v++;
+    if (ld2Pos.v > start) events.push({ kind: 'text', bytes: linkData2.subarray(start, ld2Pos.v) });
+    if (ld2Pos.v < linkData2.length) ld2Pos.v++;
   };
+  decodeFlatFormat(c, events, drainText);
+  events.push({ kind: 'paraEnd' });
+  return { recordType, events };
+}
 
+/** Format-opcode loop for a HC30 / HCW3.x flat paragraph (type 1/20/22).
+ *  Differs from the table-cell decoder: text drains are triggered only at
+ *  text-terminator opcodes (0x89 inside a hotspot, 0x82 between plain
+ *  paragraph runs) so the LD2 stream stays aligned with the hotspot
+ *  structure of multi-jump paragraphs. */
+function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => void): void {
+  // `expectAt` tracks the opcode at which the next text drain should fire:
+  //   '0x82' — plain paragraph: text gets drained at the closing 0x82.
+  //   '0x89' — inside a hotspot: text is drained at the closing 0x89.
+  //   null   — text was just drained; the next 0x82 is a structural
+  //            paragraph break with no text and shouldn't drain.
+  let expectAt: 0x82 | 0x89 | null = 0x82;
   let safety = 0;
   while (!c.eof && safety++ < 1000) {
-    if (c.remaining === 1 && c.buf[c.pos] === 0) break;
-    if (c.remaining === 1 && c.buf[c.pos] === 0xFF) break;
-    decodeParagraph(c, linkData2, events, emitText, recordType);
+    const op = c.buf[c.pos];
+    if (op === 0xFF) {
+      c.pos++;
+      if (expectAt === 0x82) drainText();
+      return;
+    }
+    c.pos++;
+    if (op === 0x20) { events.push({ kind: 'hardSpace' }); continue; }
+    if (op === 0x21) { events.push({ kind: 'hardHyphen' }); continue; }
+    if (op === 0x80 && c.remaining >= 2) { events.push({ kind: 'font', index: c.u16() }); continue; }
+    if (op === 0x81) { events.push({ kind: 'lineBreak' }); continue; }
+    if (op === 0x82) {
+      if (expectAt === 0x82) drainText();
+      events.push({ kind: 'paraEnd' });
+      events.push({ kind: 'paraBegin', state: {} });
+      expectAt = 0x82;
+      continue;
+    }
+    if (op === 0x83) { events.push({ kind: 'tab' }); continue; }
+    if (op === 0x85 && c.remaining >= 2) { c.u16(); continue; }
+    if (op === 0x86 || op === 0x87 || op === 0x88) {
+      const savedPos = c.pos;
+      try {
+        const t = c.u8();
+        const sz = c.clong();
+        if (t > 0x10) c.cuint();
+        if (sz < 0 || sz > c.remaining) throw new Error('picture overruns LD1');
+        const payload = c.bytes(sz);
+        const align: 'char' | 'left' | 'right' = op === 0x86 ? 'char' : op === 0x87 ? 'left' : 'right';
+        events.push({ kind: 'picture', align, type: t, payload });
+      } catch {
+        c.pos = savedPos;
+        events.push({ kind: 'unknownOp', op });
+      }
+      continue;
+    }
+    if (op === 0x89) {
+      drainText();
+      events.push({ kind: 'hotspotEnd' });
+      expectAt = null;
+      continue;
+    }
+    if (op === 0x8B) { events.push({ kind: 'nbsp' }); continue; }
+    if (op === 0x8C) { events.push({ kind: 'nbHyphen' }); continue; }
+    // 5-byte hotspot: opcode + u32 target.
+    if ((op & 0xD8) === 0xC0) {
+      if (c.remaining < 4) { events.push({ kind: 'unknownOp', op }); continue; }
+      const target = c.u32();
+      const isJump = (op & 0x01) !== 0;
+      const noUnderline = (op & 0x04) !== 0;
+      events.push({ kind: isJump ? 'jump' : 'popup', hash: target, underline: !noUnderline });
+      expectAt = 0x89;
+      continue;
+    }
+    // Variable-size hotspot: opcode + u16 length + payload.
+    if ((op & 0xD8) === 0xC8) {
+      const savedPos = c.pos;
+      if (c.remaining < 2) { events.push({ kind: 'unknownOp', op }); continue; }
+      const sz = c.u16();
+      if (sz < 0 || sz > c.remaining) {
+        c.pos = savedPos;
+        events.push({ kind: 'unknownOp', op });
+        continue;
+      }
+      const payload = c.bytes(sz);
+      const ev = decodeExtendedHotspot(op, payload);
+      if (ev) {
+        events.push(ev);
+        expectAt = 0x89;
+      }
+      continue;
+    }
+    events.push({ kind: 'unknownOp', op });
+  }
+}
+
+/** Decode a type-23 or type-35 TopicLink record (one table row).
+ *  Layout:
+ *    scanlong  TopicSize
+ *    scanword  TopicOffsetIncrement
+ *    u8        cols
+ *    u8        tableType   (0/2 → has minWidth, 1/3 → no)
+ *   [i16       minTableWidth]
+ *    cols × { i16 width; i16 gap }
+ *    cells loop:
+ *      i16 column (-1 = end of row)
+ *      u16 cellFlag
+ *      u8  cellByte
+ *      ParaInfo (u8 byte0, u8 byte1, u16 paraId, u16 x2 mask, conditional fields)
+ *      format-opcode stream (text emitted from LD2), terminated by 0xFF
+ */
+function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Uint8Array): DecodedParagraph {
+  const c = new Cursor(linkData1);
+  try { c.clongBiased(); } catch {}    // TopicSize
+  try { c.cuint(); } catch {}          // TopicOffsetIncrement
+
+  let cols = 0, tableType = 0, minWidth = 0;
+  const colW: Array<{ gap: number; width: number }> = [];
+  if (c.remaining >= 2) {
+    cols = c.u8();
+    tableType = c.u8();
+    if (tableType === 0 || tableType === 2) {
+      if (c.remaining >= 2) minWidth = c.u16();
+    }
+    for (let i = 0; i < cols && c.remaining >= 4; i++) {
+      const width = c.u16();
+      const gap = c.u16();
+      colW.push({ width, gap });
+    }
   }
 
-  if (textPos < linkData2.length) {
-    emitText(linkData2.length - textPos);
-  }
+  // LD2 is shared across all cells in this row; we drain text from it
+  // up to (and including) the NEXT NUL before dispatching each format
+  // opcode.
+  const ld2Pos = { v: 0 };
+  const drainText = (target: RenderEvent[]): void => {
+    const start = ld2Pos.v;
+    while (ld2Pos.v < linkData2.length && linkData2[ld2Pos.v] !== 0) ld2Pos.v++;
+    const end = ld2Pos.v;
+    if (end > start) target.push({ kind: 'text', bytes: linkData2.subarray(start, end) });
+    if (ld2Pos.v < linkData2.length) ld2Pos.v++; // consume the NUL
+  };
 
-  return { recordType, events, table };
+  const cells: RenderEvent[][] = [];
+  const overall: RenderEvent[] = [];
+  // The font opcode (0x80) is a stream-level state: a font set in cell N
+  // stays active for cell N+1 unless overridden. Carry it across cells so
+  // each cell's render starts with the correct font.
+  let curFont = 0;
+  let safety = 0;
+  while (!c.eof && safety++ < 100) {
+    // Cell header: i16 column (sentinel -1), u16 cellFlag, u8 cellByte.
+    if (c.remaining < 5) break;
+    const colIdx = (c.buf[c.pos] | (c.buf[c.pos + 1] << 8));
+    if (colIdx === 0xFFFF) { c.pos += 2; break; }
+    c.pos += 2;        // column index
+    c.u16();           // cellFlag
+    c.u8();            // cellByte
+    if (c.eof) break;
+
+    // ParaInfo: u8 byte0, u8 byte1, u16 paraId, u16 x2 mask, conditional fields.
+    /* const byte0   = */ c.u8();
+    /* const byte1   = */ c.u8();
+    /* const paraId  = */ c.u16();
+    let x2 = 0;
+    if (c.remaining >= 2) x2 = c.u16();
+
+    const state: ParaState = {};
+    if (x2 & 0x0001) skipScanLong(c);
+    if (x2 & 0x0002) state.spacingAbove = readScanInt(c);
+    if (x2 & 0x0004) state.spacingBelow = readScanInt(c);
+    if (x2 & 0x0008) state.spacingLines = readScanInt(c);
+    if (x2 & 0x0010) state.leftIndent = readScanInt(c);
+    if (x2 & 0x0020) state.rightIndent = readScanInt(c);
+    if (x2 & 0x0040) state.firstLineIndent = readScanInt(c);
+    if (x2 & 0x0080) skipScanInt(c);
+    if (x2 & 0x0100) {
+      if (c.remaining >= 3) { state.borderFlags = c.u8(); state.borderColor = c.u16(); }
+    }
+    if (x2 & 0x0200) {
+      const ntabs = c.cuint();
+      const stops: number[] = [];
+      for (let i = 0; i < ntabs && !c.eof; i++) stops.push(c.cuint());
+      state.tabStops = stops;
+    }
+    if (x2 & 0x0400) state.alignment = 'center';
+    else if (x2 & 0x0800) state.alignment = 'right';
+    else if (x2 & 0x1000) state.alignment = 'justify';
+
+    const cellEvents: RenderEvent[] = [{ kind: 'paraBegin', state }, { kind: 'font', index: curFont }];
+    decodeTableCellFormat(c, cellEvents, () => drainText(cellEvents));
+    cellEvents.push({ kind: 'paraEnd' });
+    // Update curFont from the last font event in this cell so the next
+    // cell starts where this one left off.
+    for (let k = cellEvents.length - 1; k >= 0; k--) {
+      const ev = cellEvents[k];
+      if (ev.kind === 'font') { curFont = ev.index; break; }
+    }
+    cells.push(cellEvents);
+  }
+  // Flatten cells into the overall events stream so renderers without
+  // table support still see all the row's text in order.
+  for (const cellEvents of cells) for (const e of cellEvents) overall.push(e);
+
+  const table = { columns: cols, type: tableType, columnWidths: colW, minWidth };
+  return { recordType, events: overall, table, cells };
+}
+
+/** Format-opcode loop for a single table cell. Drain one NUL-terminated
+ *  text run from LD2 BEFORE each opcode dispatch; stop when the next
+ *  opcode byte is 0xFF. */
+function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () => void): void {
+  let safety = 0;
+  while (!c.eof && safety++ < 1000) {
+    drainText();
+    const op = c.buf[c.pos];
+    if (op === 0xFF) { c.pos++; return; }
+    c.pos++;
+    if (op === 0x20) { events.push({ kind: 'hardSpace' }); continue; }
+    if (op === 0x21) { events.push({ kind: 'hardHyphen' }); continue; }
+    if (op === 0x80 && c.remaining >= 2) { events.push({ kind: 'font', index: c.u16() }); continue; }
+    if (op === 0x81) { events.push({ kind: 'lineBreak' }); continue; }
+    if (op === 0x82) {
+      // Paragraph end inside a cell. Followed by 0xFF it's redundant; in
+      // multi-paragraph cells it ends the run. We elide it here — the
+      // cell already renders as one logical block in the table.
+      continue;
+    }
+    if (op === 0x83) { events.push({ kind: 'tab' }); continue; }
+    if (op === 0x85 && c.remaining >= 2) { c.u16(); continue; }
+    if (op === 0x86 || op === 0x87 || op === 0x88) {
+      // Picture: type byte + scanlong size + (cuint when type > 0x10) + payload.
+      // If the encoded size exceeds what's left in LD1, the bytes weren't
+      // really a picture opcode (we mis-aligned with HC30 ParaInfo data,
+      // for example) — back up and treat as unknown.
+      const savedPos = c.pos;
+      try {
+        const t = c.u8();
+        const sz = c.clong();
+        if (t > 0x10) c.cuint();
+        if (sz < 0 || sz > c.remaining) throw new Error('picture overruns LD1');
+        const payload = c.bytes(sz);
+        const align: 'char' | 'left' | 'right' = op === 0x86 ? 'char' : op === 0x87 ? 'left' : 'right';
+        events.push({ kind: 'picture', align, type: t, payload });
+      } catch {
+        c.pos = savedPos;
+        events.push({ kind: 'unknownOp', op });
+      }
+      continue;
+    }
+    if (op === 0x89) { events.push({ kind: 'hotspotEnd' }); continue; }
+    if (op === 0x8B) { events.push({ kind: 'nbsp' }); continue; }
+    if (op === 0x8C) { events.push({ kind: 'nbHyphen' }); continue; }
+    // 5-byte hotspot range (0xC0..0xC7 / 0xE0..0xE7): opcode + u32 target.
+    // Bit 0 (0x01) discriminates popup (0) vs jump (1).
+    // Bit 1 (0x02) discriminates HC30 topic-number target (0) from HCW3.1+
+    // hash target (1) — both forms read as i32, just routed through
+    // different lookup tables by the host.
+    // Bit 2 (0x04) is "no underline" (font-change variant vs plain).
+    if ((op & 0xD8) === 0xC0) {
+      if (c.remaining < 4) { events.push({ kind: 'unknownOp', op }); continue; }
+      const target = c.u32();
+      const isJump = (op & 0x01) !== 0;
+      const noUnderline = (op & 0x04) !== 0;
+      events.push({ kind: isJump ? 'jump' : 'popup', hash: target, underline: !noUnderline });
+      continue;
+    }
+    // Variable-size hotspot range (0xC8..0xCF / 0xE8..0xEF): opcode + u16
+    // length + payload. If the encoded length doesn't fit in what's left,
+    // the byte was something else (e.g. HC30 ParaInfo data we don't yet
+    // recognise) — back the cursor up to just past the opcode and treat
+    // it as unknown.
+    if ((op & 0xD8) === 0xC8) {
+      const savedPos = c.pos;
+      if (c.remaining < 2) { events.push({ kind: 'unknownOp', op }); continue; }
+      const sz = c.u16();
+      if (sz < 0 || sz > c.remaining) {
+        c.pos = savedPos;
+        events.push({ kind: 'unknownOp', op });
+        continue;
+      }
+      const payload = c.bytes(sz);
+      const ev = decodeExtendedHotspot(op, payload);
+      if (ev) events.push(ev);
+      continue;
+    }
+    events.push({ kind: 'unknownOp', op });
+  }
+}
+
+/** Signed compressed int. 1-byte form: `(b>>1) - 0x40`. 2-byte form (bit0=1):
+ *  `(u16>>1) - 0x4000`. */
+function readScanInt(c: Cursor): number {
+  if (c.eof) return 0;
+  const b = c.buf[c.pos];
+  if (b & 1) {
+    if (c.remaining < 2) return 0;
+    const v = c.buf[c.pos] | (c.buf[c.pos + 1] << 8);
+    c.pos += 2;
+    return (v >> 1) - 0x4000;
+  }
+  c.pos += 1;
+  return (b >> 1) - 0x40;
+}
+function skipScanInt(c: Cursor): void { readScanInt(c); }
+function skipScanLong(c: Cursor): void {
+  if (c.eof) return;
+  const b = c.buf[c.pos];
+  c.pos += (b & 1) ? 4 : 2;
 }
 
 /** Decode a type-32 (HCW4 main display) link into render events. */
@@ -123,10 +456,19 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
   // Buffer hotspot opcodes so we can attach text segment that follows.
   let pendingHotspot: { kind: 'jump' | 'popup' | 'macroHotspot'; hash?: number; macro?: string; underline: boolean; window?: number } | null = null;
   let safety = 0;
+  // Format-opcode set: 0x80, 0x81, 0x82, 0x83, 0x85, 0x86–88, 0x89,
+  // 0xC0..C7 / 0xE0..E7 (5-byte hotspots), 0xC8..CF / 0xE8..EF (variable
+  // hotspots), 0xFF terminator. The "extras" 0x20 (hard-space), 0x21
+  // (hard-hyphen), 0x8B (nbsp), 0x8C (nb-hyphen) only appear in some
+  // authoring-tool variants — handle them too so those files render.
   while (!c.eof && safety++ < 1000) {
     const op = c.u8();
     if (op === 0xFF) break;
-    if (op === 0x80 && c.remaining >= 2) {
+    if (op === 0x20) {
+      formatEvents.push({ kind: 'hardSpace' });
+    } else if (op === 0x21) {
+      formatEvents.push({ kind: 'hardHyphen' });
+    } else if (op === 0x80 && c.remaining >= 2) {
       formatEvents.push({ kind: 'font', index: c.u16() });
     } else if (op === 0x81) {
       formatEvents.push({ kind: 'lineBreak' });
@@ -135,7 +477,11 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
     } else if (op === 0x83) {
       formatEvents.push({ kind: 'tab' });
     } else if (op === 0x85 && c.remaining >= 2) {
-      c.u16(); // skip
+      c.u16(); // 3-byte op of unknown semantics — skip
+    } else if (op === 0x8B) {
+      formatEvents.push({ kind: 'nbsp' });
+    } else if (op === 0x8C) {
+      formatEvents.push({ kind: 'nbHyphen' });
     } else if (op === 0x86 || op === 0x87 || op === 0x88) {
       // picture: type byte + clongBiased size + (cuint, when type > 0x10) + payload.
       if (c.remaining < 1) break;
@@ -149,17 +495,14 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
     } else if (op === 0x89) {
       formatEvents.push({ kind: 'hotspotEnd' });
       pendingHotspot = null;
-    } else if ((op & 0xF8) === 0xC0 || (op & 0xF8) === 0xE0) {
-      // 5-byte hotspot opcodes: opcode + u32 hash.
-      // Bit 2 (0x04) discriminates: clear = popup, set = jump.
-      // Bit 5 (0x20) (E group) = "with macro" / no-underline variants.
-      // Some bits also carry "no underline" semantics — for brevity we
-      // treat C0..C7 as underlined and E0..E7 as bordered hotspots that
-      // include macro/window flags.
+    } else if ((op & 0xD8) === 0xC0) {
+      // 5-byte hotspot opcodes: opcode + u32 target. Bit 0 = jump (1) /
+      // popup (0). Bit 1 = HC30 topic-number target (0) vs HCW3.1+ hash
+      // target (1). Bit 2 = no-underline (font-change variant).
       if (c.remaining < 4) break;
       const hash = c.u32();
-      const isJump = (op & 0x04) !== 0;
-      const noUnderline = (op === 0xE2 || op === 0xE3);
+      const isJump = (op & 0x01) !== 0;
+      const noUnderline = (op & 0x04) !== 0;
       const ev = { kind: isJump ? 'jump' : 'popup', hash, underline: !noUnderline } as RenderEvent;
       formatEvents.push(ev);
       pendingHotspot = ev as typeof pendingHotspot;
@@ -196,16 +539,15 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
   if (segStart < linkData2.length) segments.push(linkData2.subarray(segStart));
 
   // Render strategy:
-  //   Format opcodes (font/picture/hotspot start) ACCUMULATE state. Text
-  //   segments from LD2 are emitted AT structural events (tab, lineBreak,
-  //   hotspotEnd, paraEnd) using the current state. This matches WinHelp's
-  //   rendering convention: text bytes between NULs are emitted with
-  //   whatever state was last set by format ops at the preceding NUL
-  //   boundary.
+  //   Each format opcode "owns" one NUL-delimited segment of LinkData2.
+  //   The opcode is emitted AFTER the segment text (so state-changing ops
+  //   like font/picture/hotspot-start apply only to subsequent text, while
+  //   boundary ops like paraEnd/hotspotEnd close out a run of text). Most
+  //   state-changing segments are empty — they only matter to advance the
+  //   per-op cursor through LD2.
   let segIdx = 0;
   let firstPara = true;
   let inPara = false;
-  const skipLeadingEmpty = () => { while (segIdx < segments.length && segments[segIdx].length === 0) segIdx++; };
   const consumeSegment = () => {
     if (segIdx < segments.length) {
       const s = segments[segIdx++];
@@ -217,27 +559,14 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
     firstPara = false;
     inPara = true;
   };
-  skipLeadingEmpty();
   startPara();
   for (const ev of formatEvents) {
+    consumeSegment();
     if (ev.kind === 'paraEnd') {
-      consumeSegment(); // emit final segment of paragraph
       events.push({ kind: 'paraEnd' });
       inPara = false;
-      if (segIdx < segments.length) {
-        startPara();
-      }
-    } else if (ev.kind === 'tab' || ev.kind === 'lineBreak') {
-      consumeSegment(); // emit segment up to this tab/break
-      events.push(ev);
-    } else if (ev.kind === 'hotspotEnd') {
-      consumeSegment(); // emit clickable text inside hotspot
-      events.push(ev);
-    } else if (ev.kind === 'unknownOp') {
-      // ignore
+      if (segIdx < segments.length) startPara();
     } else {
-      // Inline state events (font/picture/jump/popup/macroHotspot start):
-      // push immediately; they apply to subsequent text.
       events.push(ev);
     }
   }
@@ -322,8 +651,9 @@ function skipCuintRev(c: Cursor): boolean {
  *    0xEE / 0xEF: macro hotspot (asciiz macro string)
  *  We dispatch by the LSB pattern. */
 function decodeExtendedHotspot(op: number, payload: Uint8Array): RenderEvent | null {
-  const isJump = (op & 0x04) !== 0;
-  const noUnderline = (op & 0x02) !== 0;
+  // Bit 0 = jump (1) / popup (0); bit 2 = no-underline / no-font-change (1).
+  const isJump = (op & 0x01) !== 0;
+  const noUnderline = (op & 0x04) !== 0;
   // 0xEE / 0xEF: macro hotspot. Payload is asciiz macro string.
   if ((op & 0xFE) === 0xEE) {
     const macro = readAsciiZ(payload, 0);
@@ -411,129 +741,3 @@ function readCintRev(c: Cursor): number {
   return (b >> 1) - 64;
 }
 
-function decodeParagraph(c: Cursor, linkData2: Uint8Array, events: RenderEvent[],
-                          emitText: (n: number) => void, recordType: number): void {
-  const state: ParaState = {};
-  // Type 1/20/22/23/35 have a paragraph metadata header: skip-bit byte then
-  // ParaState bitmask (1 or 2 bytes) then per-bit fields. Type 32 starts
-  // immediately with format opcodes.
-  if (recordType !== 32) {
-    if (c.eof) return;
-    /* const skipByte = */ c.u8();
-    let psLow = 0, psHigh = 0;
-    if (!c.eof) psLow = c.u8();
-    if (!c.eof) psHigh = c.u8();
-    const ps = psLow | (psHigh << 8);
-
-    if (ps & 0x0001) state.spacingAbove = c.cuint();
-    if (ps & 0x0002) state.spacingBelow = c.cuint();
-    if (ps & 0x0004) state.spacingLines = c.cuint();
-    if (ps & 0x0008) state.leftIndent = c.cuint();
-    if (ps & 0x0010) state.rightIndent = c.cuint();
-    if (ps & 0x0020) state.firstLineIndent = c.cuint();
-    if (ps & 0x0100) {
-      state.borderFlags = c.u8();
-      state.borderColor = c.u16();
-    }
-    if (ps & 0x0200) {
-      const ntabs = c.cuint();
-      const stops: number[] = [];
-      for (let i = 0; i < ntabs; i++) stops.push(c.cuint());
-      state.tabStops = stops;
-    }
-    if (ps & 0x0400) state.alignment = 'center';
-    else if (ps & 0x0800) state.alignment = 'right';
-    else if (ps & 0x1000) state.alignment = 'justify';
-  }
-
-  events.push({ kind: 'paraBegin', state });
-
-  // Format stream: opcodes interleaved with text emit instructions.
-  while (!c.eof) {
-    const op = c.buf[c.pos];
-    // Text-run prefix: opcode 0x00..0x1F encodes a text run length, then
-    // immediately consume that many bytes from LinkData2.
-    // Exception: 0x20=hard-space, 0x21=hard-hyphen are inline characters.
-    if (op === 0x82) {
-      c.u8(); // consume
-      events.push({ kind: 'paraEnd' });
-      return;
-    }
-    if (op === 0x00 || op === 0xFF) {
-      // null terminator / end-of-link marker
-      c.u8();
-      events.push({ kind: 'paraEnd' });
-      return;
-    }
-    c.u8();
-    if (op < 0x20) {
-      // text run of `op` bytes? Per Appendix B that's the convention.
-      emitText(op);
-      continue;
-    }
-    if (op === 0x20) { events.push({ kind: 'hardSpace' }); continue; }
-    if (op === 0x21) { events.push({ kind: 'hardHyphen' }); continue; }
-    if (op === 0x80) { events.push({ kind: 'font', index: c.u16() }); continue; }
-    if (op === 0x81) { events.push({ kind: 'lineBreak' }); continue; }
-    if (op === 0x83) { events.push({ kind: 'tab' }); continue; }
-    if (op === 0x86 || op === 0x87 || op === 0x88) {
-      const align: 'char' | 'left' | 'right' = op === 0x86 ? 'char' : op === 0x87 ? 'left' : 'right';
-      const t = c.u8();
-      const sz = c.clong();
-      if (t > 0x10) { try { c.cuint(); } catch {} }
-      const payload = c.bytes(sz);
-      events.push({ kind: 'picture', align, type: t, payload });
-      continue;
-    }
-    if (op === 0x89) { events.push({ kind: 'hotspotEnd' }); continue; }
-    if (op === 0x8B) { events.push({ kind: 'nbsp' }); continue; }
-    if (op === 0x8C) { events.push({ kind: 'nbHyphen' }); continue; }
-    if (op === 0xC8 || op === 0xCC) {
-      const hash = c.u32();
-      events.push({ kind: op === 0xC8 ? 'popup' : 'jump', hash, underline: true });
-      continue;
-    }
-    if (op === 0xE0 || op === 0xE1) {
-      const hash = c.u32();
-      events.push({ kind: op === 0xE0 ? 'popup' : 'jump', hash, underline: true });
-      continue;
-    }
-    if (op === 0xE2 || op === 0xE3) {
-      const hash = c.u32();
-      events.push({ kind: op === 0xE2 ? 'popup' : 'jump', hash, underline: false });
-      continue;
-    }
-    if (op === 0xE6 || op === 0xE7) {
-      const hash = c.u32();
-      const win = c.u16();
-      events.push({ kind: op === 0xE6 ? 'popup' : 'jump', hash, underline: true, window: win });
-      continue;
-    }
-    if (op === 0xEA || op === 0xEB) {
-      const sz = c.clong();
-      const start = c.pos;
-      const t = c.u8();
-      const win = c.u8();
-      const hash = c.u32();
-      const file = c.asciiZ();
-      events.push({ kind: 'crossFile', popup: t === 0, window: win, hash, file, underline: op === 0xEA });
-      // skip any remaining bytes in this hotspot record
-      const consumed = c.pos - start;
-      if (consumed < sz) c.pos += (sz - consumed);
-      continue;
-    }
-    if (op === 0xEE || op === 0xEF) {
-      const sz = c.clong();
-      const start = c.pos;
-      const macro = c.asciiZ();
-      const consumed = c.pos - start;
-      if (consumed < sz) c.pos += (sz - consumed);
-      events.push({ kind: 'macroHotspot', macro, underline: op === 0xEE });
-      continue;
-    }
-    // Unknown opcode — emit and continue, but stop if we'd loop forever.
-    events.push({ kind: 'unknownOp', op });
-    // Conservative: continue scanning; many of these are probably no-arg.
-  }
-  events.push({ kind: 'paraEnd' });
-}

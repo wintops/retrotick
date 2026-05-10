@@ -27,3 +27,4 @@ export function lz77Decompress(src: Uint8Array, decompSize: number): Uint8Array 
   }
   return out.subarray(0, outLen);
 }
+

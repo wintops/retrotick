@@ -73,14 +73,21 @@ export function makeKeyDecoder(structure: string): { key: BTreeKeyDecoder; value
     };
   }
   if (ch === 'L' || ch === 'i' || ch === '4') {
+    // 'L' / 'i' = signed long; '4' = unsigned 4-byte. WinHelp sorts hash keys
+    // (used by |CONTEXT, |CTXOMAP, |xWBTREE) as signed int32 — i.e. negative
+    // hashes sort before non-negative — so descent must use signed compare.
+    const signed = ch !== '4';
     return {
       key: {
         read(view: DataView, offset: number) {
-          return { key: view.getUint32(offset, true) >>> 0, next: offset + 4 };
+          const v = signed ? view.getInt32(offset, true) : view.getUint32(offset, true);
+          return { key: v, next: offset + 4 };
         },
         compare(a, b) {
-          const na = a as number, nb = b as number;
-          return na < nb ? -1 : na > nb ? 1 : 0;
+          const na = (a as number) | 0, nb = (b as number) | 0;
+          if (signed) return na < nb ? -1 : na > nb ? 1 : 0;
+          const ua = na >>> 0, ub = nb >>> 0;
+          return ua < ub ? -1 : ua > ub ? 1 : 0;
         },
       },
       valueStart: structure.slice(1),

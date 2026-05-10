@@ -37,26 +37,47 @@ export function* allTitles(ttlBody: Uint8Array): Generator<{ vOffset: number; ti
   }
 }
 
-/** Lookup numeric context (HELP_CONTEXT) → topic offset via |CTXOMAP. */
+/** Lookup numeric context (HELP_CONTEXT) → topic offset via |CTXOMAP.
+ *  HCW3.1+ layout: u32 numEntries + entries of (u32 ctxNum + u32 topicOffset).
+ *  HC30 layout:   u16 numEntries + entries of (u16 ctxNum + u16 padding + u32
+ *                 topicOffset).
+ *  We detect HC30 by trial: if the u32-prefix layout overshoots the body
+ *  size, fall back to the u16-prefix HC30 form. */
 export function lookupCtxomap(ctxBody: Uint8Array, contextNumber: number): number | undefined {
   if (ctxBody.length < 4) return undefined;
   const dv = new DataView(ctxBody.buffer, ctxBody.byteOffset, ctxBody.byteLength);
-  const n = dv.getUint32(0, true);
+  // Try HCW3.1+ form first.
+  {
+    const n = dv.getUint32(0, true);
+    if (4 + n * 8 <= ctxBody.length) {
+      for (let i = 0; i < n; i++) {
+        const off = 4 + i * 8;
+        if (dv.getUint32(off, true) === (contextNumber >>> 0)) {
+          return dv.getUint32(off + 4, true);
+        }
+      }
+      return undefined;
+    }
+  }
+  // Fall back to HC30 form.
+  const n = dv.getUint16(0, true);
   for (let i = 0; i < n; i++) {
-    const off = 4 + i * 8;
+    const off = 2 + i * 8;
     if (off + 8 > ctxBody.length) break;
-    if (dv.getUint32(off, true) === (contextNumber >>> 0)) {
+    if (dv.getUint16(off, true) === (contextNumber & 0xFFFF)) {
       return dv.getUint32(off + 4, true);
     }
   }
   return undefined;
 }
 
-/** Numeric topic-number → topic offset via |TOMAP. */
+/** Numeric topic-number → topic offset via |TOMAP. The body is a flat
+ *  array of u32 topic offsets indexed by topic number. */
 export function lookupTomap(tomapBody: Uint8Array, topicNumber: number): number | undefined {
-  if (tomapBody.length < 4) return undefined;
+  if (topicNumber < 0) return undefined;
+  const byteOff = topicNumber * 4;
+  if (byteOff + 4 > tomapBody.length) return undefined;
   const dv = new DataView(tomapBody.buffer, tomapBody.byteOffset, tomapBody.byteLength);
-  const n = dv.getUint32(0, true);
-  if (topicNumber < 0 || topicNumber >= n) return undefined;
-  return dv.getUint32(4 + topicNumber * 4, true);
+  const v = dv.getUint32(byteOff, true);
+  return v === 0 ? undefined : v;
 }

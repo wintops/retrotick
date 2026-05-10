@@ -108,31 +108,40 @@ export function makePhraseTable(
 }
 
 function parseOld(buf: Uint8Array, minor: number): PhraseTable {
+  // Phrases layout (HCW3.0/3.1):
+  //   u16 NumPhrases
+  //   u16 OneHundred           (0x0064 in HC30, 0x0100 in HCW31)
+  //   [u32 PhrasesSize]        only present when minor != 15 (HCW31)
+  //   u16 Offsets[NumPhrases+1] — positions in the *uncompressed* image
+  //                              that contains [offsets-table | phrase strings].
+  //                              So offsets[0] = (NumPhrases+1)*2 (right after
+  //                              the offsets table) and the actual position of
+  //                              phrase i within the phrase-strings blob is
+  //                              offsets[i] - (NumPhrases+1)*2.
+  //   phrase-strings blob       LZ77-compressed when SYSFLAG_LZ77 is set
+  //                              (which is the typical HCW31 case).
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const numPhrases = dv.getUint16(0, true);
-  let p: number;
+  const headerBytes = minor === 15 ? 4 : 8;
+  // PhrasesSize (decompressed size of the phrase-strings blob, NOT including
+  // the offsets table).
+  const decompSize = minor === 15 ? 0 : dv.getUint32(4, true);
+  const offsets = new Uint16Array(numPhrases + 1);
+  for (let i = 0; i <= numPhrases; i++) offsets[i] = dv.getUint16(headerBytes + i * 2, true);
+  const blobOffset = headerBytes + (numPhrases + 1) * 2;
+  const bias = (numPhrases + 1) * 2;
   let blob: Uint8Array;
   if (minor === 15) {
-    // 4-byte header
-    p = 4;
-    const offsets = new Uint16Array(numPhrases + 1);
-    for (let i = 0; i <= numPhrases; i++) offsets[i] = dv.getUint16(p + i * 2, true);
-    p += (numPhrases + 1) * 2;
-    blob = buf.subarray(p);
-    // adjust offsets: offsets index into the blob
-    // Offsets are relative to the first phrase; smallest is implicit.
-    return new OldPhraseTable(blob, offsets);
+    blob = buf.subarray(blobOffset);
+  } else {
+    blob = lz77Decompress(buf.subarray(blobOffset), decompSize);
   }
-  // 8-byte header with LZ77-compressed strings
-  const compressedSize = dv.getUint32(4, true);
-  p = 8;
-  const offsets = new Uint16Array(numPhrases + 1);
-  for (let i = 0; i <= numPhrases; i++) offsets[i] = dv.getUint16(p + i * 2, true);
-  p += (numPhrases + 1) * 2;
-  const compressedBlob = buf.subarray(p, p + compressedSize);
-  // decompressed size = offsets[numPhrases]
-  const decomp = lz77Decompress(compressedBlob, offsets[numPhrases]);
-  return new OldPhraseTable(decomp, offsets);
+  // Bias the stored offsets to point into the phrase-strings blob.
+  for (let i = 0; i <= numPhrases; i++) {
+    const v = offsets[i] - bias;
+    offsets[i] = v < 0 ? 0 : v > blob.length ? blob.length : v;
+  }
+  return new OldPhraseTable(blob, offsets);
 }
 
 function parseHall(phrIndex: Uint8Array, phrImage: Uint8Array): PhraseTable {

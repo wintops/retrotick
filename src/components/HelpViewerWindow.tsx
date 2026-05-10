@@ -23,7 +23,6 @@ interface Props {
 }
 
 interface HistoryEntry { vOffset: number; title: string; }
-type Tab = 'contents' | 'index';
 
 export function HelpViewerWindow({
   fileBytes, fileName, onStop, onFocus, onMinimize, zIndex, focused, minimized,
@@ -58,13 +57,12 @@ export function HelpViewerWindow({
   const moveDrag = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
   const resizeDrag = useRef<{ edge: string; startX: number; startY: number; startW: number; startH: number; startPosX: number; startPosY: number } | null>(null);
 
-  const [activeTab, setActiveTab] = useState<Tab>('contents');
   const [keywordFilter, setKeywordFilter] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [current, setCurrent] = useState<TopicHeader | null>(null);
   const { createUrl } = useBlobUrls();
 
-  const titles = useMemo(() => hf ? [...hf.titles()] : [], [hf]);
   const keywords = useMemo(() => hf ? [...hf.keywords()] : [], [hf]);
 
   const navigateTo = useCallback((topic: TopicHeader | null) => {
@@ -136,22 +134,6 @@ export function HelpViewerWindow({
     }
   }, [hf, history]);
 
-  const handleNext = useCallback(() => {
-    if (!hf || !current) return;
-    if (current.browseForward !== 0xFFFFFFFF) {
-      const next = hf.topicByOffset(current.browseForward);
-      if (next) navigateTo(next);
-    }
-  }, [hf, current, navigateTo]);
-
-  const handlePrev = useCallback(() => {
-    if (!hf || !current) return;
-    if (current.browseBack !== 0xFFFFFFFF) {
-      const prev = hf.topicByOffset(current.browseBack);
-      if (prev) navigateTo(prev);
-    }
-  }, [hf, current, navigateTo]);
-
   const handleContents = useCallback(() => {
     if (!hf) return;
     const t = hf.contentsTopic();
@@ -210,40 +192,18 @@ export function HelpViewerWindow({
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', font: '11px Tahoma, sans-serif' }}>
           <Toolbar
             onContents={handleContents}
-            onIndex={() => setActiveTab('index')}
+            onSearch={() => setSearchOpen(true)}
             onBack={handleBack}
-            onPrev={handlePrev}
-            onNext={handleNext}
             onPrint={() => window.print()}
             canBack={history.length > 0}
-            canPrev={!!current && current.browseBack !== 0xFFFFFFFF}
-            canNext={!!current && current.browseForward !== 0xFFFFFFFF}
           />
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <SidePanel
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              titles={titles}
-              keywords={filteredKeywords}
-              keywordFilter={keywordFilter}
-              onKeywordFilterChange={setKeywordFilter}
-              currentOffset={current?.vOffset ?? null}
-              onPickTopic={(off) => {
-                const t = hf.topicByOffset(off);
-                if (t) navigateTo(t);
-              }}
-              onPickKeyword={(kw) => {
-                if (kw.topicOffsets.length === 0) return;
-                const t = hf.topicByOffset(kw.topicOffsets[0]);
-                if (t) navigateTo(t);
-              }}
-            />
             <TopicPane
               hf={hf}
               topic={current}
               title={titleStr}
-              onJumpHash={(hash) => {
-                const t = hf.topicByHash(hash);
+              onJumpHash={(target) => {
+                const t = hf.topicByJumpTarget(target);
                 if (t) navigateTo(t);
               }}
               onMacro={(macro) => {
@@ -256,22 +216,34 @@ export function HelpViewerWindow({
           </div>
         </div>
       </Window>
+      {searchOpen && (
+        <SearchDialog
+          keywords={filteredKeywords}
+          filter={keywordFilter}
+          onFilterChange={setKeywordFilter}
+          onClose={() => setSearchOpen(false)}
+          onPick={(kw) => {
+            if (kw.topicOffsets.length === 0) return;
+            const t = hf.topicByOffset(kw.topicOffsets[0]);
+            if (t) navigateTo(t);
+            setSearchOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 // --- Toolbar -----------------------------------------------------------
 
-function Toolbar({ onContents, onIndex, onBack, onPrev, onNext, onPrint, canBack, canPrev, canNext }:
-  { onContents: () => void; onIndex: () => void; onBack: () => void; onPrev: () => void; onNext: () => void; onPrint: () => void;
-    canBack: boolean; canPrev: boolean; canNext: boolean; }) {
+function Toolbar({ onContents, onSearch, onBack, onPrint, canBack }:
+  { onContents: () => void; onSearch: () => void; onBack: () => void; onPrint: () => void;
+    canBack: boolean; }) {
   return (
     <div style={{ display: 'flex', gap: 2, padding: 4, background: '#D4D0C8', borderBottom: '1px solid #808080' }}>
       <ToolbarButton label="Contents" onClick={onContents} />
-      <ToolbarButton label="Index" onClick={onIndex} />
+      <ToolbarButton label="Search" onClick={onSearch} />
       <ToolbarButton label="Back" onClick={onBack} disabled={!canBack} />
-      <ToolbarButton label="<<" onClick={onPrev} disabled={!canPrev} />
-      <ToolbarButton label=">>" onClick={onNext} disabled={!canNext} />
       <span style={{ flex: 1 }} />
       <ToolbarButton label="Print" onClick={onPrint} />
     </div>
@@ -305,96 +277,85 @@ function ToolbarButton({ label, onClick, disabled }: { label: string; onClick: (
   );
 }
 
-// --- Side panel (Contents / Index) ------------------------------------
+// --- Search dialog (popup keyword index) ------------------------------
 
-function SidePanel({ activeTab, onTabChange, titles, keywords, keywordFilter, onKeywordFilterChange,
-  currentOffset, onPickTopic, onPickKeyword }: {
-  activeTab: Tab; onTabChange: (t: Tab) => void;
-  titles: { vOffset: number; title: string }[];
+function SearchDialog({ keywords, filter, onFilterChange, onClose, onPick }: {
   keywords: Keyword[];
-  keywordFilter: string; onKeywordFilterChange: (s: string) => void;
-  currentOffset: number | null;
-  onPickTopic: (off: number) => void;
-  onPickKeyword: (kw: Keyword) => void;
+  filter: string;
+  onFilterChange: (s: string) => void;
+  onClose: () => void;
+  onPick: (kw: Keyword) => void;
 }) {
+  const [selected, setSelected] = useState<string | null>(keywords[0]?.keyword ?? null);
+  // Track scroll-to-keyword: as the user types, jump the listing to the
+  // first matching prefix (Windows Help Index behavior).
+  useEffect(() => {
+    if (!filter) return;
+    const q = filter.toLowerCase();
+    const hit = keywords.find(k => k.keyword.toLowerCase().startsWith(q));
+    if (hit) setSelected(hit.keyword);
+  }, [filter, keywords]);
   return (
-    <div style={{ width: 220, display: 'flex', flexDirection: 'column', borderRight: '1px solid #808080', background: '#D4D0C8' }}>
-      <div style={{ display: 'flex', borderBottom: '1px solid #808080' }}>
-        <TabButton label="Contents" active={activeTab === 'contents'} onClick={() => onTabChange('contents')} />
-        <TabButton label="Index" active={activeTab === 'index'} onClick={() => onTabChange('index')} />
-      </div>
-      {activeTab === 'contents' ? (
-        <div style={{ flex: 1, overflowY: 'auto', background: '#FFF', padding: 4 }}>
-          {titles.filter(t => t.title).map(t => (
-            <div
-              key={t.vOffset}
-              onClick={() => onPickTopic(t.vOffset)}
-              style={{
-                padding: '2px 6px',
-                cursor: 'pointer',
-                background: t.vOffset === currentOffset ? '#000080' : 'transparent',
-                color: t.vOffset === currentOffset ? '#FFF' : '#000',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                userSelect: 'none',
-              }}
-              title={t.title}
-            >
-              {t.title}
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100000,
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()}
+           style={{
+             width: 380, padding: 12, background: '#D4D0C8',
+             border: '1px solid', borderColor: '#FFFFFF #404040 #404040 #FFFFFF',
+             boxShadow: '2px 2px 8px rgba(0,0,0,0.4)',
+             font: '11px Tahoma, sans-serif',
+             display: 'flex', flexDirection: 'column', gap: 8,
+           }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontWeight: 'bold' }}>Search</span>
+          <button onClick={onClose}
+                  style={{ width: 18, height: 18, padding: 0, font: '10px Tahoma', cursor: 'pointer' }}>×</button>
+        </div>
+        <div>Type the first few letters of the word you're looking for:</div>
+        <input
+          autoFocus
+          type="text"
+          value={filter}
+          onInput={(e) => onFilterChange((e.target as HTMLInputElement).value)}
+          style={{ padding: '2px 4px', font: '11px Tahoma',
+                   border: '1px solid', borderColor: '#404040 #FFF #FFF #404040' }}
+        />
+        <div>Then click an index entry below, and click Display:</div>
+        <div style={{ flex: '0 0 auto', height: 200, overflowY: 'auto', background: '#FFF',
+                      border: '1px solid', borderColor: '#404040 #FFF #FFF #404040' }}>
+          {keywords.map(kw => (
+            <div key={kw.keyword}
+                 onClick={() => setSelected(kw.keyword)}
+                 onDblClick={() => onPick(kw)}
+                 ref={el => { if (el && kw.keyword === selected) el.scrollIntoView({ block: 'nearest' }); }}
+                 style={{
+                   padding: '2px 6px', cursor: 'pointer',
+                   background: kw.keyword === selected ? '#000080' : 'transparent',
+                   color: kw.keyword === selected ? '#FFF' : '#000',
+                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                   userSelect: 'none',
+                 }}>
+              {kw.keyword}
             </div>
           ))}
+          {keywords.length === 0 && (
+            <div style={{ padding: 8, color: '#808080', font: 'italic 11px Tahoma' }}>
+              No index entries match.
+            </div>
+          )}
         </div>
-      ) : (
-        <>
-          <input
-            type="text"
-            placeholder="Type a keyword..."
-            value={keywordFilter}
-            onInput={(e) => onKeywordFilterChange((e.target as HTMLInputElement).value)}
-            style={{ margin: 4, padding: 2, font: '11px Tahoma', border: '1px solid', borderColor: '#404040 #FFF #FFF #404040' }}
-          />
-          <div style={{ flex: 1, overflowY: 'auto', background: '#FFF', padding: 4 }}>
-            {keywords.map(kw => (
-              <div
-                key={kw.keyword}
-                onClick={() => onPickKeyword(kw)}
-                style={{
-                  padding: '2px 6px',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  userSelect: 'none',
-                }}
-                title={`${kw.keyword} (${kw.topicOffsets.length})`}
-              >
-                {kw.keyword}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
+        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+          <ToolbarButton label="Display"
+                         onClick={() => {
+                           const kw = keywords.find(k => k.keyword === selected);
+                           if (kw) onPick(kw);
+                         }} />
+          <ToolbarButton label="Cancel" onClick={onClose} />
+        </div>
+      </div>
     </div>
-  );
-}
-
-function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1,
-        padding: '4px 8px',
-        font: '11px Tahoma',
-        background: active ? '#FFF' : '#D4D0C8',
-        border: 'none',
-        borderBottom: active ? 'none' : '1px solid #808080',
-        cursor: 'pointer',
-      }}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -409,7 +370,8 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
   createUrl: (b: Blob) => string;
 }) {
   const [bitmapUrls, setBitmapUrls] = useState<Map<number, { url: string; width: number; height: number }>>(new Map());
-  const paragraphs = useMemo(() => topic ? hf.topicContent(topic) : [], [hf, topic]);
+  const split = useMemo(() => topic ? hf.topicSplit(topic) : { nonScroll: [], scroll: [] }, [hf, topic]);
+  const paragraphs = useMemo(() => [...split.nonScroll, ...split.scroll], [split]);
 
   // Fallback only fires when the link has no useful render events.
   const useFallback = useMemo(() => {
@@ -467,27 +429,288 @@ function TopicPane({ hf, topic, title, onJumpHash, onMacro, createUrl }: {
     return () => { cancelled = true; };
   }, [hf, paragraphs, createUrl]);
 
+  const nonScrollLogical = useMemo(() => splitIntoLogicalParas(split.nonScroll), [split.nonScroll]);
+  const scrollGroups = useMemo(() => groupForRender(split.scroll), [split.scroll]);
+  const hasNonScroll = nonScrollLogical.length > 0;
   return (
-    <div style={{ flex: 1, overflowY: 'auto', background: '#FFFFCC', padding: 12 }}>
-      <h2 style={{ font: 'bold 14px "Times New Roman", serif', margin: '0 0 12px', color: '#000' }}>{title}</h2>
-      {paragraphs.length === 0 && (
-        <div style={{ color: '#666' }}>(No body content for this topic.)</div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#FFFFFF', overflow: 'hidden' }}>
+      {/* Non-scroll header band: fixed gray background, holds the topic title
+          and any other paragraphs flagged as non-scrolling. WinHelp renders
+          these as a fixed banner above the scrolling body. */}
+      {hasNonScroll && !useFallback && (
+        <div style={{
+          background: '#C0C0C0',
+          borderBottom: '1px solid #808080',
+          padding: '12px 12px 8px',
+          flex: '0 0 auto',
+        }}>
+          {nonScrollLogical.map((p, i) => (
+            <ParagraphRender key={`ns-${i}`} para={p} fonts={hf.font.descriptors} faces={hf.font.facenames}
+                             bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
+          ))}
+        </div>
       )}
-      {useFallback ? (
-        <>
-          <div style={{ font: 'italic 11px Tahoma', color: '#888', marginBottom: 8 }}>
-            (Body uses HCW4 type-32 records with phrase compression — showing extracted text.)
-          </div>
-          <pre style={{ font: '12px "Times New Roman", serif', whiteSpace: 'pre-wrap', color: '#000' }}>
-            {fallbackText || '(no readable text extracted)'}
-          </pre>
-        </>
-      ) : (
-        paragraphs.map((p, i) => (
-          <ParagraphRender key={i} para={p} fonts={hf.font.descriptors} faces={hf.font.facenames}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
+        {paragraphs.length === 0 && (
+          <div style={{ color: '#666' }}>(No body content for this topic.)</div>
+        )}
+        {useFallback ? (
+          <>
+            <div style={{ font: 'italic 11px Tahoma', color: '#888', marginBottom: 8 }}>
+              (Body uses HCW4 type-32 records with phrase compression — showing extracted text.)
+            </div>
+            <pre style={{ font: '12px "Times New Roman", serif', whiteSpace: 'pre-wrap', color: '#000' }}>
+              {fallbackText || '(no readable text extracted)'}
+            </pre>
+          </>
+        ) : (
+          scrollGroups.map((g, i) => g.kind === 'table' ? (
+            <TableRender key={i} group={g} fonts={hf.font.descriptors} faces={hf.font.facenames}
+                         bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
+          ) : (
+            <ExpandableParagraph key={i} hf={hf} para={g.para}
+                                 bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro}
+                                 createUrl={createUrl} depth={0} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+type RenderGroup =
+  | { kind: 'para'; para: DecodedParagraph }
+  | { kind: 'table'; rows: DecodedParagraph[]; columns: number; columnWidths: Array<{ width: number; gap: number }> };
+
+/** Walk decoded paragraphs from a topic and group them for rendering:
+ *  consecutive table-row records (type 23/35 with `cells` populated) are
+ *  collected into one `table` group; everything else is split into logical
+ *  paragraphs and emitted as `para` groups. */
+function groupForRender(input: DecodedParagraph[]): RenderGroup[] {
+  const out: RenderGroup[] = [];
+  let i = 0;
+  while (i < input.length) {
+    const p = input[i];
+    if (p.cells && p.table) {
+      // Collect a run of table rows with the same column structure.
+      const rows: DecodedParagraph[] = [p];
+      let j = i + 1;
+      while (j < input.length) {
+        const next = input[j];
+        if (!next.cells || !next.table || next.table.columns !== p.table.columns) break;
+        rows.push(next);
+        j++;
+      }
+      out.push({ kind: 'table', rows, columns: p.table.columns, columnWidths: p.table.columnWidths });
+      i = j;
+    } else {
+      for (const split of splitIntoLogicalParas([p])) out.push({ kind: 'para', para: split });
+      i++;
+    }
+  }
+  return out;
+}
+
+/** Renders a run of table rows. Each row's `cells` array is one cell's
+ *  events; we use ParagraphRender per cell so font/hotspot/picture events
+ *  inside cells render correctly. */
+function TableRender({ group, fonts, faces, bitmapUrls, onJumpHash, onMacro }: {
+  group: Extract<RenderGroup, { kind: 'table' }>;
+  fonts: FontDescriptor[];
+  faces: string[];
+  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  onJumpHash: (hash: number) => void;
+  onMacro: (macro: string) => void;
+}) {
+  // WinHelp column widths are in twips (1/20 pt). We translate to CSS px
+  // proportionally — the absolute values are typically too large to use
+  // verbatim. Sum the widths and let the table size to its container.
+  const totalW = group.columnWidths.reduce((s, c) => s + c.width, 0) || 1;
+  return (
+    <table style={{
+      borderCollapse: 'collapse',
+      margin: '6px 0',
+      font: '12px "Times New Roman", serif',
+    }}>
+      <colgroup>
+        {group.columnWidths.map((c, i) => (
+          <col key={i} style={{ width: `${(c.width / totalW * 100).toFixed(2)}%` }} />
+        ))}
+      </colgroup>
+      <tbody>
+        {group.rows.map((row, ri) => (
+          <tr key={ri}>
+            {(row.cells || []).map((cellEvents, ci) => (
+              <td key={ci} style={{
+                verticalAlign: 'top',
+                padding: '4px 8px',
+                border: 'none',
+              }}>
+                <ParagraphRender
+                  para={{ recordType: row.recordType, events: cellEvents }}
+                  fonts={fonts} faces={faces}
+                  bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Split each DecodedParagraph (one TopicLink record) into one logical
+ *  paragraph per paraBegin/paraEnd cycle. type-32 links often pack several
+ *  bullet items into a single record, but for the expand-on-click UI we
+ *  want each bullet to be its own row.
+ *
+ *  We also drop logical paragraphs that contain no text and no hotspots —
+ *  those are pure structural artifacts. Any font event seen before a row's
+ *  first paraBegin carries over into that row so the active font state is
+ *  preserved. */
+function splitIntoLogicalParas(input: DecodedParagraph[]): DecodedParagraph[] {
+  const out: DecodedParagraph[] = [];
+  let curFont = 0;
+  for (const dp of input) {
+    let bucket: RenderEvent[] | null = null;
+    let lastFontInBucket = curFont;
+    const flush = () => {
+      if (!bucket) return;
+      bucket.push({ kind: 'paraEnd' });
+      const hasContent = bucket.some(ev =>
+        ev.kind === 'text' || ev.kind === 'jump' || ev.kind === 'popup'
+        || ev.kind === 'macroHotspot' || ev.kind === 'crossFile' || ev.kind === 'picture');
+      if (hasContent) out.push({ recordType: dp.recordType, events: bucket });
+      bucket = null;
+      curFont = lastFontInBucket;
+    };
+    for (const e of dp.events) {
+      if (e.kind === 'paraBegin') {
+        flush();
+        bucket = [{ kind: 'paraBegin', state: e.state }, { kind: 'font', index: curFont }];
+        lastFontInBucket = curFont;
+        continue;
+      }
+      if (e.kind === 'paraEnd') { flush(); continue; }
+      if (e.kind === 'font') lastFontInBucket = e.index;
+      if (bucket) bucket.push(e);
+      else if (e.kind === 'font') curFont = e.index;
+    }
+    flush();
+  }
+  return out;
+}
+
+/** Wraps ParagraphRender with an inline expand/collapse toggle for any
+ *  jump hotspot the paragraph contains. Clicking the ▶ triangle expands
+ *  the target topic's body underneath, indented; clicking the hotspot
+ *  text itself navigates as before. */
+function ExpandableParagraph({ hf, para, bitmapUrls, onJumpHash, onMacro, createUrl, depth }: {
+  hf: HlpFile;
+  para: DecodedParagraph;
+  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  onJumpHash: (hash: number) => void;
+  onMacro: (macro: string) => void;
+  createUrl: (b: Blob) => string;
+  depth: number;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const jumpHashes = useMemo(() => {
+    const hs: number[] = [];
+    for (const e of para.events) if (e.kind === 'jump') hs.push(e.hash);
+    return hs;
+  }, [para]);
+  const toggleHash = useCallback((h: number) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(h)) next.delete(h); else next.add(h);
+      return next;
+    });
+  }, []);
+  // Single-jump paragraphs (the typical Contents bullet) get a leading
+  // triangle. We avoid showing triangles on paragraphs with multiple jumps
+  // (they're prose with several inline links) — those just navigate.
+  const showToggle = jumpHashes.length === 1 && depth < 3;
+  const onlyHash = showToggle ? jumpHashes[0] : -1;
+  const isOpen = showToggle && expanded.has(onlyHash);
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+        {showToggle && (
+          <button
+            onClick={() => toggleHash(onlyHash)}
+            style={{
+              flex: '0 0 auto',
+              width: 14, height: 14, padding: 0,
+              marginTop: 3, marginRight: 4,
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              font: '10px monospace',
+              color: '#000',
+              lineHeight: '14px',
+            }}
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+          >
+            {isOpen ? '▼' : '▶'}
+          </button>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <ParagraphRender para={para} fonts={hf.font.descriptors} faces={hf.font.facenames}
                            bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro} />
-        ))
+        </div>
+      </div>
+      {isOpen && (
+        <ExpandedTopic hf={hf} hash={onlyHash} bitmapUrls={bitmapUrls}
+                       onJumpHash={onJumpHash} onMacro={onMacro} createUrl={createUrl}
+                       depth={depth + 1} />
       )}
+    </div>
+  );
+}
+
+/** Inline-rendered child topic body, used when the user expands a jump
+ *  hotspot. Resolves the hash to a topic and renders just its scrolling
+ *  paragraphs (skipping the title/non-scroll banner) indented underneath
+ *  the parent paragraph. */
+function ExpandedTopic({ hf, hash, bitmapUrls, onJumpHash, onMacro, createUrl, depth }: {
+  hf: HlpFile;
+  hash: number;
+  bitmapUrls: Map<number, { url: string; width: number; height: number }>;
+  onJumpHash: (hash: number) => void;
+  onMacro: (macro: string) => void;
+  createUrl: (b: Blob) => string;
+  depth: number;
+}) {
+  const target = useMemo(() => hf.topicByJumpTarget(hash), [hf, hash]);
+  const split = useMemo(() => target ? hf.topicSplit(target) : null, [hf, target]);
+  if (!target || !split) {
+    return (
+      <div style={{ marginLeft: 18, font: 'italic 11px Tahoma', color: '#888' }}>
+        (no sub-topic resolved for this link)
+      </div>
+    );
+  }
+  // Skip paragraphs that are identical to ones the parent already shows
+  // (e.g., the recurring "How To..." / hotspot list at the top of every
+  // contents-style page). Heuristic: drop empty / structural paragraphs.
+  const items = splitIntoLogicalParas(split.scroll).filter(p =>
+    p.events.some(e => e.kind === 'jump' || (e.kind === 'text' && e.bytes.length > 0))
+  );
+  if (items.length === 0) {
+    return (
+      <div style={{ marginLeft: 18, font: 'italic 11px Tahoma', color: '#888' }}>
+        (no expandable sub-items in target topic)
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginLeft: 18, borderLeft: '1px dotted #808080', paddingLeft: 8, marginBottom: 4 }}>
+      {items.map((p, i) => (
+        <ExpandableParagraph key={i} hf={hf} para={p}
+                             bitmapUrls={bitmapUrls} onJumpHash={onJumpHash} onMacro={onMacro}
+                             createUrl={createUrl} depth={depth} />
+      ))}
     </div>
   );
 }

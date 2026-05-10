@@ -35,6 +35,7 @@ Most programs have rendering glitches or missing features. This is a work in pro
 - **DirectDraw / DirectSound** — COM-based surface and audio buffer management for DOS-era Windows games
 - **Window manager** — Multiple windows, z-order, focus, MDI (Multiple Document Interface), taskbar, message dispatch, common dialogs
 - **GDI rendering engine** — Bitmaps, brushes, pens, regions, text, DIB-to-Canvas mapping
+- **WinHelp (`.hlp`) viewer** — Reimplemented web viewer for classic Windows help files: B+tree directory walk, LZ77 + Hall/old phrase decompression, topic chain across HC30 / HCW3.1 / HCW4 file blocks, type-1 / 20 / 22 / 23 / 32 / 35 records, table layouts with per-cell ParaInfo, embedded `|bm` pictures, hotspot opcodes (jump / popup / macro / cross-file), keyword search index
 - **Virtual filesystem** — IndexedDB-backed persistent storage for uploaded files
 
 ## Getting Started

@@ -74,6 +74,16 @@ export class HlpFile {
     return this.topicReader.topicByOffset(off);
   }
 
+  /** Resolve a jump target from a hotspot opcode payload. Tries each
+   *  HC30/HCW3.x lookup in turn, since the same u32 value can be a hash
+   *  (HCW3.1+ |CONTEXT), a context number (|CTXOMAP), or a sequential
+   *  topic number (|TOMAP). */
+  topicByJumpTarget(value: number): TopicHeader | null {
+    return this.topicByHash(value)
+        ?? this.topicByContextNumber(value)
+        ?? this.topicByTopicNumber(value);
+  }
+
   /** Look up a topic by its TOPICOFFSET (as stored in TTLBTREE/CONTEXT). */
   topicByOffset(topicOffset: number): TopicHeader | null {
     return this.topicReader.topicByOffset(topicOffset);
@@ -114,32 +124,53 @@ export class HlpFile {
    *  paragraph links — we prepend a synthetic font event to each link so
    *  the renderer doesn't reset to font 0. */
   topicContent(topic: TopicHeader): DecodedParagraph[] {
+    const split = this.topicSplit(topic);
+    return [...split.nonScroll, ...split.scroll];
+  }
+
+  /** Like topicContent, but partitions paragraphs into the non-scrolling
+   *  region (rendered in a fixed gray header by the WinHelp UI) and the
+   *  scrolling region. The split point is taken from the topic header's
+   *  ScrollOffset field; non-scroll paragraphs are the ones whose link
+   *  starts before the scroll offset. */
+  topicSplit(topic: TopicHeader): { nonScroll: DecodedParagraph[]; scroll: DecodedParagraph[] } {
     const link = this.topicReader.readLink(topic.vOffset);
-    if (!link) return [];
-    const out: DecodedParagraph[] = [];
+    const nonScroll: DecodedParagraph[] = [];
+    const scroll: DecodedParagraph[] = [];
+    if (!link) return { nonScroll, scroll };
+    // Topic header defines two regions: paragraphs whose link offset is
+    // < `scroll` go in the fixed non-scrolling banner, the rest in the
+    // scrolling area. HC30 topics (and HCW3.1+ topics that don't use a
+    // non-scroll region) leave `scroll` set to 0xFFFFFFFF, in which case
+    // everything goes in the scrolling region.
+    const hasNonScroll = topic.scroll !== 0xFFFFFFFF
+      && topic.scroll !== 0
+      && topic.nonScroll !== 0xFFFFFFFF;
+    const scrollAt = hasNonScroll ? this.topicReader.internalPtrToPos(topic.scroll) : -1;
     let curFont = this.system.defaultFont?.fontNumber ?? 0;
     for (const p of this.topicReader.paragraphs(link)) {
       const t = p.recordType;
-      if (t === 1 || t === 20 || t === 22 || t === 23 || t === 32 || t === 35) {
-        try {
-          const decoded = decodeDisplayLink(t, p.linkData1, p.linkData2);
-          // Prepend an explicit font event so cross-link carry-over works.
-          const events = decoded.events;
-          const firstParaBegin = events.findIndex(e => e.kind === 'paraBegin');
-          if (firstParaBegin >= 0) {
-            events.splice(firstParaBegin + 1, 0, { kind: 'font', index: curFont });
-          }
-          // Update curFont to the LAST font event in this link (so it
-          // propagates to the next link).
-          for (let i = events.length - 1; i >= 0; i--) {
-            const ev = events[i];
-            if (ev.kind === 'font') { curFont = ev.index; break; }
-          }
-          out.push(decoded);
-        } catch (e) { console.warn('[hlp] decode link failed:', e); }
+      if (!(t === 1 || t === 20 || t === 22 || t === 23 || t === 32 || t === 35)) continue;
+      let decoded: DecodedParagraph;
+      try {
+        decoded = decodeDisplayLink(t, p.linkData1, p.linkData2);
+      } catch (e) {
+        console.warn('[hlp] decode link failed:', e);
+        continue;
       }
+      const events = decoded.events;
+      const firstParaBegin = events.findIndex(e => e.kind === 'paraBegin');
+      if (firstParaBegin >= 0) {
+        events.splice(firstParaBegin + 1, 0, { kind: 'font', index: curFont });
+      }
+      for (let i = events.length - 1; i >= 0; i--) {
+        const ev = events[i];
+        if (ev.kind === 'font') { curFont = ev.index; break; }
+      }
+      const inNonScroll = hasNonScroll && p.vOffset < scrollAt;
+      (inNonScroll ? nonScroll : scroll).push(decoded);
     }
-    return out;
+    return { nonScroll, scroll };
   }
 
   rawLink(off: number): TopicLinkRaw | null {

@@ -37,6 +37,7 @@ La plupart des programmes présentent des défauts de rendu ou des fonctionnalit
 - **DirectDraw / DirectSound** — Gestion COM de surfaces et de tampons audio pour les jeux Windows de l'ère DOS
 - **Gestionnaire de fenêtres** — Fenêtres multiples, ordre Z, focus, MDI (Multiple Document Interface), barre des tâches, dispatch des messages, dialogues communs
 - **Moteur de rendu GDI** — Bitmaps, brosses, stylos, régions, texte, mapping DIB vers Canvas
+- **Visualiseur WinHelp (`.hlp`)** — Réimplémentation web pour les fichiers d'aide Windows classiques : parcours d'arborescence B+, décompression LZ77 + phrases Hall/anciennes, chaîne de rubriques traversant les blocs HC30 / HCW3.1 / HCW4, enregistrements type-1 / 20 / 22 / 23 / 32 / 35, mises en page de tableaux avec ParaInfo par cellule, images `|bm` intégrées, opcodes de points chauds (jump / popup / macro / cross-file), index de recherche par mots-clés
 - **Système de fichiers virtuel** — Stockage persistant basé sur IndexedDB
 
 ## Pour commencer
