@@ -471,8 +471,10 @@ export function registerText(emu: Emulator): void {
     return OUTLINETEXTMETRICW_SIZE;
   });
 
+  gdi32.register('CreateDCA', 4, () => 0); // printer/display device, no DC available
   gdi32.register('CreateDCW', 4, () => 0);
   gdi32.register('LPtoDP', 3, () => 1);
+  gdi32.register('StartDocA', 2, () => 1);
   gdi32.register('StartDocW', 2, () => 1);
   gdi32.register('SetAbortProc', 2, () => 1);
   gdi32.register('StartPage', 1, () => 1);

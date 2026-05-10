@@ -16,6 +16,7 @@ import { useBlobUrls } from '../hooks/useBlobUrls';
 import type { ResUrls } from './DialogDisplay';
 import { EmulatorView } from './EmulatorView';
 import { ResourceViewerWindow } from './ResourceViewerWindow';
+import { HelpViewerWindow } from './HelpViewerWindow';
 import { FolderWindow } from './FolderWindow';
 import { WelcomeWindow } from './WelcomeWindow';
 import { RegionalSettingsWindow } from './RegionalSettingsWindow';
@@ -42,6 +43,12 @@ interface ResourceViewerApp {
   id: number;
   data: LoadedData;
   exeName: string;
+}
+
+interface HelpViewerApp {
+  id: number;
+  fileBytes: ArrayBuffer;
+  fileName: string;
 }
 
 interface RunningApp {
@@ -89,6 +96,7 @@ function isExecutable(peInfo: PEInfo, fileName?: string): boolean {
 export function App() {
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
   const [resourceViewers, setResourceViewers] = useState<ResourceViewerApp[]>([]);
+  const [helpViewers, setHelpViewers] = useState<HelpViewerApp[]>([]);
   const [openFolders, setOpenFolders] = useState<OpenFolder[]>([]);
   const [focusedAppId, setFocusedAppId] = useState<number | null>(-1);
   const focusHistory = useRef<number[]>([]);
@@ -178,7 +186,19 @@ export function App() {
     focusApp(id);
   }, [focusApp, ensureAudioContext]);
 
+  const handleOpenHelp = useCallback((arrayBuffer: ArrayBuffer, fileName: string) => {
+    const id = nextAppId.current++;
+    setHelpViewers(prev => [...prev, { id, fileBytes: arrayBuffer, fileName }]);
+    setWindowTitles(prev => new Map(prev).set(id, fileName));
+    focusApp(id);
+  }, [focusApp]);
+
   const handleViewResources = useCallback(async (arrayBuffer: ArrayBuffer, fileName?: string) => {
+    // .hlp files take a separate path
+    if (fileName && fileName.toLowerCase().endsWith('.hlp')) {
+      handleOpenHelp(arrayBuffer, fileName);
+      return;
+    }
     try {
       const peInfo = parsePE(arrayBuffer);
       const bitmaps = extractBitmaps(peInfo, arrayBuffer);
@@ -246,6 +266,7 @@ export function App() {
   const handleStopApp = useCallback((id: number) => {
     setRunningApps(prev => prev.filter(a => a.id !== id));
     setResourceViewers(prev => prev.filter(a => a.id !== id));
+    setHelpViewers(prev => prev.filter(a => a.id !== id));
     setOpenFolders(prev => prev.filter(a => a.id !== id));
     setLoadingAppIds(prev => { const s = new Set(prev); s.delete(id); return s; });
     setWindowTitles(prev => { const m = new Map(prev); m.delete(id); return m; });
@@ -411,6 +432,13 @@ export function App() {
       iconElement: !windowIcons.get(app.id) ? EXE_ICON_16 : undefined,
       minimized: minimizedApps.has(app.id),
     })),
+    ...helpViewers.map(app => ({
+      id: app.id,
+      title: windowTitles.get(app.id) || app.fileName,
+      iconUrl: null as string | null | undefined,
+      iconElement: EXE_ICON_16,
+      minimized: minimizedApps.has(app.id),
+    })),
     ...openFolders.map(folder => ({
       id: folder.id,
       title: windowTitles.get(folder.id) || displayName(folder.path),
@@ -501,6 +529,19 @@ export function App() {
             onFocus={() => handleFocusApp(app.id)}
             onMinimize={() => handleTaskbarMinimize(app.id)}
             onRunExe={handleRunExe}
+            zIndex={getZIndex(app.id)}
+            focused={focusedAppId === app.id}
+            minimized={minimizedApps.has(app.id)}
+          />
+        ))}
+        {helpViewers.map((app) => (
+          <HelpViewerWindow
+            key={app.id}
+            fileBytes={app.fileBytes}
+            fileName={app.fileName}
+            onStop={() => handleStopApp(app.id)}
+            onFocus={() => handleFocusApp(app.id)}
+            onMinimize={() => handleTaskbarMinimize(app.id)}
             zIndex={getZIndex(app.id)}
             focused={focusedAppId === app.id}
             minimized={minimizedApps.has(app.id)}

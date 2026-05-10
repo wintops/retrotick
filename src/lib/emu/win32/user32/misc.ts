@@ -212,6 +212,9 @@ export function registerMisc(emu: Emulator): void {
   user32.register('GetWindowRgn', 2, () => 0); // ERROR
   user32.register('SetWindowRgn', 3, () => 1);
 
+  // SetMessageQueue(cMessagesMax) → BOOL — obsolete Win16 holdover, just succeed
+  user32.register('SetMessageQueue', 1, () => 1);
+
   // GetMenuCheckMarkDimensions: low=width, high=height of checkmark bitmap (13x13 typical)
   user32.register('GetMenuCheckMarkDimensions', 0, () => (13 << 16) | 13);
   user32.register('GetTopWindow', 1, () => {

@@ -1238,6 +1238,53 @@ export function registerMsvcrt(emu: Emulator): void {
     const ch = emu.readArg(0) & 0xFF;
     return ((ch >= 0x30 && ch <= 0x39) || (ch >= 0x41 && ch <= 0x46) || (ch >= 0x61 && ch <= 0x66)) ? 1 : 0;
   });
+  msvcrt.register('tolower', 0, () => {
+    const ch = emu.readArg(0) & 0xFF;
+    return (ch >= 0x41 && ch <= 0x5A) ? ch + 0x20 : ch;
+  });
+  // _isctype(c, type) — check character type bitmask
+  // Bit flags: _UPPER=1, _LOWER=2, _DIGIT=4, _SPACE=8, _PUNCT=0x10, _CONTROL=0x20, _BLANK=0x40, _HEX=0x80, _ALPHA=0x103
+  msvcrt.register('_isctype', 0, () => {
+    const ch = emu.readArg(0) & 0xFF;
+    const mask = emu.readArg(1);
+    let flags = 0;
+    if (ch >= 0x41 && ch <= 0x5A) flags |= 0x01 | 0x103; // _UPPER | _ALPHA
+    if (ch >= 0x61 && ch <= 0x7A) flags |= 0x02 | 0x103; // _LOWER | _ALPHA
+    if (ch >= 0x30 && ch <= 0x39) flags |= 0x04;        // _DIGIT
+    if (ch === 0x20 || (ch >= 0x09 && ch <= 0x0D)) flags |= 0x08; // _SPACE
+    if (ch === 0x20 || ch === 0x09) flags |= 0x40;     // _BLANK
+    if ((ch >= 0x30 && ch <= 0x39) || (ch >= 0x41 && ch <= 0x46) || (ch >= 0x61 && ch <= 0x66)) flags |= 0x80; // _HEX
+    if (ch < 0x20 || ch === 0x7F) flags |= 0x20;        // _CONTROL
+    if (ch >= 0x21 && ch <= 0x7E && !(flags & (0x01 | 0x02 | 0x04))) flags |= 0x10; // _PUNCT
+    return (flags & mask) ? 1 : 0;
+  });
+  // _fullpath(absPath, relPath, maxLength) → char* — produce absolute path
+  msvcrt.register('_fullpath', 0, () => {
+    const absPath = emu.readArg(0);
+    const relPath = emu.readArg(1);
+    const maxLen = emu.readArg(2);
+    const rel = emu.memory.readCString(relPath);
+    const abs = emu.resolvePath(rel);
+    if (absPath === 0) {
+      const ptr = emu.allocHeap(abs.length + 1);
+      emu.memory.writeCString(ptr, abs);
+      return ptr;
+    }
+    if (abs.length + 1 > maxLen) return 0;
+    emu.memory.writeCString(absPath, abs);
+    return absPath;
+  });
+  // remove(path) → 0 on success, -1 on failure
+  msvcrt.register('remove', 0, () => {
+    const pathPtr = emu.readArg(0);
+    const path = emu.memory.readCString(pathPtr);
+    const resolved = emu.resolvePath(path);
+    return emu.fs.deleteFile(resolved) ? 0 : -1;
+  });
+  // _global_unwind2(targetFrame) — SEH stack unwind helper, no-op for our simplified SEH
+  msvcrt.register('_global_unwind2', 0, () => 0);
+  // _local_unwind2(targetFrame, targetIp)
+  msvcrt.register('_local_unwind2', 0, () => 0);
 
   msvcrt.register('iswalpha', 0, () => {
     const ch = emu.readArg(0) & 0xFFFF;
@@ -1879,7 +1926,7 @@ export function registerMsvcrt(emu: Emulator): void {
     return scanString(str, fmt, i => emu.readArg(i), 2, emu.memory, true);
   });
 
-  // Alias all MSVCRT.DLL entries to other MSVCR*.DLL variants
+  // Alias all MSVCRT.DLL entries to other MSVCR*.DLL variants and CRTDLL
   for (const [key, val] of emu.apiDefs.entries()) {
     if (key.startsWith('MSVCRT.DLL:')) {
       const name = key.slice(11);
@@ -1892,6 +1939,22 @@ export function registerMsvcrt(emu: Emulator): void {
       emu.apiDefs.set('MSVCR80.DLL:' + name, val);
       emu.apiDefs.set('MSVCR71.DLL:' + name, val);
       emu.apiDefs.set('MSVCR70.DLL:' + name, val);
+      emu.apiDefs.set('CRTDLL.DLL:' + name, val);
     }
+  }
+
+  // CRTDLL-specific name aliases (older Windows NT C runtime)
+  const crtdllAliases: Record<string, string> = {
+    '__GetMainArgs': '__getmainargs',
+    '_acmdln_dll': '_acmdln',
+    '_commode_dll': '_commode',
+    '_fmode_dll': '_fmode',
+    '_environ_dll': '__p__environ',
+    '_pgmptr_dll': '_acmdln',
+  };
+  for (const [crtName, msvcrtName] of Object.entries(crtdllAliases)) {
+    const srcKey = 'MSVCRT.DLL:' + msvcrtName;
+    const srcDef = emu.apiDefs.get(srcKey);
+    if (srcDef) emu.apiDefs.set('CRTDLL.DLL:' + crtName, srcDef);
   }
 }
