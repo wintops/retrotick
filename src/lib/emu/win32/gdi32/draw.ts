@@ -83,7 +83,7 @@ export function registerDraw(emu: Emulator): void {
       if (pen && pen.style !== PS_NULL) {
         if (isPaletteIndex(pen.color)) {
           const pal = emu.handles.get<PaletteInfo>(dc.selectedPalette);
-          const [r, g, b] = resolveColor(pen.color, pal);
+          const [r, g, b] = resolveColor(pen.color, pal ?? undefined);
           dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
           const cw = dc.canvas.width || 1;
           const ch = dc.canvas.height || 1;

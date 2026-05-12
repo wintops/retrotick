@@ -448,7 +448,7 @@ export function registerBitmap(emu: Emulator): void {
         if (isChild) {
           // Draw at child window's position within the parent canvas
           let ox = 0, oy = 0;
-          let cur = wnd;
+          let cur: WindowInfo | null = wnd;
           while (cur && cur.hwnd !== emu.mainWindow) {
             ox += cur.x || 0;
             oy += cur.y || 0;

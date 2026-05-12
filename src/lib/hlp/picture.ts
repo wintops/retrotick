@@ -273,7 +273,12 @@ export function rgbaToBlob(p: HlpPicture): Promise<Blob | null> {
       const canvas = new OffscreenCanvas(p.width, p.height);
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        const img = new ImageData(p.rgba, p.width, p.height);
+        // Copy into a fresh Uint8ClampedArray with a plain ArrayBuffer —
+        // ImageData rejects views over SharedArrayBuffer-typed buffers,
+        // which the source-array typing implies.
+        const buf = new Uint8ClampedArray(p.rgba.length);
+        buf.set(p.rgba);
+        const img = new ImageData(buf, p.width, p.height);
         ctx.putImageData(img, 0, 0);
         return canvas.convertToBlob({ type: 'image/png' });
       }

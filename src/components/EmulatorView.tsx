@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
 import type { PEInfo, MenuResult } from '../lib/pe/types';
 import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
@@ -389,7 +389,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [windowStyle, setWindowStyle] = useState(0x00CF0000); // WS_OVERLAPPEDWINDOW
   const [canvasSize, setCanvasSize] = useState({ w: 320, h: 240 });
   const [iconUrl, setIconUrl] = useState<string | null>(null);
-  const [dialogInfo, setDialogInfo] = useState<EmulatorDialogInfo | null>(null);
+  const [dialogInfo, setDialogInfo] = useState<DialogInfo | null>(null);
   const [controlOverlays, setControlOverlays] = useState<ControlOverlay[]>([]);
   const [pressedControl, setPressedControl] = useState<number | null>(null);
   const [minimized, setMinimized] = useState(false);

@@ -781,7 +781,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       const result = emu.callWndProc(entryPoint, imageBase, 1, 0, 0);
       emu.cpu.reg[4] = savedESP;
       emu.cpu.eip = savedEIP;
-      console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
+      console.log(`[DLL] DllMain returned EAX=0x${(result ?? 0).toString(16)}`);
     }
   }
 
@@ -789,7 +789,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
   // On real Windows, .text is PAGE_EXECUTE_READ — writes trigger access violations.
   const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
   const IMAGE_SCN_MEM_WRITE = 0x80000000;
-  for (const sec of emu.pe.sections) {
+  for (const sec of (emu.pe.sections ?? [])) {
     if (sec.virtualSize > 0 && (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) && !(sec.characteristics & IMAGE_SCN_MEM_WRITE)) {
       emu.memory.markReadOnly(emu.pe.imageBase + sec.virtualAddress, sec.virtualSize);
     }

@@ -712,7 +712,7 @@ export function registerMsvcrt(emu: Emulator): void {
     const count = emu.readArg(2);
     const hFile = fdToHandle.get(fd);
     if (hFile === undefined) return -1;
-    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    const f = emu.handles.get<import('../file-manager').OpenFile>(hFile);
     if (!f || !f.data) return 0;
     const available = f.data.length - f.pos;
     const toRead = Math.min(count, available);
@@ -737,7 +737,7 @@ export function registerMsvcrt(emu: Emulator): void {
     }
     const hFile = fdToHandle.get(fd);
     if (hFile === undefined) return -1;
-    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    const f = emu.handles.get<import('../file-manager').OpenFile>(hFile);
     if (!f) return -1;
     return count;
   });
@@ -749,7 +749,7 @@ export function registerMsvcrt(emu: Emulator): void {
     const origin = emu.readArg(2);
     const hFile = fdToHandle.get(fd);
     if (hFile === undefined) return -1;
-    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    const f = emu.handles.get<import('../file-manager').OpenFile>(hFile);
     if (!f) return -1;
     if (origin === 0) f.pos = offset;
     else if (origin === 1) f.pos += offset;
@@ -763,7 +763,7 @@ export function registerMsvcrt(emu: Emulator): void {
     const fd = emu.readArg(0);
     const hFile = fdToHandle.get(fd);
     if (hFile === undefined) return -1;
-    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    const f = emu.handles.get<import('../file-manager').OpenFile>(hFile);
     if (!f) return -1;
     return f.size;
   });
@@ -773,7 +773,7 @@ export function registerMsvcrt(emu: Emulator): void {
     const fd = emu.readArg(0);
     const hFile = fdToHandle.get(fd);
     if (hFile === undefined) return -1;
-    const f = emu.handles.get<import('../../file-manager').OpenFile>(hFile);
+    const f = emu.handles.get<import('../file-manager').OpenFile>(hFile);
     if (!f) return -1;
     return f.pos;
   });
@@ -1616,7 +1616,7 @@ export function registerMsvcrt(emu: Emulator): void {
     indices.sort((a, b) => {
       writeSlot(slotA, buffers[a]);
       writeSlot(slotB, buffers[b]);
-      const r = emu.callCallback(compar, [slotA, slotB]) | 0;
+      const r = (emu.callCallback?.(compar, [slotA, slotB]) ?? 0) | 0;
       return r;
     });
 

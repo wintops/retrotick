@@ -782,8 +782,8 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         emu.charHeight = 16;
         emu.initConsoleBuffer();
         for (let i = 0; i < cols * 25; i++) {
-          cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2, 0x20);
-          cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2 + 1, 0x07);
+          cpu.mem.writeU8(0xB8000 + i * 2, 0x20);
+          cpu.mem.writeU8(0xB8000 + i * 2 + 1, 0x07);
         }
         cpu.mem.writeU8(0x0484, 24); // rows - 1
         cpu.mem.writeU16(0x0485, 16); // char height

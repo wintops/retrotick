@@ -1,4 +1,6 @@
 import type { PaletteInfo, DCInfo } from './types';
+import { makeFont, type GdiFont, FW_NORMAL } from '../../../gdi';
+import type { Emulator } from '../../emulator';
 
 /** Check if a COLORREF uses PALETTEINDEX encoding (0x01000000 | index) */
 export function isPaletteIndex(color: number): boolean {
@@ -81,3 +83,27 @@ export const STOCK_BASE = 0x80000000;
 export function disableSmoothing(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
   ctx.imageSmoothingEnabled = false;
 }
+
+/** Pull the GdiFont currently selected into the supplied HDC. Falls back to
+ *  the GDI default (Tahoma 13 px) when no font is selected or the handle
+ *  has no recognisable LOGFONT-shaped fields. Shared between the x86 GDI
+ *  emulation and any other consumer that wants identical font behaviour. */
+export function getDCFont(emu: Emulator, hdc: number): GdiFont {
+  const dc = emu.getDC(hdc);
+  if (!dc) return makeFont();
+  const stored = emu.handles.get<{
+    height?: number; weight?: number; italic?: boolean;
+    underline?: boolean; strikeout?: boolean; faceName?: string;
+  }>(dc.selectedFont);
+  if (!stored) return makeFont();
+  const height = stored.height ?? -13;
+  return makeFont({
+    height,
+    weight: stored.weight ?? FW_NORMAL,
+    italic: !!stored.italic,
+    underline: !!stored.underline,
+    strikeout: !!stored.strikeout,
+    faceName: stored.faceName || 'Tahoma',
+  });
+}
+

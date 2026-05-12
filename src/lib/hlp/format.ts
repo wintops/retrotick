@@ -104,20 +104,26 @@ function decodeFlatParagraph(recordType: number, linkData1: Uint8Array, linkData
     if (!c.eof) psLow = c.u8();
     if (!c.eof) psHigh = c.u8();
     const ps = psLow | (psHigh << 8);
-    if (ps & 0x0001) state.spacingAbove = c.cuint();
-    if (ps & 0x0002) state.spacingBelow = c.cuint();
-    if (ps & 0x0004) state.spacingLines = c.cuint();
-    if (ps & 0x0008) state.leftIndent = c.cuint();
-    if (ps & 0x0010) state.rightIndent = c.cuint();
-    if (ps & 0x0020) state.firstLineIndent = c.cuint();
+    // ParaInfo values are signed compressed ints (reference: sub_4286C9
+    // uses `(b>>1) - 0x40` / `(v>>1) - 0x4000`). Negative values come up
+    // for hanging-indent first lines and "outdent" left margins. Units
+    // are 1/144 inch (half-points) — paraConv() handles the conversion
+    // to CSS pixels.
+    if (ps & 0x0001) state.spacingAbove = c.cint();
+    if (ps & 0x0002) state.spacingBelow = c.cint();
+    if (ps & 0x0004) state.spacingLines = c.cint();
+    if (ps & 0x0008) state.leftIndent = c.cint();
+    if (ps & 0x0010) state.rightIndent = c.cint();
+    if (ps & 0x0020) state.firstLineIndent = c.cint();
     if (ps & 0x0100 && c.remaining >= 3) {
       state.borderFlags = c.u8();
       state.borderColor = c.u16();
     }
     if (ps & 0x0200) {
+      // Tab count is unsigned (number of stops), positions are signed.
       const ntabs = c.cuint();
       const stops: number[] = [];
-      for (let i = 0; i < ntabs && !c.eof; i++) stops.push(c.cuint());
+      for (let i = 0; i < ntabs && !c.eof; i++) stops.push(c.cint());
       state.tabStops = stops;
     }
     if (ps & 0x0400) state.alignment = 'center';
@@ -139,7 +145,7 @@ function decodeFlatParagraph(recordType: number, linkData1: Uint8Array, linkData
     if (ld2Pos.v > start) events.push({ kind: 'text', bytes: linkData2.subarray(start, ld2Pos.v) });
     if (ld2Pos.v < linkData2.length) ld2Pos.v++;
   };
-  decodeFlatFormat(c, events, drainText);
+  decodeFlatFormat(c, events, drainText, state);
   events.push({ kind: 'paraEnd' });
   return { recordType, events };
 }
@@ -148,8 +154,13 @@ function decodeFlatParagraph(recordType: number, linkData1: Uint8Array, linkData
  *  Differs from the table-cell decoder: text drains are triggered only at
  *  text-terminator opcodes (0x89 inside a hotspot, 0x82 between plain
  *  paragraph runs) so the LD2 stream stays aligned with the hotspot
- *  structure of multi-jump paragraphs. */
-function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => void): void {
+ *  structure of multi-jump paragraphs.
+ *
+ *  When a 0x82 inside the record starts another logical paragraph, the
+ *  ParaInfo block at the head of the record applies — there's only one
+ *  per record. We re-emit the same `state` so leftIndent / alignment /
+ *  spacing propagate to every paragraph in the chain. */
+function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => void, paraState: ParaState): void {
   // `expectAt` tracks the opcode at which the next text drain should fire:
   //   '0x82' — plain paragraph: text gets drained at the closing 0x82.
   //   '0x89' — inside a hotspot: text is drained at the closing 0x89.
@@ -172,7 +183,7 @@ function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => voi
     if (op === 0x82) {
       if (expectAt === 0x82) drainText();
       events.push({ kind: 'paraEnd' });
-      events.push({ kind: 'paraBegin', state: {} });
+      events.push({ kind: 'paraBegin', state: paraState });
       expectAt = 0x82;
       continue;
     }
@@ -207,7 +218,11 @@ function decodeFlatFormat(c: Cursor, events: RenderEvent[], drainText: () => voi
       if (c.remaining < 4) { events.push({ kind: 'unknownOp', op }); continue; }
       const target = c.u32();
       const isJump = (op & 0x01) !== 0;
-      const noUnderline = (op & 0x04) !== 0;
+      // Reference rule: no underline when opcode bit 0x04 is set OR when
+      // the opcode is a popup in the extended 0xE0+ range (bit 5 set,
+      // bit 0 clear). Those popups are always rendered without inline
+      // underline regardless of the bit-2 flag.
+      const noUnderline = (op & 0x04) !== 0 || ((op & 0x21) === 0x20);
       events.push({ kind: isJump ? 'jump' : 'popup', hash: target, underline: !noUnderline });
       expectAt = 0x89;
       continue;
@@ -334,7 +349,7 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
     else if (x2 & 0x1000) state.alignment = 'justify';
 
     const cellEvents: RenderEvent[] = [{ kind: 'paraBegin', state }, { kind: 'font', index: curFont }];
-    decodeTableCellFormat(c, cellEvents, () => drainText(cellEvents));
+    decodeTableCellFormat(c, cellEvents, () => drainText(cellEvents), state);
     cellEvents.push({ kind: 'paraEnd' });
     // Update curFont from the last font event in this cell so the next
     // cell starts where this one left off.
@@ -354,8 +369,13 @@ function decodeTableRow(recordType: number, linkData1: Uint8Array, linkData2: Ui
 
 /** Format-opcode loop for a single table cell. Drain one NUL-terminated
  *  text run from LD2 BEFORE each opcode dispatch; stop when the next
- *  opcode byte is 0xFF. */
-function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () => void): void {
+ *  opcode byte is 0xFF.
+ *
+ *  A table cell may contain multiple paragraphs separated by 0x82 (e.g.
+ *  numbered list items in Empires's "Getting started" cell). Each 0x82
+ *  inside the cell re-emits paraEnd + paraBegin with the same cell-level
+ *  ParaInfo so list items get their own first-line indent and tab stops. */
+function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () => void, paraState: ParaState): void {
   let safety = 0;
   while (!c.eof && safety++ < 1000) {
     drainText();
@@ -367,9 +387,10 @@ function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () =
     if (op === 0x80 && c.remaining >= 2) { events.push({ kind: 'font', index: c.u16() }); continue; }
     if (op === 0x81) { events.push({ kind: 'lineBreak' }); continue; }
     if (op === 0x82) {
-      // Paragraph end inside a cell. Followed by 0xFF it's redundant; in
-      // multi-paragraph cells it ends the run. We elide it here — the
-      // cell already renders as one logical block in the table.
+      // Logical paragraph break inside the cell. Reuse the cell's
+      // ParaInfo so list items keep their hanging indent / tab stops.
+      events.push({ kind: 'paraEnd' });
+      events.push({ kind: 'paraBegin', state: paraState });
       continue;
     }
     if (op === 0x83) { events.push({ kind: 'tab' }); continue; }
@@ -407,7 +428,11 @@ function decodeTableCellFormat(c: Cursor, events: RenderEvent[], drainText: () =
       if (c.remaining < 4) { events.push({ kind: 'unknownOp', op }); continue; }
       const target = c.u32();
       const isJump = (op & 0x01) !== 0;
-      const noUnderline = (op & 0x04) !== 0;
+      // Reference rule: no underline when opcode bit 0x04 is set OR when
+      // the opcode is a popup in the extended 0xE0+ range (bit 5 set,
+      // bit 0 clear). Those popups are always rendered without inline
+      // underline regardless of the bit-2 flag.
+      const noUnderline = (op & 0x04) !== 0 || ((op & 0x21) === 0x20);
       events.push({ kind: isJump ? 'jump' : 'popup', hash: target, underline: !noUnderline });
       continue;
     }
@@ -463,8 +488,6 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
   const state = parseType32ParaInfo(c);
   // Walk format opcodes.
   const formatEvents: RenderEvent[] = [];
-  // Buffer hotspot opcodes so we can attach text segment that follows.
-  let pendingHotspot: { kind: 'jump' | 'popup' | 'macroHotspot'; hash?: number; macro?: string; underline: boolean; window?: number } | null = null;
   let safety = 0;
   // Format-opcode set: 0x80, 0x81, 0x82, 0x83, 0x85, 0x86–88, 0x89,
   // 0xC0..C7 / 0xE0..E7 (5-byte hotspots), 0xC8..CF / 0xE8..EF (variable
@@ -513,7 +536,6 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
       }
     } else if (op === 0x89) {
       formatEvents.push({ kind: 'hotspotEnd' });
-      pendingHotspot = null;
     } else if ((op & 0xD8) === 0xC0) {
       // 5-byte hotspot opcodes: opcode + u32 target. Bit 0 = jump (1) /
       // popup (0). Bit 1 = HC30 topic-number target (0) vs HCW3.1+ hash
@@ -521,10 +543,15 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
       if (c.remaining < 4) break;
       const hash = c.u32();
       const isJump = (op & 0x01) !== 0;
-      const noUnderline = (op & 0x04) !== 0;
-      const ev = { kind: isJump ? 'jump' : 'popup', hash, underline: !noUnderline } as RenderEvent;
+      // Reference rule: no underline when opcode bit 0x04 is set OR when
+      // the opcode is a popup in the extended 0xE0+ range (bit 5 set,
+      // bit 0 clear). Those popups are always rendered without inline
+      // underline regardless of the bit-2 flag.
+      const noUnderline = (op & 0x04) !== 0 || ((op & 0x21) === 0x20);
+      const ev: RenderEvent = isJump
+        ? { kind: 'jump', hash, underline: !noUnderline }
+        : { kind: 'popup', hash, underline: !noUnderline };
       formatEvents.push(ev);
-      pendingHotspot = ev as typeof pendingHotspot;
     } else if ((op & 0xF8) === 0xC8 || (op & 0xF8) === 0xE8) {
       // Variable-size hotspot: opcode + u16 size + size bytes payload.
       if (c.remaining < 2) break;
@@ -534,15 +561,11 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
       const ev = decodeExtendedHotspot(op, payload);
       if (ev) {
         formatEvents.push(ev);
-        if (ev.kind === 'jump' || ev.kind === 'popup' || ev.kind === 'macroHotspot') {
-          pendingHotspot = ev as typeof pendingHotspot;
-        }
       }
     } else {
       formatEvents.push({ kind: 'unknownOp', op });
     }
   }
-  void pendingHotspot;
 
   // Split LinkData2 by NUL bytes into segments. Each NUL marks a
   // text-run boundary that the format stream consumes at certain opcodes
@@ -565,7 +588,6 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
   //   state-changing segments are empty — they only matter to advance the
   //   per-op cursor through LD2.
   let segIdx = 0;
-  let firstPara = true;
   let inPara = false;
   const consumeSegment = () => {
     if (segIdx < segments.length) {
@@ -573,9 +595,11 @@ function decodeType32(linkData1: Uint8Array, linkData2: Uint8Array): DecodedPara
       if (s.length > 0) events.push({ kind: 'text', bytes: s });
     }
   };
+  // HCW4 records carry one ParaInfo block applied to every paragraph in
+  // the record — when 0x82 splits the record into multiple paragraphs,
+  // each one inherits the same leftIndent / firstLineIndent / alignment.
   const startPara = () => {
-    events.push({ kind: 'paraBegin', state: firstPara ? state : {} });
-    firstPara = false;
+    events.push({ kind: 'paraBegin', state });
     inPara = true;
   };
   startPara();
@@ -611,14 +635,17 @@ function parseType32ParaInfo(c: Cursor): ParaState {
   // u32 ParaState bitfield.
   if (c.remaining < 4) return state;
   const ps = c.u32();
-  // Bit 16 (0x10000): SpacingAbove (clong)
-  if (ps & 0x10000) skipClong(c);
-  // Bits 17..23: cuint (1-or-2 byte) fields
-  if (ps & 0x20000) state.spacingBelow = readCuintRev(c);
-  if (ps & 0x40000) state.spacingLines = readCuintRev(c);
-  if (ps & 0x80000) state.leftIndent = readCuintRev(c);
-  if (ps & 0x100000) state.rightIndent = readCuintRev(c);
-  if (ps & 0x200000) state.firstLineIndent = readCuintRev(c);
+  // Bit 16 (0x10000): SpacingAbove (signed clong-biased per reference).
+  // The first ParaInfo slot in HCW4 uses the 2/4-byte signed encoding
+  // (`(v>>1) - 0x4000` / `(u32>>1) - 0x40000000`).
+  if (ps & 0x10000) state.spacingAbove = c.clongBiased();
+  // Bits 17..23: signed compressed-int fields (per sub_4286C9 reference).
+  // Values are in 1/144 inch (half-points); paraConv() converts to px.
+  if (ps & 0x20000) state.spacingBelow = readCintRev(c);
+  if (ps & 0x40000) state.spacingLines = readCintRev(c);
+  if (ps & 0x80000) state.leftIndent = readCintRev(c);
+  if (ps & 0x100000) state.rightIndent = readCintRev(c);
+  if (ps & 0x200000) state.firstLineIndent = readCintRev(c);
   if (ps & 0x400000) skipCuintRev(c);
   if (ps & 0x800000) skipCuintRev(c);
   // Bit 24: Borders — 3 bytes
@@ -672,7 +699,10 @@ function skipCuintRev(c: Cursor): boolean {
 function decodeExtendedHotspot(op: number, payload: Uint8Array): RenderEvent | null {
   // Bit 0 = jump (1) / popup (0); bit 2 = no-underline / no-font-change (1).
   const isJump = (op & 0x01) !== 0;
-  const noUnderline = (op & 0x04) !== 0;
+  // Reference rule: no underline when opcode bit 0x04 is set OR when the
+  // opcode is a popup in the extended 0xE0+ range (bit 5 set, bit 0
+  // clear). Those popups never get the inline underline.
+  const noUnderline = (op & 0x04) !== 0 || ((op & 0x21) === 0x20);
   // 0xEE / 0xEF: macro hotspot. Payload is asciiz macro string.
   if ((op & 0xFE) === 0xEE) {
     const macro = readAsciiZ(payload, 0);

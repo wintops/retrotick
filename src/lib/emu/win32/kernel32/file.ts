@@ -1208,7 +1208,7 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('GetTempFileNameA', 4, () => 0);
 
   // CopyFile: async
-  function doCopyFile(isWide: boolean): number {
+  function doCopyFile(isWide: boolean): number | undefined {
     const lpExisting = emu.readArg(0);
     const lpNew = emu.readArg(1);
     const bFailIfExists = emu.readArg(2);
@@ -1252,7 +1252,7 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('CopyFileW', 3, () => doCopyFile(true));
 
   // MoveFile: copy source to dest, then remove source
-  function doMoveFile(isWide: boolean, hasFlags: boolean): number {
+  function doMoveFile(isWide: boolean, hasFlags: boolean): number | undefined {
     const lpExisting = emu.readArg(0);
     const lpNew = emu.readArg(1);
     if (!lpExisting || !lpNew) return 0;

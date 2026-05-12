@@ -440,7 +440,7 @@ export function registerOleaut32(emu: Emulator): void {
     const psz = emu.readArg(0);
     const len = emu.readArg(1);
     // Allocate BSTR: 4 byte length prefix + string data + 2 byte null
-    const ptr = emu.heapAlloc(4 + len + 2);
+    const ptr = emu.allocHeap(4 + len + 2);
     if (!ptr) return 0;
     emu.memory.writeU32(ptr, len);
     if (psz) {

@@ -24,7 +24,7 @@ export function langName(id: number): string {
 }
 
 /** Extract the first non-neutral language ID from PE resources. */
-export function detectPELanguageId(resources: { entries: { languages: { languageId: number }[] }[] }[] | undefined): number | null {
+export function detectPELanguageId(resources: { entries: { languages: { languageId: number }[] }[] }[] | undefined | null): number | null {
   if (!resources) return null;
   for (const res of resources) {
     for (const entry of res.entries) {

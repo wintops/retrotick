@@ -397,7 +397,7 @@ export function dispatchToSehHandler(emu: Emulator, frameAddr: number): void {
 }
 
 // Handle the return from an SEH exception handler
-export function handleSehDispatchReturn(emu: Emulator): number {
+export function handleSehDispatchReturn(emu: Emulator): number | undefined {
   const disposition = emu.cpu.reg[0] >>> 0; // EAX = EXCEPTION_DISPOSITION
 
   // Clean up the 4 cdecl args left on the stack (handler did `ret`, popping only return address)

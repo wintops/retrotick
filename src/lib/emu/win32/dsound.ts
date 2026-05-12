@@ -20,7 +20,7 @@ const DS_VTABLE_SIZE = 11;
 const DSB_VTABLE_SIZE = 21;
 
 function allocComObject(emu: Emulator, prefix: string, methodCount: number,
-  handlers: Record<number, () => number>,
+  handlers: Record<number, (() => number) | undefined>,
   stackBytesMap: Record<number, number>): number {
   const vtableAddr = emu.allocHeap(methodCount * 4);
   const objAddr = emu.allocHeap(4);

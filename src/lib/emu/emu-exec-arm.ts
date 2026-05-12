@@ -91,7 +91,7 @@ export function emuTickARM(emu: Emulator): void {
       emu.onExit?.();
     } else if (!emu._crashFired) {
       emu._crashFired = true;
-      const pc = '0x' + (cpu.reg[PC] >>> 0).toString(16).padStart(8, '0');
+      const pc = '0x' + ((emu.armCpu?.reg[PC] ?? 0) >>> 0).toString(16).padStart(8, '0');
       emu.onCrash?.(pc, emu.haltReason || 'unknown error');
     }
   }

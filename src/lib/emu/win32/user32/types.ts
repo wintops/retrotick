@@ -62,12 +62,15 @@ export interface WindowInfo {
   lbSelectedIndices?: Set<number>; // multi-select: set of selected indices
   lbTopIndex?: number;             // first visible item index
   lbItemHeight?: number;           // item height in pixels
+  cbItemHeight?: number;           // combobox item height (Win16 CB_SETITEMHEIGHT)
   // ListView state
   listColumns?: ListViewColumn[];
   listItems?: ListViewItem[];
   // TabControl state
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
+  /** TCM_SETIMAGELIST handle, returned again by TCM_GETIMAGELIST. */
+  tabImageList?: number;
   // StatusBar state
   statusParts?: number[];
   statusTexts?: string[];

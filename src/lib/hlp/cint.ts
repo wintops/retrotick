@@ -33,16 +33,21 @@ export class Cursor {
     this.pos += 1;
     return b >> 1;
   }
-  /** Compressed signed int (15-bit/31-bit forms with sign-extension). */
+  /** Compressed signed int. Same byte layout as `cuint` but biased:
+   *    bit 0 SET   → 2-byte form, value = (u16 >> 1) - 0x4000
+   *    bit 0 CLEAR → 1-byte form, value = (b   >> 1) - 0x40
+   *
+   *  Reference (sub_4286C9) uses this for ParaInfo indents, spacings and
+   *  tab-stop positions — they can be negative (hanging indent, etc.). */
   cint(): number {
-    const v = this.cuint();
-    // 7-bit form: bit 6 is sign for value range -64..63
-    // 15-bit form: bit 14 is sign for -16384..16383
-    // Both: when first read, top bit of the unsigned value indicates sign.
-    // Most ParaInfo values (indents, spacing) are unsigned in practice; we
-    // keep the unsigned cuint form here and let callers sign-extend when
-    // a particular field is known to be signed.
-    return v;
+    const b = this.buf[this.pos];
+    if (b & 1) {
+      const b2 = this.buf[this.pos + 1];
+      this.pos += 2;
+      return (((b2 << 8) | b) >> 1) - 0x4000;
+    }
+    this.pos += 1;
+    return (b >> 1) - 0x40;
   }
   /** Compressed long, UNSIGNED form (used for picture sizes / hotspot payload
    *  sizes / picture dimensions).

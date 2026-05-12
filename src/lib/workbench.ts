@@ -423,7 +423,11 @@ export async function importWorkbench(file: File, onProgress?: ProgressCallback)
     }
 
     if (manifest) {
-      onProgress?.({ phase: 'restoring', current: restored, total: manifest.files.length });
+      // Re-alias once we've narrowed away the null branch. TypeScript
+      // forgets the narrowing across the surrounding ingestEntry()
+      // closure call, so a cast keeps the property access typed.
+      const mf = manifest as WorkbenchManifest;
+      onProgress?.({ phase: 'restoring', current: restored, total: mf.files.length });
     } else {
       onProgress?.({ phase: 'loading', current: bytesRead, total: totalBytes });
     }
