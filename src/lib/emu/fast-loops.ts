@@ -528,6 +528,44 @@ export function tryFastLoop(cpu: { reg: Int32Array; eip: number },
   if (counterReg < 0) { _negativeCache.add(eip); return 0; }
   if (counterReg === REG_ESP || counterReg === REG_EBP) { _negativeCache.add(eip); return 0; }
 
+  // executeLoop assumes `iters = cpu.reg[counterReg]`. For that to be sound we
+  // need the JCC's outcome to be entirely determined by the counter reaching
+  // zero. Two conditions:
+  //   (a) the counter's DEC/SUB-1 is the last flag-setting instruction before
+  //       the JCC (otherwise the JCC reads some other op's flags), and
+  //   (b) the JCC is one whose taken/not-taken transition occurs exactly when
+  //       the counter hits zero. JNZ (0x75/0F85) and JG (0x7F/0F8F) qualify
+  //       for a counter that starts strictly positive: both fall through when
+  //       ZF=1 (i.e., DEC produced 0). LOOP (0xE2) is explicit by definition.
+  //       Other JCCs (JZ, JL, JNS, JS, JBE, ...) have different transition
+  //       points and would mis-count.
+  if (jcc.jccType !== 0xE2) {
+    let counterFlagIdx = -1;
+    let lastFlagIdx = -1;
+    for (let i = 0; i < insns.length; i++) {
+      const op = insns[i].op;
+      const setsFlags =
+        op === Op.ADD_RR || op === Op.ADD_RI || op === Op.SUB_RR || op === Op.SUB_RI ||
+        op === Op.ADC_RR || op === Op.SBB_RR ||
+        op === Op.AND_RR || op === Op.AND_RI || op === Op.OR_RR || op === Op.OR_RI ||
+        op === Op.XOR_RR || op === Op.XOR_RI ||
+        op === Op.NEG || op === Op.SHL_RI || op === Op.SHR_RI || op === Op.SAR_RI ||
+        op === Op.INC || op === Op.DEC ||
+        op === Op.CMP_RR || op === Op.CMP_RI || op === Op.TEST_RR;
+      if (setsFlags) lastFlagIdx = i;
+      if ((op === Op.DEC || (op === Op.SUB_RI && insns[i].imm === 1)) && insns[i].dst === counterReg) {
+        counterFlagIdx = i;
+      }
+    }
+    if (counterFlagIdx !== lastFlagIdx) { _negativeCache.add(eip); return 0; }
+
+    // 0x75 = short JNZ, 0x7F = short JG. findBackwardJcc normalises near (0F 8X)
+    // forms into the same single-byte values, so we only need to check these.
+    if (jcc.jccType !== 0x75 && jcc.jccType !== 0x7F) {
+      _negativeCache.add(eip); return 0;
+    }
+  }
+
   // Must access memory (side effect — store or load; reject pure-register idle loops)
   const hasMemAccess = insns.some(i =>
     i.op === Op.STORE8 || i.op === Op.STORE16 || i.op === Op.STORE32 ||

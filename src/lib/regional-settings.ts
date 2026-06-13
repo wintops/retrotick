@@ -17,6 +17,12 @@ export interface LocalePreset {
   name: string;            // e.g. 'English (United States)'
   isoTag: string;          // e.g. 'en-US'
   langPrimary: number;     // primary language ID (LCID & 0x3FF)
+  /** Native language name (e.g. '한국어'). Optional — only some presets set it. */
+  langName?: string;
+  /** Native country name (e.g. '대한민국'). Optional. */
+  countryName?: string;
+  /** Currency symbol — optional metadata. */
+  currencySym?: string;
   ansiCodePage: number;
   oemCodePage: number;
   defaultKeyboard: string;
@@ -560,6 +566,8 @@ const LOCALE_PRESETS: LocalePreset[] = [
   {
     localeId: 0x0412,
     name: '\ud55c\uad6d\uc5b4 (\ub300\ud55c\ubbfc\uad6d)',
+    isoTag: 'ko-KR',
+    langPrimary: 0x12,
     langName: '\ud55c\uad6d\uc5b4',
     countryName: '\ub300\ud55c\ubbfc\uad6d',
     ansiCodePage: 949,

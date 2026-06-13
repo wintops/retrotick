@@ -37,6 +37,9 @@ export interface OpenFile {
 export interface FileManager {
   /** Virtual files visible in D:\ (IndexedDB-backed metadata) */
   virtualFiles: { name: string; size: number }[];
+  /** In-memory cache of virtual file contents (uppercase key) so the
+   *  synchronous DOS file APIs can satisfy reads without re-fetching. */
+  virtualFileCache: Map<string, ArrayBuffer>;
   /** External files from browser file picker, mapped to Z:\ paths (uppercase key) */
   externalFiles: Map<string, { data: Uint8Array; name: string }>;
   /** Current drive letter (uppercase, e.g. 'D') */

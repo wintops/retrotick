@@ -15,6 +15,7 @@ const SC_CLOSE      = 0xF060;
 const SC_RESTORE    = 0xF120;
 const SC_ZOOM2X     = 0xE001;
 const SC_FULLSCREEN = 0xE002;
+const SC_SMOOTH     = 0xE003;
 const DOUBLE_CLICK_MS = 400;
 
 // --- Caption bar button SVGs ---
@@ -144,6 +145,10 @@ interface WindowProps {
   fullscreenActive?: boolean;
   /** When provided, renders a fullscreen button in the title bar. */
   onFullscreenToggle?: () => void;
+  /** When provided, renders an "AA" smoothing toggle next to the zoom button. */
+  onSmoothToggle?: () => void;
+  /** Reflects current smoothing state — button appears sunken when active. */
+  smoothActive?: boolean;
   /** System-menu Move command (mouse-driven move mode). Grayed if absent. */
   onSystemMove?: () => void;
   /** System-menu Size command (mouse-driven resize mode). Grayed if absent. */
@@ -158,6 +163,7 @@ export function Window({
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
   hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang,
   onZoomToggle, zoomActive, fullscreenActive, onFullscreenToggle,
+  onSmoothToggle, smoothActive,
   onSystemMove, onSystemSize, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
@@ -241,6 +247,7 @@ export function Window({
       case SC_CLOSE:      onClose?.(); break;
       case SC_ZOOM2X:     onZoomToggle?.(); break;
       case SC_FULLSCREEN: onFullscreenToggle?.(); break;
+      case SC_SMOOTH:     onSmoothToggle?.(); break;
     }
   };
 
@@ -396,6 +403,10 @@ export function Window({
             </>}
             {onZoomToggle && <>
               {capBtnText('2×', onZoomToggle, zoomActive, zoomActive ? 'Restore 1× zoom' : 'Zoom 2×')}
+              <span style={{ width: '2px' }} />
+            </>}
+            {onSmoothToggle && <>
+              {capBtnText('AA', onSmoothToggle, smoothActive, smoothActive ? 'Disable smoothing' : 'Enable smoothing')}
               <span style={{ width: '2px' }} />
             </>}
             {onFullscreenToggle && <>

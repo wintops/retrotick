@@ -34,6 +34,8 @@ import { registerImm32 } from './win32/imm32';
 import { registerNtdll } from './win32/ntdll';
 import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
+import { registerWinsta } from './win32/winsta';
+import { registerUtildll } from './win32/utildll';
 import { registerNetapi32 } from './win32/netapi32';
 import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
@@ -527,6 +529,8 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
   registerNetapi32(emu);
   registerUxtheme(emu);
   registerVdmdbg(emu);
+  registerWinsta(emu);
+  registerUtildll(emu);
 
   // Build thunk dispatch table with argument count detection
   buildThunkTable(emu);
@@ -777,7 +781,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       const result = emu.callWndProc(entryPoint, imageBase, 1, 0, 0);
       emu.cpu.reg[4] = savedESP;
       emu.cpu.eip = savedEIP;
-      console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
+      console.log(`[DLL] DllMain returned EAX=0x${(result ?? 0).toString(16)}`);
     }
   }
 
@@ -785,7 +789,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
   // On real Windows, .text is PAGE_EXECUTE_READ — writes trigger access violations.
   const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
   const IMAGE_SCN_MEM_WRITE = 0x80000000;
-  for (const sec of emu.pe.sections) {
+  for (const sec of (emu.pe.sections ?? [])) {
     if (sec.virtualSize > 0 && (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) && !(sec.characteristics & IMAGE_SCN_MEM_WRITE)) {
       emu.memory.markReadOnly(emu.pe.imageBase + sec.virtualAddress, sec.virtualSize);
     }

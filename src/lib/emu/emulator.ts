@@ -387,7 +387,7 @@ export class Emulator {
   _ldtr = 0;          // Local Descriptor Table Register (selector)
   _tr = 0;            // Task Register (selector)
   _dpmiState?: import('./dos/dpmi').DpmiState;  // DPMI host state (set on PM entry)
-  _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
+  _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string; isDevice?: boolean }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
   _dosIntVectors = new Map<number, number>();
@@ -398,6 +398,12 @@ export class Emulator {
   _dosFindState: { entries: { name: string; size: number; isDir: boolean }[]; index: number; pattern: string } | null = null;
   _dosFileOpenPending = false;
   _dosLastTimerTick = 0;
+  /** When set, skip the wall-clock gate on PIT IRQ0 — used by cycle-only
+   *  pacing mode where the dispatcher fires the timer purely off cpuSteps. */
+  _pitCycleOnly = false;
+  /** Ring buffer of recent EIPs, used for "wild EIP" post-mortems. */
+  _eipHistory?: Uint32Array;
+  _eipHistIdx = 0;
   _dosHalted = false;
   _dosVerifyFlag = false;
   _dosInDOSAddr = 0;
@@ -826,6 +832,8 @@ export class Emulator {
   onMissingDll?: (dllName: string) => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
+  /** Callback to open a Windows Help (.hlp) file in the built-in viewer */
+  onOpenHelp?: (fileBytes: ArrayBuffer, fileName: string) => void;
 
   _childProcessWaiting = false;
   _childProcessResume: { stackBytes: number; retVal: number; completer: (emu: Emulator, stackBytes: number, retVal: number) => void } | null = null;

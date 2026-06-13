@@ -37,6 +37,7 @@ RetroTick 是一个完全使用 TypeScript 从零构建的 x86/ARM CPU 模拟器
 - **DirectDraw / DirectSound** — 基于 COM 的表面和音频缓冲区管理，用于 DOS 时代的 Windows 游戏
 - **窗口管理器** — 多窗口、Z 序、焦点、MDI（多文档界面）、任务栏、消息分发、通用对话框
 - **GDI 渲染引擎** — 位图、画刷、画笔、区域、文本、DIB 到 Canvas 的映射
+- **WinHelp（`.hlp`）查看器** — 经典 Windows 帮助文件的 Web 端重新实现：B+ 树目录遍历、LZ77 + Hall/旧式短语解压、HC30 / HCW3.1 / HCW4 跨块的 topic 链、type-1 / 20 / 22 / 23 / 32 / 35 记录、表格布局（含逐 cell 的 ParaInfo）、内嵌 `|bm` 图片、热点操作码（jump / popup / macro / cross-file）、关键字搜索索引
 - **虚拟文件系统** — 基于 IndexedDB 的持久化存储
 
 ## 快速开始

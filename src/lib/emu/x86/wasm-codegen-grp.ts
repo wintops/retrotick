@@ -8,7 +8,7 @@ import type { CodegenCtx } from './wasm-codegen';
 import { emitReg8Get, emitReg8Set, emitRegGet16, emitRegSet16 } from './wasm-codegen';
 import { REG_ESP } from './wasm-codegen';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
-import { emitModRM32Addr, emitAddrMask } from './wasm-codegen-mem';
+import { emitModRM32Addr, emitAddrMask, emitLoadU8 } from './wasm-codegen-mem';
 import { emitAddSegBase, emitStoreI32Direct } from './wasm-codegen-mem';
 import {
   LOP_ADD8, LOP_ADD16, LOP_ADD32, LOP_SUB8, LOP_SUB16, LOP_SUB32,

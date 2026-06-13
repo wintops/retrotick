@@ -59,7 +59,10 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
   const fontRAM = emu.vga.fontRAM;
   const banks = emu.vga.getCharMapBanks();
   const COLORS = getVgaConsoleColorsRGB(emu);
-  const CHAR_W = 8;
+  // VGA Sequencer Clocking Mode (SR01) bit 0: 0 = 9-dot text cells, 1 = 8-dot.
+  // Standard 80×25 mode 03h is 9-dot → 720×400 backing surface.
+  const nineDot = (emu.vga.seqRegs[1] & 0x01) === 0;
+  const CHAR_W = nineDot ? 9 : 8;
   const w = COLS * CHAR_W;
   const h = ROWS * charH;
 
@@ -96,6 +99,10 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
       const px = col * CHAR_W;
       const py = row * charH;
 
+      // 0xC0..0xDF (CP437 box / line drawing) get column 9 = column 8 so that
+      // horizontal lines stay connected at 9-dot cell width. Everything else
+      // gets background in column 9. This matches real VGA hardware.
+      const lineDouble = nineDot && ch >= 0xC0 && ch <= 0xDF;
       for (let y = 0; y < charH; y++) {
         const bits = fontRAM[fontOffset + y];
         const rowBase = ((py + y) * w + px) * 4;
@@ -106,6 +113,15 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
           pixels[pixIdx] = color[0];
           pixels[pixIdx + 1] = color[1];
           pixels[pixIdx + 2] = color[2];
+          pixels[pixIdx + 3] = 255;
+        }
+        if (CHAR_W === 9) {
+          const last = bits & 0x01;
+          const c9 = (lineDouble && last) ? fgColor : bgColor;
+          const pixIdx = rowBase + 8 * 4;
+          pixels[pixIdx] = c9[0];
+          pixels[pixIdx + 1] = c9[1];
+          pixels[pixIdx + 2] = c9[2];
           pixels[pixIdx + 3] = 255;
         }
       }
@@ -359,12 +375,15 @@ interface ConsoleViewProps {
   focused?: boolean;
   /** Display-size multiplier applied to the 640×480 logical surface. */
   zoom?: number;
+  /** When true, use bilinear/`high-quality` filtering during canvas scaling.
+   *  When false, use nearest-neighbor (`pixelated`). */
+  smooth?: boolean;
   /** Fired when the console's display dimensions change (graphics ↔ text mode
    *  or text rows / char height change), so the parent can resize the window. */
   onScreenLayoutChange?: () => void;
 }
 
-export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChange }: ConsoleViewProps) {
+export function ConsoleView({ emu, focused = true, zoom = 1, smooth = false, onScreenLayoutChange }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -941,10 +960,16 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
   const dosTextMouseVisible = !isGfx && dosMouseVisible;
 
   const dispW = 640 * zoom;
-  // Text modes use their natural pixel height (rows × charH = 400 for 80×25
-  // and 80×50) so there is no fractional vertical stretch. Graphics modes
-  // keep the 480 client area regardless of the underlying framebuffer.
-  const dispH = (isGfx ? 480 : ROWS * lineHeight) * zoom;
+  // Standard DOS text modes have a 400-pixel natural surface (80×25 with 16-px
+  // cells, 80×50 with 8-px cells). Real CRTs displayed these at 4:3 — 640×480
+  // — so scale up vertically to match. Graphics modes keep the 480 client
+  // area regardless of the underlying framebuffer.
+  const isStdTextHeight = !isGfx && ROWS * lineHeight === 400;
+  const dispH = (isGfx || isStdTextHeight ? 480 : ROWS * lineHeight) * zoom;
+  // Use 'auto' (bilinear) when smoothing is on — universally supported.
+  // 'high-quality' would be nicer in Chromium 119+ but silently falls back to
+  // 'auto' elsewhere, so 'auto' is a safer baseline.
+  const imageRendering = smooth ? 'auto' : 'pixelated';
   return (
     <div
       style={{ position: 'relative', width: `${dispW}px`, height: `${dispH}px`, background: '#000' }}
@@ -963,7 +988,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
             display: 'block',
             width: `${dispW}px`,
             height: `${dispH}px`,
-            imageRendering: 'pixelated',
+            imageRendering,
             cursor: isGfx && dosMouseVisible ? 'none' : 'default',
           }}
         />
@@ -977,7 +1002,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
             display: 'block',
             width: `${dispW}px`,
             height: `${dispH}px`,
-            imageRendering: 'pixelated',
+            imageRendering,
             cursor: dosTextMouseVisible ? 'none' : 'default',
           }}
         />

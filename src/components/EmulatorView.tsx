@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
 import type { PEInfo, MenuResult } from '../lib/pe/types';
 import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
@@ -35,6 +35,7 @@ interface EmulatorViewProps {
   onFocus?: () => void;
   onReady?: () => void;
   onRunExe?: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles?: Map<string, ArrayBuffer>, exeName?: string, commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => void;
+  onOpenHelp?: (arrayBuffer: ArrayBuffer, fileName: string) => void;
   onSetupEmulator?: (emu: Emulator) => void;
   audioContext?: AudioContext | null;
   onTitleChange?: (title: string) => void;
@@ -378,7 +379,7 @@ function renderMdiChildOverlay(
 
 // --- Main EmulatorView ---
 
-export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
+export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onOpenHelp, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
   const exeBaseName = exeName.split(/[/\\]/).pop() || exeName;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const emuRef = useRef<Emulator | null>(null);
@@ -388,7 +389,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [windowStyle, setWindowStyle] = useState(0x00CF0000); // WS_OVERLAPPEDWINDOW
   const [canvasSize, setCanvasSize] = useState({ w: 320, h: 240 });
   const [iconUrl, setIconUrl] = useState<string | null>(null);
-  const [dialogInfo, setDialogInfo] = useState<EmulatorDialogInfo | null>(null);
+  const [dialogInfo, setDialogInfo] = useState<DialogInfo | null>(null);
   const [controlOverlays, setControlOverlays] = useState<ControlOverlay[]>([]);
   const [pressedControl, setPressedControl] = useState<number | null>(null);
   const [minimized, setMinimized] = useState(false);
@@ -407,6 +408,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
   const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
+  const [consoleSmooth, setConsoleSmooth] = useState(true);
   // Bumped whenever the DOS console's screen layout (graphics ↔ text mode,
   // text rows × charH) changes — triggers a re-render so consoleClientH
   // re-reads the up-to-date emu state.
@@ -725,6 +727,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
         onStop();
       };
+      if (onOpenHelp) {
+        emu.onOpenHelp = (fileBytes: ArrayBuffer, fileName: string) => {
+          onOpenHelp(fileBytes, fileName);
+        };
+      }
       emu.onCreateProcess = (childExeName: string, childCmdLine: string) => {
         if (!onRunExe) return;
         const lowerName = childExeName.toLowerCase();
@@ -813,6 +820,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         // Allow child to create GUI windows or spawn its own children
         childEmu.onCreateProcess = emu.onCreateProcess;
         childEmu.onCreateChildConsole = emu.onCreateChildConsole;
+        childEmu.onOpenHelp = emu.onOpenHelp;
 
         // When child writes to console, sync cursor back to parent and notify UI
         childEmu.onConsoleOutput = () => {
@@ -1572,13 +1580,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     );
   }
 
-  // Console window height tracks the active video mode: graphics modes use
-  // the full 480 area, text modes shrink to ROWS × charH (= 400 for 80×25 and
-  // 80×50) so the canvas renders at native size with no fractional stretch.
-  const consoleEmu = emuRef.current;
-  const consoleClientH = consoleEmu && !consoleEmu.isGraphicsMode
-    ? (consoleEmu.screenRows || 25) * (consoleEmu.charHeight || 16) * consoleZoom
-    : 480 * consoleZoom;
+  // Console window is always 640×480 — text modes scale their natural 720×400
+  // (or 640×400) surface up to fill the 4:3 client area, matching real CRTs.
+  const consoleClientH = 480 * consoleZoom;
   void consoleLayoutBump; // dependency: re-evaluate when the layout changes
 
   return (
@@ -1611,6 +1615,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onResizeStart={onResizeStart}
         onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
         zoomActive={consoleZoom > 1}
+        onSmoothToggle={isConsole ? () => setConsoleSmooth(s => !s) : undefined}
+        smoothActive={consoleSmooth}
         onFullscreenToggle={isConsole ? handleFullscreenToggle : undefined}
         fullscreenActive={isFullscreen}
         onSystemMove={handleSystemMove}
@@ -1638,7 +1644,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
               } : undefined}
             >
               <div style={isFullscreen ? { transform: `scale(${fsScale})`, transformOrigin: 'center' } : undefined}>
-                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} onScreenLayoutChange={handleScreenLayoutChange} />
+                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} smooth={consoleSmooth} onScreenLayoutChange={handleScreenLayoutChange} />
               </div>
             </div>
           ) : (

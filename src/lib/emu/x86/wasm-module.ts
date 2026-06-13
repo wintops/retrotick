@@ -206,7 +206,10 @@ export async function compileWasmRegion(
       }
     };
     const result = await WebAssembly.instantiate(wasmBytes, imports);
-    const run = result.instance.exports.run as () => number;
+    // The bytes-overload returns `{ instance, module }`; the Module
+    // overload returns an Instance directly. Detect at runtime.
+    const instance = ('instance' in result ? result.instance : result) as WebAssembly.Instance;
+    const run = instance.exports.run as () => number;
 
     // Collect segment keys for invalidation
     const segKeys = new Set<number>();

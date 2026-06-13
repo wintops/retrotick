@@ -1,32 +1,20 @@
 import type { Emulator } from '../../emulator';
 import { fillTextBitmap } from '../../emu-render';
-import { decodeMBCS } from '../../memory';
 import { OPAQUE } from '../types';
-import { colorToCSS } from './_helpers';
+import { colorToCSS, getDCFont } from './_helpers';
+import { applyFont, fontPixelSize, getTextMetrics, measureTextWidth } from '../../../gdi';
 
 export function registerText(emu: Emulator): void {
   const gdi32 = emu.registerDll('GDI32.DLL');
 
+  // tmHeight (cell height) — `font.height` is GDI's lfHeight: when negative
+  // it's the character height (cell minus internal leading), positive is
+  // the cell height itself. We approximate by upscaling negative values
+  // 20 % so calls like GetTextMetrics report a plausible tmHeight.
   const getFontSize = (hdc: number): number => {
-    const dc = emu.getDC(hdc);
-    if (!dc) return 13;
-    const font = emu.handles.get<{ height: number }>(dc.selectedFont);
-    if (font && font.height) {
-      const h = Math.abs(font.height);
-      // Negative lfHeight = character height (excludes internal leading).
-      // Estimate cell height (tmHeight) by adding ~20% for internal leading.
-      if (font.height < 0) return Math.round(h * 1.2);
-      return h; // positive lfHeight = cell height directly
-    }
-    return 13;
-  };
-
-  const getFontCSS = (hdc: number): string => {
-    const sz = getFontSize(hdc);
-    const dc = emu.getDC(hdc);
-    const font = dc ? emu.handles.get<{ height: number; faceName?: string }>(dc.selectedFont) : null;
-    const face = font?.faceName || 'Tahoma';
-    return `${sz}px "${face}", Tahoma, sans-serif`;
+    const f = getDCFont(emu, hdc);
+    const px = fontPixelSize(f);
+    return f.height < 0 ? Math.round(px * 1.2) : px;
   };
 
   gdi32.register('TextOutA', 5, () => {
@@ -41,8 +29,9 @@ export function registerText(emu: Emulator): void {
 
     const text = emu.memory.readBytesMBCS(strPtr, count);
 
+    const font = getDCFont(emu, hdc);
     const fontSize = getFontSize(hdc);
-    dc.ctx.font = getFontCSS(hdc);
+    applyFont(dc.ctx, font);
     if (dc.bkMode === OPAQUE) {
       dc.ctx.fillStyle = colorToCSS(dc.bkColor);
       const m = dc.ctx.measureText(text);
@@ -80,7 +69,7 @@ export function registerText(emu: Emulator): void {
 
     if (strPtr && count > 0) {
       const text = emu.memory.readBytesMBCS(strPtr, count);
-      dc.ctx.font = getFontCSS(hdc);
+      applyFont(dc.ctx, getDCFont(emu, hdc));
       dc.ctx.fillStyle = colorToCSS(dc.textColor);
       dc.ctx.textBaseline = 'top';
       fillTextBitmap(dc.ctx, text, x, y);
@@ -108,7 +97,7 @@ export function registerText(emu: Emulator): void {
     const left = emu.memory.readI32(rectPtr);
     const top = emu.memory.readI32(rectPtr + 4);
 
-    dc.ctx.font = getFontCSS(hdc);
+    applyFont(dc.ctx, getDCFont(emu, hdc));
     dc.ctx.fillStyle = colorToCSS(dc.textColor);
     dc.ctx.textBaseline = 'top';
     fillTextBitmap(dc.ctx, text, left, top);
@@ -128,12 +117,10 @@ export function registerText(emu: Emulator): void {
 
     const text = emu.memory.readBytesMBCS(strPtr, count);
 
-    const fontSize = getFontSize(hdc);
-    dc.ctx.font = getFontCSS(hdc);
-    const m = dc.ctx.measureText(text);
-    const w = Math.ceil(m.width);
+    const font = getDCFont(emu, hdc);
+    const w = measureTextWidth(dc.ctx, font, text);
     emu.memory.writeU32(sizePtr, w);
-    emu.memory.writeU32(sizePtr + 4, fontSize);
+    emu.memory.writeU32(sizePtr + 4, getFontSize(hdc));
     return 1;
   });
 
@@ -146,13 +133,10 @@ export function registerText(emu: Emulator): void {
       const fontSize = getFontSize(hdc);
       const dc = emu.getDC(hdc);
       if (dc) {
-        dc.ctx.font = getFontCSS(hdc);
+        const font = getDCFont(emu, hdc);
         let text = '';
-        for (let i = 0; i < count; i++) {
-          text += String.fromCharCode(emu.memory.readU8(strPtr + i));
-        }
-        const m = dc.ctx.measureText(text);
-        emu.memory.writeU32(sizePtr, Math.ceil(m.width));
+        for (let i = 0; i < count; i++) text += String.fromCharCode(emu.memory.readU8(strPtr + i));
+        emu.memory.writeU32(sizePtr, measureTextWidth(dc.ctx, font, text));
       } else {
         emu.memory.writeU32(sizePtr, count * 7);
       }
@@ -168,17 +152,17 @@ export function registerText(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     let aveCharWidth = Math.round(fontSize * 0.45);
     let maxCharWidth = fontSize;
-    if (dc) {
-      dc.ctx.font = getFontCSS(hdc);
-      // Measure average width using standard TEXTMETRIC method (average of a-z, A-Z)
-      const sample = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      const measured = Math.round(dc.ctx.measureText(sample).width / sample.length);
-      const measuredMax = Math.ceil(dc.ctx.measureText('W').width);
-      if (measured > 0) aveCharWidth = measured;
-      if (measuredMax > 0) maxCharWidth = measuredMax;
-    }
+    // Derive ascent/descent from the reported tmHeight so the sum matches
+    // what GDI guarantees (tmHeight = tmAscent + tmDescent). Pull just the
+    // character-width metrics from the shared library — those depend on
+    // the live font selection, not on our cell-height assumption.
     const ascent = Math.round(fontSize * 0.8);
     const descent = fontSize - ascent;
+    if (dc) {
+      const tm = getTextMetrics(dc.ctx, getDCFont(emu, hdc));
+      aveCharWidth = tm.aveCharWidth;
+      maxCharWidth = tm.maxCharWidth;
+    }
     emu.memory.writeU32(ptr, fontSize);      // tmHeight
     emu.memory.writeU32(ptr + 4, ascent);    // tmAscent
     emu.memory.writeU32(ptr + 8, descent);   // tmDescent
@@ -189,29 +173,54 @@ export function registerText(emu: Emulator): void {
     return 1;
   });
 
+  // CreateFontA(nHeight, nWidth, nEsc, nOrient, fnWeight, fdwItalic,
+  //             fdwUnderline, fdwStrikeOut, fdwCharSet, fdwOutputPrecision,
+  //             fdwClipPrecision, fdwQuality, fdwPitchAndFamily, lpszFace)
   gdi32.register('CreateFontA', 14, () => {
-    // Return a pseudo font handle
-    return emu.handles.alloc('font', { height: emu.readArg(0) });
+    const height = emu.readArg(0) | 0;
+    const weight = emu.readArg(4) | 0;
+    const italic = !!emu.readArg(5);
+    const underline = !!emu.readArg(6);
+    const strikeout = !!emu.readArg(7);
+    const facePtr = emu.readArg(13);
+    const faceName = facePtr ? emu.memory.readCString(facePtr) : 'Tahoma';
+    return emu.handles.alloc('font', { height, weight, italic, underline, strikeout, faceName });
   });
 
   gdi32.register('CreateFontW', 14, () => {
-    return emu.handles.alloc('font', { height: emu.readArg(0) });
+    const height = emu.readArg(0) | 0;
+    const weight = emu.readArg(4) | 0;
+    const italic = !!emu.readArg(5);
+    const underline = !!emu.readArg(6);
+    const strikeout = !!emu.readArg(7);
+    const facePtr = emu.readArg(13);
+    const faceName = facePtr ? emu.memory.readUTF16String(facePtr) : 'Tahoma';
+    return emu.handles.alloc('font', { height, weight, italic, underline, strikeout, faceName });
   });
 
+  // LOGFONTA: lfHeight LONG @0, lfWidth @4, lfEscapement @8, lfOrientation @12,
+  // lfWeight LONG @16, lfItalic BYTE @20, lfUnderline @21, lfStrikeOut @22,
+  // lfCharSet @23, ... lfFaceName[32] @28.
   gdi32.register('CreateFontIndirectA', 1, () => {
     const ptr = emu.readArg(0);
     const height = emu.memory.readI32(ptr);
-    // LOGFONT: lfFaceName at offset 28, 32 bytes (ANSI)
+    const weight = emu.memory.readI32(ptr + 16);
+    const italic = emu.memory.readU8(ptr + 20) !== 0;
+    const underline = emu.memory.readU8(ptr + 21) !== 0;
+    const strikeout = emu.memory.readU8(ptr + 22) !== 0;
     const faceName = emu.memory.readCString(ptr + 28);
-    return emu.handles.alloc('font', { height, faceName });
+    return emu.handles.alloc('font', { height, weight, italic, underline, strikeout, faceName });
   });
 
   gdi32.register('CreateFontIndirectW', 1, () => {
     const ptr = emu.readArg(0);
     const height = emu.memory.readI32(ptr);
-    // LOGFONTW: lfFaceName at offset 28, 32 wide chars
+    const weight = emu.memory.readI32(ptr + 16);
+    const italic = emu.memory.readU8(ptr + 20) !== 0;
+    const underline = emu.memory.readU8(ptr + 21) !== 0;
+    const strikeout = emu.memory.readU8(ptr + 22) !== 0;
     const faceName = emu.memory.readUTF16String(ptr + 28);
-    return emu.handles.alloc('font', { height, faceName });
+    return emu.handles.alloc('font', { height, weight, italic, underline, strikeout, faceName });
   });
 
   gdi32.register('GetTextExtentPointW', 4, () => {
@@ -225,9 +234,7 @@ export function registerText(emu: Emulator): void {
       if (dc) {
         let text = '';
         for (let i = 0; i < count; i++) text += String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
-        dc.ctx.font = `${fontSize}px Tahoma, sans-serif`;
-        const m = dc.ctx.measureText(text);
-        emu.memory.writeU32(sizePtr, Math.ceil(m.width));
+        emu.memory.writeU32(sizePtr, measureTextWidth(dc.ctx, getDCFont(emu, hdc), text));
         emu.memory.writeU32(sizePtr + 4, fontSize);
       } else {
         emu.memory.writeU32(sizePtr, count * Math.ceil(fontSize * 0.6));
@@ -250,7 +257,7 @@ export function registerText(emu: Emulator): void {
     let totalW = 0;
     let fit = 0;
     if (dc) {
-      dc.ctx.font = getFontCSS(hdc);
+      applyFont(dc.ctx, getDCFont(emu, hdc));
       for (let i = 0; i < count; i++) {
         let s = '';
         for (let j = 0; j <= i; j++) s += String.fromCharCode(emu.memory.readU8(strPtr + j));
@@ -287,12 +294,11 @@ export function registerText(emu: Emulator): void {
     let totalW = 0;
     let fit = 0;
     if (dc) {
-      dc.ctx.font = `${fontSize}px Tahoma, sans-serif`;
+      applyFont(dc.ctx, getDCFont(emu, hdc));
       for (let i = 0; i < count; i++) {
-        const ch = String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
-        totalW = Math.ceil(dc.ctx.measureText(
-          (() => { let s = ''; for (let j = 0; j <= i; j++) s += String.fromCharCode(emu.memory.readU16(strPtr + j * 2)); return s; })()
-        ).width);
+        let s = '';
+        for (let j = 0; j <= i; j++) s += String.fromCharCode(emu.memory.readU16(strPtr + j * 2));
+        totalW = Math.ceil(dc.ctx.measureText(s).width);
         if (dxPtr) emu.memory.writeU32(dxPtr + i * 4, totalW);
         if (maxExtent === 0 || totalW <= maxExtent) fit = i + 1;
       }
@@ -337,8 +343,7 @@ export function registerText(emu: Emulator): void {
     }
 
     if (text) {
-      const fontSize = getFontSize(hdc);
-      dc.ctx.font = `${fontSize}px Tahoma, sans-serif`;
+      applyFont(dc.ctx, getDCFont(emu, hdc));
       dc.ctx.fillStyle = colorToCSS(dc.textColor);
       dc.ctx.textBaseline = 'top';
       fillTextBitmap(dc.ctx, text, x, y);
@@ -471,8 +476,10 @@ export function registerText(emu: Emulator): void {
     return OUTLINETEXTMETRICW_SIZE;
   });
 
+  gdi32.register('CreateDCA', 4, () => 0); // printer/display device, no DC available
   gdi32.register('CreateDCW', 4, () => 0);
   gdi32.register('LPtoDP', 3, () => 1);
+  gdi32.register('StartDocA', 2, () => 1);
   gdi32.register('StartDocW', 2, () => 1);
   gdi32.register('SetAbortProc', 2, () => 1);
   gdi32.register('StartPage', 1, () => 1);

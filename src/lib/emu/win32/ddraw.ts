@@ -75,7 +75,7 @@ interface DDSurface {
   paletteAddr?: number;   // address of palette data (256 RGBQUAD entries)
 }
 
-function allocComObject(emu: Emulator, prefix: string, methodCount: number, handlers: Record<number, () => number>): number {
+function allocComObject(emu: Emulator, prefix: string, methodCount: number, handlers: Record<number, (() => number) | undefined>): number {
   // Allocate vtable
   const vtableAddr = emu.allocHeap(methodCount * 4);
   // Allocate object (first DWORD = vtable pointer)

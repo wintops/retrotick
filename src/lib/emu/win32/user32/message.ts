@@ -1591,8 +1591,8 @@ export function registerMessage(emu: Emulator): void {
               wnd._redrawNm = emu.allocHeap(60);
               wnd._redrawTextBuf = emu.allocHeap(512);
             }
-            const nm = wnd._redrawNm;
-            const textBuf = wnd._redrawTextBuf;
+            const nm = wnd._redrawNm!;
+            const textBuf = wnd._redrawTextBuf!;
             emu.memory.writeU32(nm, hwnd);                    // hwndFrom
             emu.memory.writeU32(nm + 4, wnd.controlId || 0);  // idFrom
             emu.memory.writeU32(nm + 8, LVN_GETDISPINFOW & 0xFFFFFFFF); // code

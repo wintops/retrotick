@@ -4,6 +4,7 @@ import { OPAQUE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
 import { decodeDib } from '../../pe/decode-dib';
 import { dcGetImageData, dcPutImageData } from '../emu-window';
+import { makeFont, toCSSFont } from '../../gdi';
 
 function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
   const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
@@ -161,23 +162,32 @@ export function registerWin16Gdi(emu: Emulator): void {
   emu.getStockBrush = (idx: number) => stockBrushes[idx] || null;
   emu.getStockPen = (idx: number) => stockPens[idx] || null;
 
-  // Font helpers — read font info from DC's selected font handle
-  function getFontSize(hdc: number): number {
+  // Font helpers — read font info from DC's selected font handle and run
+  // through the shared GDI library so measurements line up across all
+  // callers (gdi32, gdi16, hlp, ddraw text overlays).
+  function getDCGdiFont(hdc: number) {
     const dc = emu.getDC(hdc);
-    if (!dc) return 13;
-    const font = emu.handles.get<{ height: number }>(dc.selectedFont);
-    if (font && font.height) return Math.abs(font.height);
-    return 13;
+    if (!dc) return makeFont();
+    const stored = emu.handles.get<{
+      height?: number; faceName?: string; weight?: number;
+      italic?: boolean; underline?: boolean; strikeout?: boolean;
+    }>(dc.selectedFont);
+    if (!stored) return makeFont();
+    return makeFont({
+      height: stored.height ?? -13,
+      weight: stored.weight ?? 400,
+      italic: !!stored.italic,
+      underline: !!stored.underline,
+      strikeout: !!stored.strikeout,
+      faceName: stored.faceName || 'Tahoma',
+    });
   }
-
+  function getFontSize(hdc: number): number {
+    const f = getDCGdiFont(hdc);
+    return Math.abs(f.height) || 13;
+  }
   function getFontCSS(hdc: number): string {
-    const sz = getFontSize(hdc);
-    const dc = emu.getDC(hdc);
-    const font = dc ? emu.handles.get<{ height: number; faceName?: string; weight?: number; italic?: boolean }>(dc.selectedFont) : null;
-    const face = font?.faceName || 'Tahoma';
-    const weight = font?.weight && font.weight >= 700 ? 'bold ' : '';
-    const italic = font?.italic ? 'italic ' : '';
-    return `${italic}${weight}${sz}px "${face}", Tahoma, sans-serif`;
+    return toCSSFont(getDCGdiFont(hdc));
   }
 
   function createMemDC(): number {
@@ -204,7 +214,7 @@ export function registerWin16Gdi(emu: Emulator): void {
       const patCanvas = brush.patternBitmap;
       const pw = patCanvas.width, ph = patCanvas.height;
       if (pw > 0 && ph > 0) {
-        const patCtx = patCanvas.getContext('2d')!;
+        const patCtx = patCanvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
         const patData = patCtx.getImageData(0, 0, pw, ph);
         // Detect if pattern is monochrome (only black and white pixels)
         let isMono = true;
@@ -731,8 +741,8 @@ export function registerWin16Gdi(emu: Emulator): void {
     } else if (rop === PATCOPY16) {
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        let fill = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
-        if (isDCMonochrome(emu, dc)) fill = monoThreshold(dc, fill);
+        let fill: string | CanvasPattern = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
+        if (isDCMonochrome(emu, dc) && typeof fill === 'string') fill = monoThreshold(dc, fill);
         dc.ctx.fillStyle = fill;
         dc.ctx.fillRect(x, y, w, h);
       }
@@ -945,14 +955,14 @@ export function registerWin16Gdi(emu: Emulator): void {
       let patW = 8, patH = 8;
       let patIsMono = false;
       if (brush?.patternBitmap) {
-        const patCtx = brush.patternBitmap.getContext('2d')!;
+        const patCtx = brush.patternBitmap.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
         patW = brush.patternBitmap.width || 8;
         patH = brush.patternBitmap.height || 8;
         patPixels = patCtx.getImageData(0, 0, patW, patH).data;
         // Detect monochrome pattern (only pure black and white pixels)
         patIsMono = true;
-        for (let pi = 0; pi < patPixels.length; pi += 4) {
-          const pr = patPixels[pi], pg = patPixels[pi+1], pb = patPixels[pi+2];
+        for (let pi = 0; pi < patPixels!.length; pi += 4) {
+          const pr = patPixels![pi], pg = patPixels![pi+1], pb = patPixels![pi+2];
           if (!((pr === 0 && pg === 0 && pb === 0) || (pr === 255 && pg === 255 && pb === 255))) {
             patIsMono = false; break;
           }
@@ -1286,7 +1296,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   // Win16 CreateFont: 14 params all pushed as WORDs = 28 bytes
   gdi.register('CreateFont', 28, () => {
     const [nHeight, _nWidth, _nEsc, _nOrient, fnWeight,
-           fdwItalic, _fdwUnderline, _fdwStrikeOut, _fdwCharSet,
+           fdwItalic, fdwUnderline, fdwStrikeOut, _fdwCharSet,
            _fdwOutPrec, _fdwClipPrec, _fdwQuality, _fdwPitch, lpszFace] =
       emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4]);
     const height = (nHeight << 16) >> 16;
@@ -1299,6 +1309,8 @@ export function registerWin16Gdi(emu: Emulator): void {
       faceName: faceName || undefined,
       weight: fnWeight,
       italic: !!(fdwItalic & 0xFF),
+      underline: !!(fdwUnderline & 0xFF),
+      strikeout: !!(fdwStrikeOut & 0xFF),
     });
   }, 56);
 
@@ -1312,6 +1324,8 @@ export function registerWin16Gdi(emu: Emulator): void {
     const height = emu.memory.readI16(lpLogFont);
     const weight = emu.memory.readU16(lpLogFont + 8);
     const italic = emu.memory.readU8(lpLogFont + 10);
+    const underline = emu.memory.readU8(lpLogFont + 11);
+    const strikeout = emu.memory.readU8(lpLogFont + 12);
     // lfFaceName at offset 18, 32 bytes
     const faceName = emu.memory.readCString(lpLogFont + 18);
     return emu.handles.alloc('font', {
@@ -1319,6 +1333,8 @@ export function registerWin16Gdi(emu: Emulator): void {
       faceName: faceName || undefined,
       weight,
       italic: !!italic,
+      underline: !!underline,
+      strikeout: !!strikeout,
     });
   }, 57);
 

@@ -41,6 +41,10 @@ export function classifyExe(peInfo: PEInfo, name?: string): { ok: boolean; peInf
 
 export type RunExeFn = (buf: ArrayBuffer, peInfo: PEInfo, additional: Map<string, ArrayBuffer> | undefined, exeName: string, commandLine?: string) => void;
 
+export function isHlpFile(name?: string): boolean {
+  return !!name && name.toLowerCase().endsWith('.hlp');
+}
+
 export async function openWithDefaultApp(
   name: string,
   metas: { name: string }[],

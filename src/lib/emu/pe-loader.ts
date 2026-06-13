@@ -9,6 +9,9 @@ export interface LoadedPE {
   sizeOfImage: number;
   resourceRva: number;
   resourceSize: number;
+  /** Loaded section table — used post-load to mark executable code
+   *  sections read-only and detect writes into .text. */
+  sections?: { virtualAddress: number; virtualSize: number; characteristics: number }[];
 }
 
 export function parsePEHeader(arrayBuffer: ArrayBuffer): { imageBase: number; sizeOfImage: number } {

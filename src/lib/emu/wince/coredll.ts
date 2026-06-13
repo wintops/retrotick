@@ -1,4 +1,5 @@
 import type { Emulator } from '../emulator';
+import type { WindowInfo } from '../win32/user32/index';
 import { SP as ARM_SP, LR as ARM_LR } from '../arm/cpu';
 import { emuCompleteThunkARM } from '../emu-exec-arm';
 
@@ -279,8 +280,8 @@ export function registerCoredll(emu: Emulator): void {
     // Add to parent's child list and set controlId
     const WS_CHILD = 0x40000000;
     if (hParent && (style & WS_CHILD)) {
-      const wnd = emu.handles.get(hwnd);
-      const parentWnd = emu.handles.get(hParent);
+      const wnd = emu.handles.get<WindowInfo>(hwnd);
+      const parentWnd = emu.handles.get<WindowInfo>(hParent);
       if (wnd) wnd.controlId = hMenu;
       if (parentWnd) {
         if (!parentWnd.childList) parentWnd.childList = [];
@@ -292,7 +293,7 @@ export function registerCoredll(emu: Emulator): void {
 
     // Promote first top-level window to main window (sets up canvas + notifies React)
     if (!emu.mainWindow && !(style & WS_CHILD) && w > 0 && h > 0) {
-      const wnd = emu.handles.get(hwnd);
+      const wnd = emu.handles.get<WindowInfo>(hwnd);
       if (wnd) {
         wnd.hwnd = hwnd;
         emu.promoteToMainWindow(hwnd, wnd);
@@ -382,7 +383,7 @@ export function registerCoredll(emu: Emulator): void {
     const message = emu.memory.readU32(lpMsg + 4);
     const wParam = emu.memory.readU32(lpMsg + 8);
     const lParam = emu.memory.readU32(lpMsg + 12);
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd?.wndProc) {
       return emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam) ?? 0;
     }
@@ -402,7 +403,7 @@ export function registerCoredll(emu: Emulator): void {
     const hwnd = emu.readArg(0);
     const lpPaint = emu.readArg(1);
     const hdc = emu.beginPaint(hwnd);
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (lpPaint) {
       emu.memory.writeU32(lpPaint, hdc);
       emu.memory.writeU32(lpPaint + 4, 1);
@@ -731,7 +732,7 @@ export function registerCoredll(emu: Emulator): void {
   reg('GetClientRect', 2, (emu) => {
     const hwnd = emu.readArg(0);
     const lpRect = emu.readArg(1);
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (lpRect) {
       emu.memory.writeU32(lpRect, 0);
       emu.memory.writeU32(lpRect + 4, 0);
@@ -751,7 +752,7 @@ export function registerCoredll(emu: Emulator): void {
   reg('GetWindowLongW', 2, (emu) => {
     const hwnd = emu.readArg(0);
     const nIndex = emu.readArg(1) | 0;
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
     const GWL_WNDPROC = -4, GWL_STYLE = -16, GWL_EXSTYLE = -20, GWL_USERDATA = -21;
     switch (nIndex) {
@@ -772,7 +773,7 @@ export function registerCoredll(emu: Emulator): void {
     const hwnd = emu.readArg(0);
     const nIndex = emu.readArg(1) | 0;
     const dwNewLong = emu.readArg(2);
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
     const GWL_WNDPROC = -4, GWL_STYLE = -16, GWL_EXSTYLE = -20, GWL_USERDATA = -21;
     let old = 0;
@@ -794,7 +795,7 @@ export function registerCoredll(emu: Emulator): void {
   reg('SetWindowTextW', 2, (emu) => {
     const hwnd = emu.readArg(0);
     const textAddr = emu.readArg(1);
-    const wnd = emu.handles.get(hwnd);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd && textAddr) {
       let s = '', off = 0;
       while (true) {

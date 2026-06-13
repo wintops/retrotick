@@ -62,6 +62,43 @@ const EXE_ICON_16 = (
   </svg>
 );
 
+// --- HLP icon: 2D help book, magenta cover + yellow "?" ---
+
+function HlpBookIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" shapeRendering="crispEdges" style={{ flexShrink: 0 }}>
+      {/* Pages peeking out at the right edge */}
+      <rect x="25" y="4" width="3" height="25" fill="#FFFFFF" stroke="#000" strokeWidth="1" strokeLinejoin="miter"/>
+      <line x1="26" y1="8" x2="27" y2="8" stroke="#C0C0C0" strokeWidth="0.5"/>
+      <line x1="26" y1="13" x2="27" y2="13" stroke="#C0C0C0" strokeWidth="0.5"/>
+      <line x1="26" y1="19" x2="27" y2="19" stroke="#C0C0C0" strokeWidth="0.5"/>
+      <line x1="26" y1="24" x2="27" y2="24" stroke="#C0C0C0" strokeWidth="0.5"/>
+
+      {/* Front cover (purple #BB27C6) */}
+      <rect x="3" y="3" width="23" height="26" fill="#BB27C6" stroke="#000" strokeWidth="1" strokeLinejoin="miter"/>
+
+      {/* Spine band on the left — darker purple */}
+      <rect x="3" y="3" width="3" height="26" fill="#6F1576"/>
+      <rect x="6" y="3" width="1" height="26" fill="#000"/>
+
+      {/* Top highlight */}
+      <line x1="8" y1="4" x2="24" y2="4" stroke="#D058E0" strokeWidth="1"/>
+
+      {/* Yellow "?" with black drop shadow */}
+      <path d="M 12 11 Q 12 8, 15 8 L 17 8 Q 20 8, 20 12 Q 20 15, 16 16 L 16 19"
+            stroke="#000" strokeWidth="3" fill="none" strokeLinecap="square" strokeLinejoin="miter"/>
+      <path d="M 12 11 Q 12 8, 15 8 L 17 8 Q 20 8, 20 12 Q 20 15, 16 16 L 16 19"
+            stroke="#FFD400" strokeWidth="1.5" fill="none" strokeLinecap="square" strokeLinejoin="miter"/>
+      {/* dot */}
+      <rect x="14.5" y="21" width="3" height="3" fill="#000"/>
+      <rect x="15" y="21.5" width="2" height="2" fill="#FFD400"/>
+    </svg>
+  );
+}
+
+const HLP_ICON_32 = <HlpBookIcon size={32}/>;
+const HLP_ICON_16 = <HlpBookIcon size={16}/>;
+
 // --- Folder icon ---
 
 const FOLDER_ICON_32 = (
@@ -100,6 +137,10 @@ function isExeByExtension(name: string): boolean {
   return ext === 'exe' || ext === 'com';
 }
 
+function isHlpFile(name: string): boolean {
+  return getExt(name) === 'hlp';
+}
+
 // --- Public helpers ---
 
 export interface FileIconOptions {
@@ -113,6 +154,7 @@ export function fileIcon32(name: string, opts: FileIconOptions = {}): preact.JSX
   if (opts.isFolder) return FOLDER_ICON_32;
   if (opts.iconUrl) return <img src={opts.iconUrl} width={32} height={32} draggable={false} style={{ imageRendering: 'pixelated' }} />;
   if (isExeByExtension(name)) return EXE_ICON_32;
+  if (isHlpFile(name)) return HLP_ICON_32;
   if (isTextFile(name)) return TEXT_ICON_32;
   return GENERIC_ICON_32;
 }
@@ -122,9 +164,10 @@ export function fileIcon16(name: string, opts: FileIconOptions = {}): preact.JSX
   if (opts.isFolder) return FOLDER_ICON_16;
   if (opts.iconUrl) return <img src={opts.iconUrl} width={16} height={16} draggable={false} style={{ imageRendering: 'pixelated' }} />;
   if (isExeByExtension(name)) return EXE_ICON_16;
+  if (isHlpFile(name)) return HLP_ICON_16;
   if (isTextFile(name)) return TEXT_ICON_16;
   return GENERIC_ICON_16;
 }
 
 // Re-export individual icons for backward compat (Taskbar etc.)
-export { FOLDER_ICON_16, EXE_ICON_16, FOLDER_ICON_32, EXE_ICON_32, GENERIC_ICON_32, TEXT_ICON_16, TEXT_ICON_32 };
+export { FOLDER_ICON_16, EXE_ICON_16, FOLDER_ICON_32, EXE_ICON_32, GENERIC_ICON_32, TEXT_ICON_16, TEXT_ICON_32, HLP_ICON_16, HLP_ICON_32 };

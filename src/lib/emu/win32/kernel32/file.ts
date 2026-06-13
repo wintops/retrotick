@@ -187,6 +187,54 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('CreateFileA', 7, () => doCreateFile(false));
   kernel32.register('CreateFileW', 7, () => doCreateFile(true));
 
+  // Open an existing file, returning a handle. Handles all four sources (external,
+  // additional, virtual sync-cached, virtual async-fetched). For the async path, pauses
+  // the CPU and resumes the thunk via emuCompleteThunk; returns undefined to signal that.
+  // Used by OpenFile, _lopen, and similar APIs that don't create files.
+  function openExistingFile(
+    resolved: string,
+    access: number,
+    label: string,
+  ): number | undefined {
+    const upper = resolved.toUpperCase();
+    const existing = fs.findFile(resolved, emu.additionalFiles);
+    if (!existing) return undefined;
+    let fileData: Uint8Array | null = null;
+    if (existing.source === 'external') {
+      fileData = fs.externalFiles.get(upper)?.data ?? null;
+    } else if (existing.source === 'additional') {
+      const ab = emu.additionalFiles.get(existing.name);
+      if (ab) fileData = new Uint8Array(ab);
+    } else if (existing.source === 'virtual') {
+      const cached = fs.virtualFileCache?.get(existing.name.toUpperCase());
+      if (cached) {
+        fileData = new Uint8Array(cached);
+      } else if (fs.onFileRequest) {
+        const stackBytes = emu._currentThunkStackBytes;
+        emu.waitingForMessage = true;
+        const fileSize = existing.size;
+        const fileName = existing.name;
+        fs.fetchFileData(existing, emu.additionalFiles, resolved).then(buf => {
+          emu.waitingForMessage = false;
+          if (buf) fs.virtualFileCache?.set(fileName.toUpperCase(), buf);
+          const data = buf ? new Uint8Array(buf) : null;
+          const handle = emu.handles.alloc('file', {
+            path: upper, access, pos: 0,
+            data, size: data ? data.length : fileSize, modified: false,
+          } satisfies OpenFile);
+          console.log(`[${label}] async-resolved size=${data?.length ?? 0}`);
+          emuCompleteThunk(emu, handle, stackBytes);
+          if (emu.running && !emu.halted) requestAnimationFrame(emu.tick);
+        });
+        return undefined;
+      }
+    }
+    return emu.handles.alloc('file', {
+      path: upper, access, pos: 0,
+      data: fileData, size: existing.size, modified: false,
+    } satisfies OpenFile);
+  }
+
   // OpenFile(lpFileName, lpReOpenBuff, uStyle)
   const OF_EXIST = 0x4000;
   const HFILE_ERROR = 0xFFFFFFFF;
@@ -196,7 +244,6 @@ export function registerFile(emu: Emulator): void {
     const uStyle = emu.readArg(2);
     const fileName = emu.memory.readCString(lpFileName);
     const resolved = emu.resolvePath(fileName);
-    const upper = resolved.toUpperCase();
 
     if (lpReOpenBuff) {
       emu.memory.writeU8(lpReOpenBuff, 136);
@@ -208,28 +255,16 @@ export function registerFile(emu: Emulator): void {
     }
 
     const existing = fs.findFile(resolved, emu.additionalFiles);
-
     console.log(`[OpenFile] file="${fileName}" resolved="${resolved}" style=0x${uStyle.toString(16)} found=${!!existing}`);
 
-    if ((uStyle & OF_EXIST) !== 0) {
-      return existing ? 0 : HFILE_ERROR;
-    }
+    if ((uStyle & OF_EXIST) !== 0) return existing ? 0 : HFILE_ERROR;
+    if (!existing) return HFILE_ERROR;
 
-    if (existing) {
-      let fileData: Uint8Array | null = null;
-      if (existing.source === 'external') {
-        fileData = fs.externalFiles.get(upper)?.data ?? null;
-      } else if (existing.source === 'additional') {
-        const ab = emu.additionalFiles.get(existing.name);
-        if (ab) fileData = new Uint8Array(ab);
-      }
-      return emu.handles.alloc('file', {
-        path: upper, access: GENERIC_READ, pos: 0,
-        data: fileData, size: existing.size, modified: false,
-      } satisfies OpenFile);
+    const handle = openExistingFile(resolved, GENERIC_READ, 'OpenFile');
+    if (handle === undefined && existing.source === 'virtual') {
+      return undefined as unknown as number; // async fetch pending
     }
-
-    return HFILE_ERROR;
+    return handle ?? HFILE_ERROR;
   });
 
   // _lopen(lpPathName, iReadWrite)
@@ -238,22 +273,16 @@ export function registerFile(emu: Emulator): void {
     const iReadWrite = emu.readArg(1);
     const fileName = emu.memory.readCString(lpPathName);
     const resolved = emu.resolvePath(fileName);
-    const upper = resolved.toUpperCase();
     const existing = fs.findFile(resolved, emu.additionalFiles);
     console.log(`[_lopen] file="${fileName}" resolved="${resolved}" mode=${iReadWrite} found=${!!existing}`);
     if (!existing) return HFILE_ERROR;
-    let fileData: Uint8Array | null = null;
-    if (existing.source === 'external') {
-      fileData = fs.externalFiles.get(upper)?.data ?? null;
-    } else if (existing.source === 'additional') {
-      const ab = emu.additionalFiles.get(existing.name);
-      if (ab) fileData = new Uint8Array(ab);
+    const access = iReadWrite === 0 ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE;
+    const handle = openExistingFile(resolved, access, '_lopen');
+    if (handle === undefined && existing.source === 'virtual') {
+      // Async fetch in progress — completion happens in openExistingFile callback
+      return undefined as unknown as number;
     }
-    return emu.handles.alloc('file', {
-      path: upper,
-      access: iReadWrite === 0 ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
-      pos: 0, data: fileData, size: existing.size, modified: false,
-    } satisfies OpenFile);
+    return handle ?? HFILE_ERROR;
   });
 
   // _hread/_lread(hFile, lpBuffer, uBytes)
@@ -1126,11 +1155,35 @@ export function registerFile(emu: Emulator): void {
   });
 
   // ---- File attributes ----
+  // Probe the path for a known JS-stub system DLL at a canonical location.
+  // Programs like WINHLP32 call GetFileAttributesA/SearchPathA before LoadLibrary; without this,
+  // dynamically-loaded system DLLs (comdlg32, shell32, etc.) appear missing even though we have stubs.
+  function attrsForJsStubDll(pathStr: string): number | null {
+    const upper = pathStr.toUpperCase().replace(/\//g, '\\');
+    let basename: string | null = null;
+    for (const prefix of ['C:\\WINDOWS\\SYSTEM32\\', 'C:\\WINDOWS\\']) {
+      if (upper.startsWith(prefix)) {
+        const rest = upper.substring(prefix.length);
+        if (rest && !rest.includes('\\')) { basename = rest; break; }
+      }
+    }
+    if (!basename) return null;
+    const dllPrefix = basename + ':';
+    for (const key of emu.apiDefs.keys()) {
+      if (key.startsWith(dllPrefix)) return FILE_ATTRIBUTE_ARCHIVE;
+    }
+    return null;
+  }
+
   kernel32.register('GetFileAttributesW', 1, () => {
     const lpFileName = emu.readArg(0);
     if (!lpFileName) return INVALID_HANDLE_VALUE;
     const name = emu.memory.readUTF16String(lpFileName);
-    const result = fs.getFileAttributes(name, emu.additionalFiles);
+    let result = fs.getFileAttributes(name, emu.additionalFiles);
+    if (result === INVALID_HANDLE_VALUE) {
+      const stubResult = attrsForJsStubDll(name);
+      if (stubResult !== null) result = stubResult;
+    }
     console.log(`[GetFileAttributesW] path="${name}" result=0x${result.toString(16)}`);
     return result;
   });
@@ -1139,7 +1192,11 @@ export function registerFile(emu: Emulator): void {
     const lpFileName = emu.readArg(0);
     if (!lpFileName) return INVALID_HANDLE_VALUE;
     const name = emu.memory.readCString(lpFileName);
-    const result = fs.getFileAttributes(name, emu.additionalFiles);
+    let result = fs.getFileAttributes(name, emu.additionalFiles);
+    if (result === INVALID_HANDLE_VALUE) {
+      const stubResult = attrsForJsStubDll(name);
+      if (stubResult !== null) result = stubResult;
+    }
     console.log(`[GetFileAttributesA] path="${name}" result=0x${result.toString(16)}`);
     return result;
   });
@@ -1151,7 +1208,7 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('GetTempFileNameA', 4, () => 0);
 
   // CopyFile: async
-  function doCopyFile(isWide: boolean): number {
+  function doCopyFile(isWide: boolean): number | undefined {
     const lpExisting = emu.readArg(0);
     const lpNew = emu.readArg(1);
     const bFailIfExists = emu.readArg(2);
@@ -1195,7 +1252,7 @@ export function registerFile(emu: Emulator): void {
   kernel32.register('CopyFileW', 3, () => doCopyFile(true));
 
   // MoveFile: copy source to dest, then remove source
-  function doMoveFile(isWide: boolean, hasFlags: boolean): number {
+  function doMoveFile(isWide: boolean, hasFlags: boolean): number | undefined {
     const lpExisting = emu.readArg(0);
     const lpNew = emu.readArg(1);
     if (!lpExisting || !lpNew) return 0;
@@ -1318,4 +1375,25 @@ export function registerFile(emu: Emulator): void {
 
   // PeekNamedPipe(hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage) — 6 args
   kernel32.register('PeekNamedPipe', 6, () => 0);
+
+  // _lcreat(lpPathName, iAttribute) — create or truncate a file
+  kernel32.register('_lcreat', 2, () => {
+    const lpPathName = emu.readArg(0);
+    const fileName = emu.memory.readCString(lpPathName);
+    const resolved = emu.resolvePath(fileName);
+    const upper = resolved.toUpperCase();
+    return emu.handles.alloc('file', {
+      path: upper,
+      access: GENERIC_READ | GENERIC_WRITE,
+      pos: 0, data: new Uint8Array(0), size: 0, modified: true,
+    } satisfies OpenFile);
+  });
+
+  // GetBinaryTypeA(lpApplicationName, lpBinaryType) → BOOL
+  // Reports executable type: 0=SCS_32BIT_BINARY, 1=SCS_DOS_BINARY, 2=SCS_WOW_BINARY, 3=SCS_PIF_BINARY, 4=SCS_POSIX_BINARY, 5=SCS_OS216_BINARY, 6=SCS_64BIT_BINARY
+  kernel32.register('GetBinaryTypeA', 2, () => {
+    const lpBinaryType = emu.readArg(1);
+    if (lpBinaryType) emu.memory.writeU32(lpBinaryType, 0); // SCS_32BIT_BINARY
+    return 1;
+  });
 }

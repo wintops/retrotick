@@ -357,7 +357,7 @@ export class Memory {
   // than the RM IVT, so PM writes never clobber the RM IVT. We emulate this
   // by checking `_pmCpu.realMode` at write time — if false (PM), writes to the
   // IVT region are ignored.
-  _pmCpu: { realMode: boolean; emu?: { _gdtBase?: number; _gdtLimit?: number }; ss?: number; dropSegBaseCache?: (sel: number) => void; refreshSsB32?: () => void } | null = null;
+  _pmCpu: { realMode: boolean; emu?: { _gdtBase?: number; _gdtLimit?: number } | null; ss?: number; dropSegBaseCache?: (sel: number) => void; refreshSsB32?: () => void } | null = null;
   _ivtProtect = false;
 
   // DOS/4GW pre-populates its PM interrupt-handler table via two anchor writes
@@ -425,6 +425,13 @@ export class Memory {
     if (key === this._cKey1) return this._cDV1;
     this.seg(addr);
     return this._cDV0;
+  }
+
+  /** Upper bound for address-range loops. Returns the flat buffer size
+   *  in DOS mode (where memory is a single block), otherwise the standard
+   *  1 MB real-mode address space. Lets callers safely cap `addr < length`. */
+  get length(): number {
+    return this._flat ? this._flat.byteLength : 0x100000;
   }
 
   readU8(addr: number): number {

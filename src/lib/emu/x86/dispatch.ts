@@ -445,7 +445,7 @@ export function cpuStep(cpu: CPU): void {
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   cpu._lastInstrEip = instrEip; // exposed to fault catch in emu-exec.ts (PageFaultError rewind)
   // Per-instruction trace ring buffer (disabled for perf)
-  if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
+  if (false as boolean && cpu.emu && cpu.emu!.cpuSteps > 90000000) {
     const csBase_t = (cpu.cs << 4) >>> 0;
     const ip_t = (instrEip - csBase_t) & 0xFFFF;
     const ax = cpu.reg[0] & 0xFFFF, bx = cpu.reg[3] & 0xFFFF, cx = cpu.reg[1] & 0xFFFF, dx = cpu.reg[2] & 0xFFFF;
@@ -462,7 +462,7 @@ export function cpuStep(cpu: CPU): void {
       const srcO = cpu.mem.readU32(structAddr2 + 6);
       if (srcH === 12 && srcO === 0) {
       _instrRingDumped = true;
-      console.warn(`[TRACE] Last 200 instructions before bad XMS move (step ${cpu.emu.cpuSteps}):`);
+      console.warn(`[TRACE] Last 200 instructions before bad XMS move (step ${cpu.emu!.cpuSteps}):`);
       for (let i = 0; i < 200; i++) {
         const idx = (_instrRingIdx - 200 + i) % 200;
         if (_instrRing[idx]) console.warn(`  ${_instrRing[idx]}`);
