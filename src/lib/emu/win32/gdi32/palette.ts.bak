@@ -1,0 +1,150 @@
+import type { Emulator } from '../../emulator';
+import type { PaletteInfo, DCInfo } from './types';
+import { refreshPalettePixels } from './_helpers';
+
+export function registerPalette(emu: Emulator): void {
+  const gdi32 = emu.registerDll('GDI32.DLL');
+
+  gdi32.register('CreatePalette', 1, () => {
+    // LOGPALETTE: WORD palVersion, WORD palNumEntries, PALETTEENTRY[palNumEntries]
+    const lpLogPal = emu.readArg(0);
+    const numEntries = emu.memory.readU16(lpLogPal + 2);
+    //console.log(`CreatePalette ${numEntries}`);
+    const entries = new Uint8Array(numEntries * 4);
+    for (let i = 0; i < numEntries; i++) {
+      const off = lpLogPal + 4 + i * 4;
+      entries[i * 4]     = emu.memory.readU8(off);     // peRed
+      entries[i * 4 + 1] = emu.memory.readU8(off + 1); // peGreen
+      entries[i * 4 + 2] = emu.memory.readU8(off + 2); // peBlue
+      entries[i * 4 + 3] = emu.memory.readU8(off + 3); // peFlags
+    }
+    const pal: PaletteInfo = { entries, count: numEntries };
+    return emu.handles.alloc('palette', pal);
+  });
+
+  gdi32.register('SelectPalette', 3, () => {
+    const hdc = emu.readArg(0);
+    const hPal = emu.readArg(1);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const old = dc.selectedPalette;
+    dc.selectedPalette = hPal;
+    return old;
+  });
+
+  gdi32.register('RealizePalette', 1, () => 0);
+
+  gdi32.register('GetPaletteEntries', 4, () => {
+    const hPal = emu.readArg(0);
+    const iStart = emu.readArg(1);
+    const nEntries = emu.readArg(2);
+    const lpEntries = emu.readArg(3);
+    const pal = emu.handles.get<PaletteInfo>(hPal);
+    if (!pal || !lpEntries) return 0;
+    const count = Math.min(nEntries, pal.count - iStart);
+    for (let i = 0; i < count; i++) {
+      const si = (iStart + i) * 4;
+      emu.memory.writeU8(lpEntries + i * 4, pal.entries[si]);
+      emu.memory.writeU8(lpEntries + i * 4 + 1, pal.entries[si + 1]);
+      emu.memory.writeU8(lpEntries + i * 4 + 2, pal.entries[si + 2]);
+      emu.memory.writeU8(lpEntries + i * 4 + 3, pal.entries[si + 3]);
+    }
+    return count;
+  });
+
+  gdi32.register('SetPaletteEntries', 4, () => {
+    const hPal = emu.readArg(0);
+    const iStart = emu.readArg(1);
+    const nEntries = emu.readArg(2);
+    const lpEntries = emu.readArg(3);
+    const pal = emu.handles.get<PaletteInfo>(hPal);
+    if (!pal || !lpEntries) return 0;
+    const count = Math.min(nEntries, pal.count - iStart);
+    for (let i = 0; i < count; i++) {
+      const di = (iStart + i) * 4;
+      pal.entries[di]     = emu.memory.readU8(lpEntries + i * 4);
+      pal.entries[di + 1] = emu.memory.readU8(lpEntries + i * 4 + 1);
+      pal.entries[di + 2] = emu.memory.readU8(lpEntries + i * 4 + 2);
+      pal.entries[di + 3] = emu.memory.readU8(lpEntries + i * 4 + 3);
+    }
+    return count;
+  });
+
+  gdi32.register('GetSystemPaletteEntries', 4, () => 0);
+
+  gdi32.register('AnimatePalette', 4, () => {
+    // AnimatePalette(hPal, iStartIndex, cEntries, ppe)
+    const hPal = emu.readArg(0);
+    const iStart = emu.readArg(1);
+    const nEntries = emu.readArg(2);
+    const lpEntries = emu.readArg(3);
+    const pal = emu.handles.get<PaletteInfo>(hPal);
+    if (!pal || !lpEntries) return 0;
+    // Only update entries with PC_RESERVED flag (0x01) — but we update all for simplicity
+    const count = Math.min(nEntries, pal.count - iStart);
+    console.log(`AnimatePalette ${count }`);
+    for (let i = 0; i < count; i++) {
+      const di = (iStart + i) * 4;
+      pal.entries[di]     = emu.memory.readU8(lpEntries + i * 4);
+      pal.entries[di + 1] = emu.memory.readU8(lpEntries + i * 4 + 1);
+      pal.entries[di + 2] = emu.memory.readU8(lpEntries + i * 4 + 2);
+      pal.entries[di + 3] = emu.memory.readU8(lpEntries + i * 4 + 3);
+    }
+    // Refresh all DCs that have this palette selected and have a palette index buffer
+    for (const [dcHandle, dc] of emu.handles.findByType('dc') as [number, DCInfo][]) {
+      if (dc.selectedPalette === hPal && dc.palIndexBuf) {
+        refreshPalettePixels(dc, pal);
+        emu.syncDCToCanvas(dcHandle);
+      }
+    }
+    return 1;
+  });
+
+  gdi32.register('GetNearestPaletteIndex', 2, () => {
+    // GetNearestPaletteIndex(hPal, crColor)
+    const hPal = emu.readArg(0);
+    const crColor = emu.readArg(1);
+    const pal = emu.handles.get<PaletteInfo>(hPal);
+    if (!pal) return 0;
+    const r = crColor & 0xFF;
+    const g = (crColor >> 8) & 0xFF;
+    const b = (crColor >> 16) & 0xFF;
+    let bestIdx = 0, bestDist = Infinity;
+    for (let i = 0; i < pal.count; i++) {
+      const dr = pal.entries[i * 4] - r;
+      const dg = pal.entries[i * 4 + 1] - g;
+      const db = pal.entries[i * 4 + 2] - b;
+      const dist = dr * dr + dg * dg + db * db;
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+    }
+    return bestIdx;
+  });
+
+  gdi32.register('CreateHalftonePalette', 1, () => {
+    // Return a pseudo palette handle with 256 halftone entries
+    const entries = new Uint8Array(256 * 4);
+    const pal: PaletteInfo = { entries, count: 256 };
+    return emu.handles.alloc('palette', pal);
+  });
+
+  gdi32.register('ResizePalette', 2, () => 1);
+}
+
+/** Resolve palette colors for SetDIBitsToDevice / StretchDIBits when fuUsage == DIB_PAL_COLORS */
+export function resolvePaletteColors(
+  emu: Emulator, dc: DCInfo, bmiPtr: number, biSize: number, numColors: number,
+): [number, number, number][] {
+  const pal = emu.handles.get<PaletteInfo>(dc.selectedPalette);
+  const result: [number, number, number][] = [];
+  const paletteOffset = bmiPtr + biSize;
+  for (let i = 0; i < numColors; i++) {
+    // DIB_PAL_COLORS: color table is array of WORD indices into the logical palette
+    const idx = emu.memory.readU16(paletteOffset + i * 2);
+    if (pal && idx < pal.count) {
+      result.push([pal.entries[idx * 4], pal.entries[idx * 4 + 1], pal.entries[idx * 4 + 2]]);
+    } else {
+      result.push([0, 0, 0]);
+    }
+  }
+  return result;
+}

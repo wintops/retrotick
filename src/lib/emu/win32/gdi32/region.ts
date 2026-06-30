@@ -15,6 +15,8 @@ export function registerRegion(emu: Emulator): void {
   gdi32.register('PaintRgn', 2, () => 1);
   // FillRgn(hdc, hrgn, hbr) → BOOL
   gdi32.register('FillRgn', 3, () => 1);
+  // InvertRgn(hdc, hrgn) → BOOL
+  gdi32.register('InvertRgn', 2, () => 1);
   gdi32.register('OffsetRgn', 3, () => 1); // SIMPLEREGION
   // FrameRgn(hdc, hrgn, hbr, w, h) → BOOL
   gdi32.register('FrameRgn', 5, () => 1);

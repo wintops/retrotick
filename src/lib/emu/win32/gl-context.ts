@@ -33,6 +33,7 @@ const GL_CLAMP_TO_EDGE = 0x812F;
 
 const GL_RGBA = 0x1908, GL_RGB = 0x1907, GL_LUMINANCE = 0x1909;
 const GL_LUMINANCE_ALPHA = 0x190A, GL_ALPHA = 0x1906;
+const GL_BGR = 0x80E0, GL_BGRA = 0x80E1;
 const GL_UNSIGNED_BYTE = 0x1401;
 
 const GL_COMPILE = 0x1300, GL_COMPILE_AND_EXECUTE = 0x1301;
@@ -207,7 +208,18 @@ void main() {
   vTexCoord = aTexCoord;
 }`;
 
-// Fragment shader source
+// Fragment shader source.
+//
+// Lighting follows the OpenGL 1.x fixed-function model:
+//   final = matEmission
+//         + matAmbient * lightModelAmbient
+//         + Σlights[ matAmbient * lightAmbient
+//                  + matDiffuse * lightDiffuse * max(N·L, 0) ]
+//
+// When GL_COLOR_MATERIAL is enabled (the default in this implementation —
+// it's effectively always on so apps that rely on glColor "just work"),
+// the per-vertex color overrides matAmbient and matDiffuse. When disabled,
+// the material set by glMaterialfv is used (default: amb=0.2, dif=0.8).
 const FRAG_SRC = `#version 300 es
 precision highp float;
 
@@ -217,6 +229,7 @@ in vec2 vTexCoord;
 in vec3 vEyePos;
 
 uniform bool uLightingEnabled;
+uniform bool uColorMaterial;
 uniform bool uLight0Enabled;
 uniform bool uLight1Enabled;
 uniform vec4 uLight0Position;
@@ -226,6 +239,9 @@ uniform vec4 uLight1Position;
 uniform vec4 uLight1Ambient;
 uniform vec4 uLight1Diffuse;
 uniform vec4 uLightModelAmbient;
+uniform vec4 uMatAmbient;
+uniform vec4 uMatDiffuse;
+uniform vec4 uMatEmission;
 
 uniform bool uTextureEnabled;
 uniform sampler2D uTexture;
@@ -233,9 +249,10 @@ uniform int uTexEnvMode; // 0=modulate, 1=decal, 2=replace
 
 out vec4 fragColor;
 
-vec4 computeLight(bool enabled, vec4 lightPos, vec4 lightAmb, vec4 lightDiff, vec3 N, vec3 eyePos, vec4 matColor) {
+vec4 computeLight(bool enabled, vec4 lightPos, vec4 lightAmb, vec4 lightDiff,
+                  vec3 N, vec3 eyePos, vec4 matAmb, vec4 matDif) {
   if (!enabled) return vec4(0.0);
-  vec4 result = lightAmb * matColor;
+  vec4 result = lightAmb * matAmb;
   vec3 L;
   if (lightPos.w == 0.0) {
     L = normalize(lightPos.xyz);
@@ -243,20 +260,28 @@ vec4 computeLight(bool enabled, vec4 lightPos, vec4 lightAmb, vec4 lightDiff, ve
     L = normalize(lightPos.xyz - eyePos);
   }
   float NdotL = max(dot(N, L), 0.0);
-  result += lightDiff * matColor * NdotL;
+  result += lightDiff * matDif * NdotL;
   return result;
 }
 
 void main() {
-  vec4 baseColor = vColor;
+  vec4 baseColor;
 
   if (uLightingEnabled) {
+    // GL_COLOR_MATERIAL with default mode GL_AMBIENT_AND_DIFFUSE: per-vertex
+    // color drives both ambient and diffuse material reflectance. When off,
+    // use the static material set via glMaterialfv.
+    vec4 matAmb = uColorMaterial ? vColor : uMatAmbient;
+    vec4 matDif = uColorMaterial ? vColor : uMatDiffuse;
+
     vec3 N = normalize(vNormal);
-    vec4 litColor = uLightModelAmbient * baseColor;
-    litColor += computeLight(uLight0Enabled, uLight0Position, uLight0Ambient, uLight0Diffuse, N, vEyePos, baseColor);
-    litColor += computeLight(uLight1Enabled, uLight1Position, uLight1Ambient, uLight1Diffuse, N, vEyePos, baseColor);
-    litColor.a = baseColor.a;
+    vec4 litColor = uMatEmission + uLightModelAmbient * matAmb;
+    litColor += computeLight(uLight0Enabled, uLight0Position, uLight0Ambient, uLight0Diffuse, N, vEyePos, matAmb, matDif);
+    litColor += computeLight(uLight1Enabled, uLight1Position, uLight1Ambient, uLight1Diffuse, N, vEyePos, matAmb, matDif);
+    litColor.a = matDif.a;
     baseColor = litColor;
+  } else {
+    baseColor = vColor;
   }
 
   if (uTextureEnabled) {
@@ -308,6 +333,10 @@ export class GL1Context {
   private uLight1Ambient: WebGLUniformLocation;
   private uLight1Diffuse: WebGLUniformLocation;
   private uLightModelAmbient: WebGLUniformLocation;
+  private uColorMaterial: WebGLUniformLocation;
+  private uMatAmbient: WebGLUniformLocation;
+  private uMatDiffuse: WebGLUniformLocation;
+  private uMatEmission: WebGLUniformLocation;
   private uTextureEnabled: WebGLUniformLocation;
   private uTexture: WebGLUniformLocation;
   private uTexEnvMode: WebGLUniformLocation;
@@ -345,6 +374,18 @@ export class GL1Context {
   private light1: LightState;
   private lightModelAmbient = new Float32Array([0.2, 0.2, 0.2, 1.0]);
   private texEnvMode = GL_MODULATE;
+
+  // Material state — OpenGL 1.x defaults. Used when GL_COLOR_MATERIAL is off.
+  // When GL_COLOR_MATERIAL is on, per-vertex color drives matAmbient and
+  // matDiffuse instead (default mode is GL_AMBIENT_AND_DIFFUSE).
+  // GL_COLOR_MATERIAL defaults to GL_FALSE per the OpenGL 1.x spec — apps
+  // that want vertex colors to drive lighting must explicitly enable it.
+  // For convenience, glColor3f/4f also updates matAmbient + matDiffuse so
+  // legacy apps that skip the enable still get colored materials.
+  private matAmbient = new Float32Array([0.2, 0.2, 0.2, 1.0]);
+  private matDiffuse = new Float32Array([0.8, 0.8, 0.8, 1.0]);
+  private matEmission = new Float32Array([0, 0, 0, 1]);
+  private colorMaterialEnabled = false;
 
   // Textures
   private textures = new Map<number, WebGLTexture>();
@@ -423,6 +464,10 @@ export class GL1Context {
     this.uLight1Ambient = gl.getUniformLocation(this.program, 'uLight1Ambient')!;
     this.uLight1Diffuse = gl.getUniformLocation(this.program, 'uLight1Diffuse')!;
     this.uLightModelAmbient = gl.getUniformLocation(this.program, 'uLightModelAmbient')!;
+    this.uColorMaterial = gl.getUniformLocation(this.program, 'uColorMaterial')!;
+    this.uMatAmbient = gl.getUniformLocation(this.program, 'uMatAmbient')!;
+    this.uMatDiffuse = gl.getUniformLocation(this.program, 'uMatDiffuse')!;
+    this.uMatEmission = gl.getUniformLocation(this.program, 'uMatEmission')!;
     this.uTextureEnabled = gl.getUniformLocation(this.program, 'uTextureEnabled')!;
     this.uTexture = gl.getUniformLocation(this.program, 'uTexture')!;
     this.uTexEnvMode = gl.getUniformLocation(this.program, 'uTexEnvMode')!;
@@ -497,8 +542,8 @@ export class GL1Context {
     stack[stack.length - 1] = m;
   }
 
-  private get modelview(): Float32Array { return this.modelviewStack[this.modelviewStack.length - 1]; }
-  private get projection(): Float32Array { return this.projectionStack[this.projectionStack.length - 1]; }
+  get modelview(): Float32Array { return this.modelviewStack[this.modelviewStack.length - 1]; }
+  get projection(): Float32Array { return this.projectionStack[this.projectionStack.length - 1]; }
 
   private markDirty(): void { this.uniformsDirty = true; }
 
@@ -519,6 +564,10 @@ export class GL1Context {
     gl.uniform4fv(this.uLight1Ambient, this.light1.ambient);
     gl.uniform4fv(this.uLight1Diffuse, this.light1.diffuse);
     gl.uniform4fv(this.uLightModelAmbient, this.lightModelAmbient);
+    gl.uniform1i(this.uColorMaterial, this.colorMaterialEnabled ? 1 : 0);
+    gl.uniform4fv(this.uMatAmbient, this.matAmbient);
+    gl.uniform4fv(this.uMatDiffuse, this.matDiffuse);
+    gl.uniform4fv(this.uMatEmission, this.matEmission);
     gl.uniform1i(this.uTextureEnabled, this.textureEnabled ? 1 : 0);
     gl.uniform1i(this.uTexture, 0);
     const envMode = this.texEnvMode === GL_DECAL ? 1 : this.texEnvMode === GL_REPLACE ? 2 : 0;
@@ -612,7 +661,7 @@ export class GL1Context {
         case GL_LIGHT1: this.light1Enabled = true; break;
         case GL_TEXTURE_2D: this.textureEnabled = true; break;
         case GL_NORMALIZE: break; // handled in shader
-        case GL_COLOR_MATERIAL: break; // always on in our impl
+        case GL_COLOR_MATERIAL: this.colorMaterialEnabled = true; break;
         case GL_AUTO_NORMAL: this.autoNormalEnabled = true; break;
         case GL_MAP2_VERTEX_3: case GL_MAP2_VERTEX_4: case GL_MAP2_NORMAL: break; // tracked via evalMaps
       }
@@ -632,7 +681,7 @@ export class GL1Context {
         case GL_LIGHT1: this.light1Enabled = false; break;
         case GL_TEXTURE_2D: this.textureEnabled = false; break;
         case GL_NORMALIZE: break;
-        case GL_COLOR_MATERIAL: break;
+        case GL_COLOR_MATERIAL: this.colorMaterialEnabled = false; break;
         case GL_AUTO_NORMAL: this.autoNormalEnabled = false; break;
         case GL_MAP2_VERTEX_3: case GL_MAP2_VERTEX_4: case GL_MAP2_NORMAL: break;
       }
@@ -651,6 +700,34 @@ export class GL1Context {
 
   shadeModel(mode: number): void {
     this.cmd(() => { this._shadeModel = mode; });
+  }
+
+  colorMask(r: boolean, g: boolean, b: boolean, a: boolean): void {
+    this.cmd(() => { this.gl.colorMask(r, g, b, a); });
+  }
+
+  depthMask(flag: boolean): void {
+    this.cmd(() => { this.gl.depthMask(flag); });
+  }
+
+  stencilMask(mask: number): void {
+    this.cmd(() => { this.gl.stencilMask(mask); });
+  }
+
+  stencilFunc(func: number, ref: number, mask: number): void {
+    this.cmd(() => { this.gl.stencilFunc(func, ref, mask); });
+  }
+
+  stencilOp(fail: number, zfail: number, zpass: number): void {
+    this.cmd(() => { this.gl.stencilOp(fail, zfail, zpass); });
+  }
+
+  clearStencil(s: number): void {
+    this.cmd(() => { this.gl.clearStencil(s); });
+  }
+
+  polygonOffset(factor: number, units: number): void {
+    this.cmd(() => { this.gl.polygonOffset(factor, units); });
   }
 
   blendFunc(sfactor: number, dfactor: number): void {
@@ -839,25 +916,78 @@ export class GL1Context {
     });
   }
 
+  // Normalize a GL1.x (format, internalFormat, pixels) tuple into something
+  // WebGL2 accepts. WebGL2 has no GL_BGR / GL_BGRA upload format, so we
+  // swizzle the pixel buffer in place and report RGB / RGBA to the driver.
+  private normalizeTexUpload(format: number, internalFormat: number, pixels: Uint8Array | null):
+      { glFormat: number; glInternal: number; pixels: Uint8Array | null } {
+    const gl = this.gl;
+    let glFormat: number;
+    let glInternal: number;
+    let outPixels = pixels;
+
+    if (format === GL_BGRA || internalFormat === GL_BGRA) {
+      // Swizzle B,G,R,A -> R,G,B,A
+      if (pixels) {
+        const swz = new Uint8Array(pixels.length);
+        for (let i = 0; i + 3 < pixels.length; i += 4) {
+          swz[i] = pixels[i + 2];
+          swz[i + 1] = pixels[i + 1];
+          swz[i + 2] = pixels[i];
+          swz[i + 3] = pixels[i + 3];
+        }
+        outPixels = swz;
+      }
+      glFormat = gl.RGBA; glInternal = gl.RGBA;
+    } else if (format === GL_BGR || internalFormat === GL_BGR) {
+      if (pixels) {
+        const swz = new Uint8Array(pixels.length);
+        for (let i = 0; i + 2 < pixels.length; i += 3) {
+          swz[i] = pixels[i + 2];
+          swz[i + 1] = pixels[i + 1];
+          swz[i + 2] = pixels[i];
+        }
+        outPixels = swz;
+      }
+      glFormat = gl.RGB; glInternal = gl.RGB;
+    } else if (format === GL_RGBA || internalFormat === GL_RGBA || internalFormat === 4) {
+      glFormat = gl.RGBA; glInternal = gl.RGBA;
+    } else if (format === GL_RGB || internalFormat === GL_RGB || internalFormat === 3) {
+      glFormat = gl.RGB; glInternal = gl.RGB;
+    } else if (format === GL_LUMINANCE || internalFormat === GL_LUMINANCE || internalFormat === 1) {
+      glFormat = gl.LUMINANCE; glInternal = gl.LUMINANCE;
+    } else if (format === GL_LUMINANCE_ALPHA || internalFormat === GL_LUMINANCE_ALPHA || internalFormat === 2) {
+      glFormat = gl.LUMINANCE_ALPHA; glInternal = gl.LUMINANCE_ALPHA;
+    } else {
+      glFormat = gl.RGBA; glInternal = gl.RGBA;
+    }
+    return { glFormat, glInternal, pixels: outPixels };
+  }
+
   texImage2D(target: number, level: number, internalFormat: number,
              width: number, height: number, border: number,
              format: number, type: number, pixels: Uint8Array | null): void {
     this.cmd(() => {
       const gl = this.gl;
-      let glFormat: number;
-      let glInternal: number;
-      if (format === GL_RGBA || internalFormat === GL_RGBA || internalFormat === 4) {
-        glFormat = gl.RGBA; glInternal = gl.RGBA;
-      } else if (format === GL_RGB || internalFormat === GL_RGB || internalFormat === 3) {
-        glFormat = gl.RGB; glInternal = gl.RGB;
-      } else if (format === GL_LUMINANCE || internalFormat === GL_LUMINANCE || internalFormat === 1) {
-        glFormat = gl.LUMINANCE; glInternal = gl.LUMINANCE;
-      } else if (format === GL_LUMINANCE_ALPHA || internalFormat === GL_LUMINANCE_ALPHA || internalFormat === 2) {
-        glFormat = gl.LUMINANCE_ALPHA; glInternal = gl.LUMINANCE_ALPHA;
-      } else {
-        glFormat = gl.RGBA; glInternal = gl.RGBA;
+      const norm = this.normalizeTexUpload(format, internalFormat, pixels);
+      gl.texImage2D(gl.TEXTURE_2D, level, norm.glInternal, width, height, border, norm.glFormat, gl.UNSIGNED_BYTE, norm.pixels);
+      // Auto-generate mipmaps for the base level so textures uploaded with
+      // only level 0 still satisfy WebGL2's mipmap-completeness rule when
+      // the caller leaves the default mipmap-requiring MIN_FILTER in place.
+      if (level === 0 && width > 0 && height > 0 && norm.pixels) {
+        gl.generateMipmap(gl.TEXTURE_2D);
       }
-      gl.texImage2D(gl.TEXTURE_2D, level, glInternal, width, height, border, glFormat, gl.UNSIGNED_BYTE, pixels);
+    });
+  }
+
+  build2DMipmaps(target: number, internalFormat: number,
+                 width: number, height: number,
+                 format: number, type: number, pixels: Uint8Array | null): void {
+    this.cmd(() => {
+      const gl = this.gl;
+      const norm = this.normalizeTexUpload(format, internalFormat, pixels);
+      gl.texImage2D(gl.TEXTURE_2D, 0, norm.glInternal, width, height, 0, norm.glFormat, gl.UNSIGNED_BYTE, norm.pixels);
+      gl.generateMipmap(gl.TEXTURE_2D);
     });
   }
 
@@ -967,10 +1097,16 @@ export class GL1Context {
 
   color3f(r: number, g: number, b: number): void {
     this.curColor[0] = r; this.curColor[1] = g; this.curColor[2] = b; this.curColor[3] = 1;
+    // Mirror into the material so legacy apps that use glColor without
+    // explicitly enabling GL_COLOR_MATERIAL still get a colored material.
+    this.matAmbient = new Float32Array([r, g, b, 1]);
+    this.matDiffuse = new Float32Array([r, g, b, 1]);
   }
 
   color4f(r: number, g: number, b: number, a: number): void {
     this.curColor[0] = r; this.curColor[1] = g; this.curColor[2] = b; this.curColor[3] = a;
+    this.matAmbient = new Float32Array([r, g, b, a]);
+    this.matDiffuse = new Float32Array([r, g, b, a]);
   }
 
   texCoord2f(s: number, t: number): void {
@@ -1009,19 +1145,24 @@ export class GL1Context {
     for (let i = 0; i < range; i++) this.displayLists.delete(list + i);
   }
 
-  // Material (store for lighting; simplified — just set curColor for ambient/diffuse)
+  // Material — drives the lighting equation when GL_COLOR_MATERIAL is off.
+  // GL_AMBIENT=0x1200, GL_DIFFUSE=0x1201, GL_SPECULAR=0x1202,
+  // GL_EMISSION=0x1600, GL_SHININESS=0x1601, GL_AMBIENT_AND_DIFFUSE=0x1602
   materialfv(_face: number, pname: number, params: Float32Array): void {
-    // GL_AMBIENT_AND_DIFFUSE=0x1602, GL_DIFFUSE=0x1201, GL_AMBIENT=0x1200, GL_SPECULAR=0x1202, GL_SHININESS=0x1601
-    // Update curColor immediately so subsequent vertex3f calls pick it up
-    if (pname === 0x1602 || pname === 0x1201) {
-      this.curColor[0] = params[0]; this.curColor[1] = params[1];
-      this.curColor[2] = params[2]; this.curColor[3] = params[3];
-    }
+    this.cmd(() => {
+      const v = new Float32Array(params);
+      switch (pname) {
+        case 0x1200: this.matAmbient = v; break;
+        case 0x1201: this.matDiffuse = v; break;
+        case 0x1202: /* specular — not implemented */ break;
+        case 0x1600: this.matEmission = v; break;
+        case 0x1602: this.matAmbient = v; this.matDiffuse = new Float32Array(params); break;
+      }
+    });
   }
 
   materialf(_face: number, pname: number, param: number): void {
     this.cmd(() => {
-      // GL_SHININESS = 0x1601 — store for lighting calculation
       if (pname === 0x1601) {
         this._shininess = Math.max(0, Math.min(128, param));
       }
@@ -1153,6 +1294,20 @@ export class GL1Context {
       case GL_MAX_LIGHTS: return 2;
       default: return 0;
     }
+  }
+
+  // Return a 4-entry viewport array [x,y,w,h], or null if pname is not GL_VIEWPORT.
+  getViewport(): [number, number, number, number] {
+    const p = this.gl.getParameter(this.gl.VIEWPORT);
+    return [p[0], p[1], p[2], p[3]];
+  }
+
+  // Return the current projection or modelview matrix as a 16-entry Float32Array (column-major).
+  getMatrix(pname: number): Float32Array | null {
+    // GL_MODELVIEW_MATRIX=0x0BA6, GL_PROJECTION_MATRIX=0x0BA7
+    if (pname === 0x0BA6) return this.modelview;
+    if (pname === 0x0BA7) return this.projection;
+    return null;
   }
 
   getTexEnviv(pname: number): number {

@@ -20,7 +20,7 @@ const DS_VTABLE_SIZE = 11;
 const DSB_VTABLE_SIZE = 21;
 
 function allocComObject(emu: Emulator, prefix: string, methodCount: number,
-  handlers: Record<number, () => number>,
+  handlers: Record<number, (() => number) | undefined>,
   stackBytesMap: Record<number, number>): number {
   const vtableAddr = emu.allocHeap(methodCount * 4);
   const objAddr = emu.allocHeap(4);
@@ -160,6 +160,43 @@ function createSoundBuffer(emu: Emulator, bufferSize: number = 4096,
 
 export function registerDsound(emu: Emulator): void {
   const dsound = emu.registerDll('DSOUND.DLL');
+
+  // DirectSoundEnumerateA(callback, context) — invoke callback for each device.
+  // Windows returns the NULL-GUID "Primary Sound Driver" first, then each actual
+  // device. Our emulator has no real audio, but enumerating at least a primary +
+  // one default device matches what apps expect to populate "sound device" UIs.
+  const enumerate = (wide: boolean) => () => {
+    const callback = emu.readArg(0);
+    const context = emu.readArg(1);
+    if (!callback) return DS_OK;
+
+    const writeStr = (s: string): number => {
+      const p = emu.allocHeap((s.length + 1) * (wide ? 2 : 1));
+      if (wide) {
+        for (let i = 0; i < s.length; i++) emu.memory.writeU16(p + i * 2, s.charCodeAt(i));
+        emu.memory.writeU16(p + s.length * 2, 0);
+      } else {
+        for (let i = 0; i < s.length; i++) emu.memory.writeU8(p + i, s.charCodeAt(i));
+        emu.memory.writeU8(p + s.length, 0);
+      }
+      return p;
+    };
+    const emptyStr = writeStr('');
+
+    // Entry 1: primary sound driver (NULL GUID)
+    const primaryDesc = writeStr('Primary Sound Driver');
+    const r1 = emu.callCallback(callback, [0, primaryDesc, emptyStr, context]);
+    if (r1 === 0) return DS_OK; // callback returned FALSE — stop enumeration
+
+    // Entry 2: our fake default device
+    const fakeGuid = emu.allocHeap(16);
+    for (let i = 0; i < 16; i++) emu.memory.writeU8(fakeGuid + i, i + 1);
+    const deviceDesc = writeStr('Default Audio Device (emulated)');
+    emu.callCallback(callback, [fakeGuid, deviceDesc, emptyStr, context]);
+    return DS_OK;
+  };
+  dsound.register('DirectSoundEnumerateA', 2, enumerate(false));
+  dsound.register('DirectSoundEnumerateW', 2, enumerate(true));
 
   // DirectSoundCreate(lpGuid, ppDS, pUnkOuter) → HRESULT
   dsound.register('DirectSoundCreate', 3, () => {

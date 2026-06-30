@@ -30,8 +30,8 @@ export function registerOpenBrowser(emu: Emulator): void {
       const name = emu.memory.readCString(emu.readArg(2)); // 第三个参数
 
     //  console.log('[web.dll] OpenBrowser:', url, title,name);
-let path =url.replace(/^http?:\/\/[^/]+/, ''); //avoid cross
-      (window as any).openBrowser?.(path, title,name);
+url='/';
+      (window as any).openBrowser?.(url, title,name);
       return 1;
     } catch (e) {
       console.error('OpenBrowser failed:', e);

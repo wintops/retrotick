@@ -18,4 +18,9 @@ export function registerMetafile(emu: Emulator): void {
   gdi32.register('PlayMetaFileRecord', 4, () => 1);
   gdi32.register('CopyEnhMetaFileW', 2, () => 0);
   gdi32.register('GetEnhMetaFileDescriptionW', 3, () => 0);
+
+  // SetMetaFileBitsEx(nSize, lpData) → HMETAFILE — create from raw metafile bits
+  gdi32.register('SetMetaFileBitsEx', 2, () => emu.handles.alloc('metafile', {}));
+  gdi32.register('SetMetaFileBits', 1, () => emu.handles.alloc('metafile', {}));
+  gdi32.register('GetMetaFileBitsEx', 3, () => 0);
 }

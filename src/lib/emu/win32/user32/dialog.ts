@@ -64,6 +64,22 @@ export function registerDialog(emu: Emulator): void {
       : allDialogs.find(d => d.id === templateId);
     if (mainResult) return mainResult.dialog;
 
+    // Fallback: read the main exe's resource directory from emulator memory.
+    // This is needed for UPX-packed executables where the resource data in the
+    // raw file is compressed but has been decompressed in memory at runtime.
+    try {
+      const entry = emu.findResourceEntry(5 /* RT_DIALOG */, templateId);
+      if (entry) {
+        const addr = emu.pe.imageBase + entry.dataRva;
+        const buf = new ArrayBuffer(entry.dataSize);
+        const u8 = new Uint8Array(buf);
+        for (let i = 0; i < entry.dataSize; i++) u8[i] = emu.memory.readU8(addr + i);
+        return parseDialogTemplate(buf, 0, entry.dataSize);
+      }
+    } catch (e: unknown) {
+      console.warn(`[DLG] Failed to parse main-exe dialog template ${templateId} from memory: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // Check loaded DLL modules by hInstance
     for (const [, mod] of emu.loadedModules) {
       if (mod.imageBase !== hInstance && mod.base !== hInstance) continue;
@@ -169,7 +185,7 @@ export function registerDialog(emu: Emulator): void {
       x: cascPos.x, y: cascPos.y, width, height,
       style: dlg.style, exStyle: dlg.exStyle,
       title: dlg.title, visible: false, hMenu: 0,
-      extraBytes: new Uint8Array(30), userData: 0,
+      extraBytes: new Uint8Array(30), userData: 0, ownerThreadId: emu.currentThread?.id,
       children: new Map<number, number>(),
       dlgProc,
     };
@@ -211,11 +227,11 @@ export function registerDialog(emu: Emulator): void {
         style: item.style, exStyle: item.exStyle,
         title: item.text, visible: true, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
-        userData: 0, controlId: item.id,
+        userData: 0, controlId: item.id, ownerThreadId: emu.currentThread?.id,
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
 
@@ -585,7 +601,7 @@ export function registerDialog(emu: Emulator): void {
       x: cascPos.x, y: cascPos.y, width, height,
       style: dlg.style, exStyle: dlg.exStyle,
       title: dlg.title, visible: false, hMenu: 0,
-      extraBytes: new Uint8Array(cbExtra), userData: 0,
+      extraBytes: new Uint8Array(cbExtra), userData: 0, ownerThreadId: emu.currentThread?.id,
       children: new Map<number, number>(),
       dlgProc,
     };
@@ -634,11 +650,11 @@ export function registerDialog(emu: Emulator): void {
         style: item.style, exStyle: item.exStyle,
         title: item.text, visible: true, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
-        userData: 0, controlId: item.id,
+        userData: 0, controlId: item.id, ownerThreadId: emu.currentThread?.id,
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
 
@@ -657,7 +673,7 @@ export function registerDialog(emu: Emulator): void {
     if (dlg.font) {
       const fontHeight = Math.round(dlg.font.pointSize * 96 / 72); // pt → px at 96 DPI
       const hFont = emu.handles.alloc('font', { height: fontHeight });
-      for (const [, childHwnd] of wnd.children) {
+      for (const [, childHwnd] of (wnd.children ?? new Map())) {
         const childWnd = emu.handles.get<WindowInfo>(childHwnd);
         if (childWnd) {
           childWnd.hFont = hFont;
@@ -1026,7 +1042,7 @@ export function registerDialog(emu: Emulator): void {
       x: cascPos2.x, y: cascPos2.y, width, height,
       style: dlg.style, exStyle: dlg.exStyle,
       title: dlg.title, visible: false, hMenu: 0,
-      extraBytes: new Uint8Array(cbExtra), userData: 0,
+      extraBytes: new Uint8Array(cbExtra), userData: 0, ownerThreadId: emu.currentThread?.id,
       children: new Map<number, number>(),
       dlgProc,
     };
@@ -1072,11 +1088,11 @@ export function registerDialog(emu: Emulator): void {
         style: item.style, exStyle: item.exStyle,
         title: item.text, visible: true, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
-        userData: 0, controlId: item.id,
+        userData: 0, controlId: item.id, ownerThreadId: emu.currentThread?.id,
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
       if (ctrlCls.wndProc) emu.callWndProc(ctrlCls.wndProc, childHwnd, 0x0001, 0, 0);
@@ -1086,7 +1102,7 @@ export function registerDialog(emu: Emulator): void {
     if (dlg.font) {
       const fontHeight = Math.round(dlg.font.pointSize * 96 / 72);
       const hFont = emu.handles.alloc('font', { height: fontHeight });
-      for (const [, childHwnd] of wnd.children) {
+      for (const [, childHwnd] of (wnd.children ?? new Map())) {
         const childWnd = emu.handles.get<WindowInfo>(childHwnd);
         if (childWnd) {
           childWnd.hFont = hFont;

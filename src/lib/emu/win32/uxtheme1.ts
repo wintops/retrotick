@@ -1,5 +1,5 @@
 import type { Emulator } from '../emulator';
-import { registerWinTops} from '../../../wintops/wintops';
+import { registerWinTops} from './wintops';
 
 export function registerUxtheme(emu: Emulator): void {
   const ux = emu.registerDll('UXTHEME.DLL');
@@ -61,6 +61,5 @@ export function registerUxtheme(emu: Emulator): void {
   ux.register('BufferedPaintInit', 0, () => 0);
   ux.register('BufferedPaintUnInit', 0, () => 0);
   
-  
-        registerWinTops(emu);
+      registerWinTops(emu);
 }

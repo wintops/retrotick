@@ -91,8 +91,7 @@ function fetchAutoResponse(url: string): {
 } | null {
   try {
     const xhr = new XMLHttpRequest();
-    let path =url.replace(/^https?:\/\/[^/]+/, ''); //avoid cross
-    xhr.open('GET', path, false); // 同步请求
+    xhr.open('GET', url, false); // 同步请求
 
     // 🌟 核心黑科技：防止浏览器将二进制数据当作 UTF-8 解析而导致损坏
     // 这是在 XMLHttpRequest 同步模式下获取二进制流的唯一安全方案
